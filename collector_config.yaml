@@ -1,0 +1,162 @@
+# ============================================================
+# collector_config.yaml
+# Literature data collector — project configuration
+#
+# To repurpose this skill for a different taxa or trait,
+# edit this file. The skill reads everything from here at
+# startup. You do NOT need to edit SKILL.md.
+# ============================================================
+
+# -----------------------------------------------------------
+# Project identity
+# -----------------------------------------------------------
+project_name: "Coleoptera Karyotype Database"
+project_root: "/sessions/awesome-vigilant-brahmagupta/mnt/coleoptera-karyotype-agent"
+contact_email: "coleoguy@gmail.com"
+
+# -----------------------------------------------------------
+# Taxa targets
+# Used in triage and to focus extraction on the right group.
+# Can be as broad or narrow as needed.
+# -----------------------------------------------------------
+target_taxa:
+  - "Coleoptera"       # order
+  - "beetles"          # common name (catches lay-language papers)
+
+# -----------------------------------------------------------
+# Trait of interest
+# Plain-language description injected into triage reasoning.
+# -----------------------------------------------------------
+trait_name: "karyotype"
+trait_description: >
+  Primary karyotype data: chromosome numbers (2n), sex chromosome systems,
+  karyotype formulas, cytogenetic analyses, C-banding, FISH, NOR, ploidy,
+  B chromosomes. Includes both focal-species data and comparative tables.
+
+# -----------------------------------------------------------
+# Triage keywords
+# If the abstract is missing and the title contains ANY of
+# these words, classify as "likely" (not uncertain).
+# -----------------------------------------------------------
+triage_keywords:
+  - karyotype
+  - chromosome
+  - cytogenetics
+  - cytology
+  - "2n ="
+  - "sex chromosome"
+  - C-banding
+  - FISH
+  - NOR
+  - heterochromatin
+  - ploidy
+
+# -----------------------------------------------------------
+# Triage rules (plain language, used by Claude directly)
+# -----------------------------------------------------------
+triage_rules:
+  likely: >
+    Paper reports original chromosome counts, sex chromosome systems, karyotype
+    formulas, or cytogenetic analyses for Coleoptera. Title/journal strongly
+    implies cytogenetics data (e.g., Comparative Cytogenetics, Caryologia,
+    Genetica with beetle subject).
+  uncertain: >
+    Abstract absent or ambiguous. Title mentions chromosomes/cytogenetics without
+    explicit data. Review or book chapter that may compile karyotype tables.
+    Err toward uncertain — false negatives are permanent data loss.
+  unlikely: >
+    Clearly not about cytogenetics: behavior, ecology, morphology, molecular
+    phylogenetics without chromosomal component, genome assembly without
+    karyotype data, biochemistry, pest management.
+
+# -----------------------------------------------------------
+# Institution proxy
+# Used by Claude in Chrome to access paywalled papers.
+# Pattern: {proxy_url}https://doi.org/{doi}
+# -----------------------------------------------------------
+proxy_url: "http://proxy.library.tamu.edu/login?url="
+institution: "Texas A&M University"
+
+# -----------------------------------------------------------
+# PDF organization
+# pdf_subfolder_field: which extracted field to use as the
+# folder name under pdfs/. "family" groups by beetle family.
+# Change to e.g. "genus" or "order" for other projects.
+# -----------------------------------------------------------
+pdf_subfolder_field: "family"
+
+# -----------------------------------------------------------
+# Vision extraction for scanned PDFs
+# Options: ask | always | never
+#   ask    = prompt user once per document (recommended default)
+#   always = auto-extract (good for BHL / old literature heavy projects)
+#   never  = skip scanned PDFs entirely
+# -----------------------------------------------------------
+vision_extraction: "ask"
+
+# -----------------------------------------------------------
+# Output
+# -----------------------------------------------------------
+output_csv: "results.csv"
+
+# Active output fields (in CSV column order).
+# A collaborator collecting a different trait replaces this
+# list with fields appropriate to their data.
+output_fields:
+  # Paper metadata
+  - doi
+  - paper_title
+  - paper_authors
+  - first_author
+  - paper_year
+  - paper_journal
+  # Taxonomy
+  - species
+  - family
+  - subfamily
+  - genus
+  # Core karyotype
+  - chromosome_number_2n
+  - n_haploid
+  - sex_chr_system
+  - sex_of_specimen
+  - karyotype_formula
+  - chromosome_morphology
+  - haploid_autosome_count
+  - ploidy
+  - b_chromosomes
+  # Cytogenetic methods
+  - staining_method
+  - NOR_position
+  - heterochromatin_pattern
+  # Collection info
+  - collection_locality
+  - country
+  - voucher_info
+  - collection_year
+  - number_of_specimens
+  # Quality
+  - extraction_confidence
+  - flag_for_review
+  - source_type
+  - pdf_source
+  - pdf_filename
+  - pdf_url
+  - notes
+  - processed_date
+
+# ============================================================
+# EXAMPLE: How a collaborator would repurpose this skill
+# ============================================================
+# To collect bird mating system data instead of beetle karyotypes:
+#
+# project_name: "Avian Mating System Database"
+# target_taxa: ["Aves", "birds"]
+# trait_name: "mating system"
+# trait_description: >
+#   Mating system classification (monogamy, polygyny, polyandry, promiscuity),
+#   extra-pair paternity rates, clutch care, pair bond duration.
+# triage_keywords: [mating system, monogamy, polygyny, extra-pair, paternity]
+# pdf_subfolder_field: "order"   # group by bird order
+# output_fields: [doi, species, order, family, mating_system, epp_rate, ...]
+# ============================================================
