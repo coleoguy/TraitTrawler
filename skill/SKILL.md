@@ -379,3 +379,73 @@ Print a summary when the user stops or searches are exhausted:
 - **results.csv write failure**: stop immediately — never silently drop records.
 - **Chrome navigation fails**: mark `pdf_source: browser_failed`, fall through to abstract.
 - **Proxy returns wrong content-type**: don't save as PDF; log and continue.
+
+---
+
+## 13. Dashboard
+
+The skill includes a self-contained HTML dashboard that visualizes collection
+progress and summary statistics. It lives at `{project_root}/dashboard.html`
+and is regenerated automatically.
+
+### When to update
+
+Regenerate the dashboard at these points:
+1. **Session start** (§1) — after reading state files, before the first batch
+2. **Every 10 papers processed** — alongside the rolling progress update (§10)
+3. **Session end** (§11) — as part of the session summary
+
+### How to update
+
+At **session start** (§1), copy the dashboard generator from the installed
+skill directory into the project root so it's always available:
+
+```bash
+SKILL_DIR="$(dirname "$(find /sessions -path '*/.skills/skills/traittrawler/dashboard_generator.py' -print -quit 2>/dev/null)")"
+cp "$SKILL_DIR/dashboard_generator.py" "{project_root}/dashboard_generator.py"
+```
+
+Then regenerate the dashboard any time with:
+
+```bash
+python3 "{project_root}/dashboard_generator.py" --project-root "{project_root}"
+```
+
+The script reads `results.csv`, `leads.csv`, `needs_attention.csv`,
+`state/processed.json`, `state/search_log.json`, and `config.py`
+and writes a single self-contained `dashboard.html` with Chart.js
+visualizations. No internet connection needed to view the output —
+Chart.js is loaded from CDN at generation time and all data is
+inlined.
+
+### What the dashboard shows
+
+**KPI cards** (top row):
+- Total records, unique species, genera, families
+- Papers processed, new leads, needs attention, flagged for review
+
+**Search progress bar**: queries completed vs. total from `config.py`
+
+**Charts** (10 panels):
+- Cumulative records over time (line chart)
+- Records by family — top 20 (horizontal bar)
+- Sex chromosome systems (doughnut)
+- Diploid chromosome number distribution (histogram)
+- Records by publication year (bar)
+- Full-text source breakdown (doughnut)
+- Extraction confidence distribution (bar)
+- Records by country — top 15 (horizontal bar)
+- Lead pipeline status (doughnut)
+- Needs attention reasons (horizontal bar)
+
+### Dashboard output location
+
+The dashboard is always written to `{project_root}/dashboard.html`.
+After generation at session start and session end, mention it to the user:
+
+```
+📊 Dashboard updated → dashboard.html
+```
+
+Do NOT open it in Chrome or ask the user to view it — just note that it
+exists. The user can open it at their leisure.

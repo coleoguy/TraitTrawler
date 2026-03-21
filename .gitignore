@@ -1,0 +1,13 @@
+# OS
+.DS_Store
+
+# State files (live in the data collection folder, not the repo)
+state/
+pdfs/
+results.csv
+leads.csv
+needs_attention.csv
+dashboard.html
+
+# Packaged skill backups
+*.skill.bak
