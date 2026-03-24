@@ -88,6 +88,43 @@ A record should be **discarded** if:
 
 ---
 
+## Pre-Write Validation Rules
+
+These rules are applied by the agent before writing any record to `results.csv`
+(SKILL.md §7e). If a record fails any rule, re-read the source and recompute
+before writing.
+
+| Check | Rule | Action if fails |
+|-------|------|----------------|
+| HAC biological minimum | `haploid_autosome_count ≥ 3` | Re-read source; HAC < 3 is always a parsing error for beetles |
+| HAC/2n arithmetic | `2 × HAC + sex_chr_count = chromosome_number_2n` | Re-read and recompute; likely stored 2n/2 instead of (2n − sex_chr_count)/2 |
+| XY-type flag | `HAC × 2 = chromosome_number_2n` for any XY-type record | Likely omitted sex chromosome subtraction — recompute |
+
+**Petitpierre et al. (1988) trap:** This catalogue lists meiotic entries as
+`11+Xyp`, `10+XO` etc., where the leading integer is the **bivalent count =
+HAC**. Do not read the leading integer as a sex chromosome count. The correct
+HAC for an entry reading `11+Xyp` is 11, giving 2n = 2×11 + 2 = 24.
+Any record from Petitpierre 1988 with HAC = 1 is a parsing error.
+
+**Compound sex chromosome rule:** When a paper describes a meiotic multivalent,
+chain, or ring of N elements (e.g., "chain of 4", "trivalent"), set
+`sex_chr_count = N` (not 2). A "chain of 4" = X₁X₂Y₁Y₂ → sex_chr_count = 4.
+Never collapse a described multivalent to a simple XY. See Cicindelidae section.
+
+---
+
+## Deduplication Rules
+
+Applied after extracting a full batch from one paper (SKILL.md §7e):
+
+- Scan the batch for same-species records where `haploid_autosome_count` differs
+  by exactly 1 from the same `first_author` + `paper_year`. These are likely
+  double-parse artifacts from catalogue entries being read twice. Compare both
+  against the source text, keep the correct one, discard the duplicate. Log in
+  `notes`.
+
+---
+
 ## Sex Chromosome Systems in Coleoptera
 
 Coleoptera show extreme diversity in sex chromosome systems.
@@ -114,6 +151,10 @@ Coleoptera show extreme diversity in sex chromosome systems.
   **Xyp ≠ Xy ≠ XY ≠ neo-XY ≠ X0.** "Xyp" denotes a cytologically distinct configuration
   (Y forms a parachute/pyknotic body at meiosis I) and must be preserved verbatim.
   Do NOT convert Xyp to XY.
+- **Multivalent/chain systems:** When a paper describes a meiotic chain of N or
+  ring of N chromosomes, set `sex_chr_count = N` (not 2). A "chain of 4" forming
+  at meiosis I = X₁X₂Y₁Y₂ system → sex_chr_count = 4. Never collapse a described
+  multivalent to a simple XY.
 - **Female-only specimens:** If only female specimens were examined and the paper provides
   no male data, leave `sex_chr_system` **blank**. In beetles, females are typically XX
   regardless of whether the male system is XO, XY, Xyp, etc. A single X chromosome count
@@ -142,6 +183,27 @@ Coleoptera show extreme diversity in sex chromosome systems.
 ### Carabidae
 - Mostly XY; some lineages show very high 2n (~70-80) due to chromosome fission.
 - 2n typically 18–30 but can reach 80+.
+
+### Cicindelidae (tiger beetles)
+Cicindelidae (sometimes treated as Carabidae: Cicindelinae) have compound sex
+chromosome systems in derived tribes. **Never simplify these to XY.**
+
+| System | sex_chr_count | Expected n autosomes |
+|--------|--------------|---------------------|
+| XY | 2 | 9 (standard Cicindela) |
+| X₁X₂Y | 3 | 9 |
+| X₁X₂X₃Y | 4 | 9 |
+| X₁X₂X₃X₄Y | 5 | 9 |
+
+**Multivalent trigger:** When the paper describes a meiotic "chain of N" or
+"ring of N" or "multivalent with N chromosomes", set `sex_chr_count = N`.
+The genus *Cicindela* almost always has n = 9 autosomes (HAC = 9); any
+extracted HAC ≠ 9 for this genus is a red flag — re-check sex_chr_count.
+
+Confirmed complex systems (set `flag_for_review = false` — these are correct):
+- *Cicindela argentata*: X₁X₂X₃Y (sex_chr_count = 4)
+- *Cicindela aurulenta*: X₁X₂X₃Y (sex_chr_count = 4)
+- *Cicindela suturalis*: X₁X₂Y (sex_chr_count = 3)
 
 ### Curculionidae s.l. (weevils)
 - Most diverse family; includes Scolytinae (bark beetles) and Platypodinae
@@ -333,8 +395,10 @@ in modern databases and are high-value targets.
 
 Stop searching when ANY of the following is true:
 - 10,000 records have been extracted
-- 5 consecutive search rounds return no new papers
-- All 730 initial search terms have been processed at least once
+- 15 consecutive search rounds return no new papers (raised from 5 — many
+  legitimate query blocks are narrow and return nothing, especially genus-level
+  or author-level searches in undersampled groups)
+- All search terms in `config.py` have been processed at least once
 
 ---
 

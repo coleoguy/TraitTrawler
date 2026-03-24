@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "TraitTrawler"
+abstract: >-
+  An autonomous AI agent that searches, retrieves, triages, and extracts
+  structured phenotypic trait data from the scientific literature. Runs
+  inside Claude Cowork and can be adapted for any taxon and trait by
+  editing three configuration files.
+authors:
+  - family-names: Blackmon
+    given-names: Heath
+    orcid: "https://orcid.org/0000-0002-1770-1902"
+    affiliation: "Department of Biology, Texas A&M University"
+    email: coleoguy@gmail.com
+repository-code: "https://github.com/coleoguy/TraitTrawler"
+license: MIT
+version: "1.0.0"
+date-released: "2026-03-24"
+keywords:
+  - literature mining
+  - large language model
+  - trait database
+  - autonomous agent
+  - data extraction
+  - karyotype
+  - Coleoptera
+  - comparative biology
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Blackmon
+      given-names: Heath
+      orcid: "https://orcid.org/0000-0002-1770-1902"
+  title: "TraitTrawler: an autonomous AI agent for large-scale extraction of phenotypic data from the scientific literature"
+  journal: "Methods in Ecology and Evolution"
+  year: 2026

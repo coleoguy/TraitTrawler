@@ -88,11 +88,22 @@ pdf_subfolder_field: "family"
 # -----------------------------------------------------------
 # Vision extraction for scanned PDFs
 # Options: ask | always | never
-#   ask    = prompt user once per document (recommended default)
+#   ask    = prompt user once at session start
 #   always = auto-extract (good for BHL / old literature heavy projects)
 #   never  = skip scanned PDFs entirely
 # -----------------------------------------------------------
 vision_extraction: "ask"
+
+# -----------------------------------------------------------
+# Taxonomy validation API
+# Used at session end to batch-validate species names.
+# Options: gbif | none
+#   gbif  = validate against GBIF backbone (animalia, plantae, fungi, etc.)
+#   none  = skip validation (e.g. viruses, bacteria, fossils)
+# gbif_kingdom: optional filter passed to GBIF species/match API
+# -----------------------------------------------------------
+taxonomy_api: "gbif"
+gbif_kingdom: "Animalia"
 
 # -----------------------------------------------------------
 # Output

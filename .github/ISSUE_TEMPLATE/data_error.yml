@@ -1,0 +1,52 @@
+name: Data error report
+description: Report an incorrect extraction in the Coleoptera karyotype dataset
+title: "[Data] "
+labels: ["data-error"]
+body:
+  - type: input
+    id: species
+    attributes:
+      label: Species name
+      description: Binomial name as it appears in results.csv
+      placeholder: e.g., Agabus bipustulatus
+    validations:
+      required: true
+  - type: input
+    id: field
+    attributes:
+      label: Field with error
+      description: Which column is incorrect?
+      placeholder: e.g., haploid_autosome_count, sex_chromosome_system, diploid_number
+    validations:
+      required: true
+  - type: input
+    id: extracted_value
+    attributes:
+      label: Extracted (incorrect) value
+      placeholder: e.g., HAC = 1
+    validations:
+      required: true
+  - type: input
+    id: correct_value
+    attributes:
+      label: Correct value
+      placeholder: e.g., HAC = 13
+    validations:
+      required: true
+  - type: textarea
+    id: citation
+    attributes:
+      label: Primary source citation
+      description: Please include the DOI if available
+      placeholder: |
+        Angus, R. et al. (2013). Karyotypes of some medium-sized Dytiscidae.
+        Comparative Cytogenetics, 7(2), 171-190. doi:10.3897/compcytogen.v7i2.5223
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: Any context that might help (e.g., intraspecific variation, notation ambiguity)
+    validations:
+      required: false

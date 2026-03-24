@@ -11,3 +11,13 @@ dashboard.html
 
 # Packaged skill backups
 *.skill.bak
+*.skill
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Obsolete root-level config files (now in agent/)
+/config.py
+/collector_config.yaml
+/guide.md

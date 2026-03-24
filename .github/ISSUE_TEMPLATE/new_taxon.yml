@@ -1,0 +1,36 @@
+name: New taxon/trait configuration
+description: Share or request a configuration for a new organism or trait
+title: "[Config] "
+labels: ["new-taxon"]
+body:
+  - type: input
+    id: taxon
+    attributes:
+      label: Target taxon
+      placeholder: e.g., Lepidoptera, Angiospermae, Mammalia
+    validations:
+      required: true
+  - type: input
+    id: trait
+    attributes:
+      label: Target trait
+      placeholder: e.g., genome size, body mass, chromosome number, flower color
+    validations:
+      required: true
+  - type: dropdown
+    id: status
+    attributes:
+      label: Status
+      options:
+        - "I've built a working config and want to share it"
+        - "I'm working on a config and need help"
+        - "I'd like someone to build this config"
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Estimated literature size, key journals, notation conventions, etc.
+    validations:
+      required: false
