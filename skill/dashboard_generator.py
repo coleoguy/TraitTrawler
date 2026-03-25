@@ -2,9 +2,17 @@
 """
 TraitTrawler Dashboard Generator
 =================================
-Reads project data files (results.csv, state/*.json, config.py,
-collector_config.yaml) and produces a self-contained HTML dashboard
-with summary statistics and interactive charts via Chart.js.
+Reads project data files (results.csv, leads.csv, state/*.json, config.py,
+collector_config.yaml) and produces a self-contained HTML dashboard with
+summary statistics and interactive charts via Chart.js.
+
+The dashboard is fully generic — it auto-detects trait-specific fields from
+collector_config.yaml and generates appropriate charts (doughnut for categorical,
+histogram for numeric). Core charts (cumulative timeline, family breakdown,
+year, source, confidence, country, leads) are always present.
+
+The generated HTML auto-refreshes every 60 seconds, so you can leave it open
+in a browser while the agent runs and watch progress live.
 
 Usage:
     python3 dashboard_generator.py [--project-root /path/to/root]
@@ -21,6 +29,26 @@ import re
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime
+
+
+# Fields that already have dedicated charts or are not chartable
+_CORE_FIELDS = {
+    "doi", "paper_title", "paper_authors", "first_author", "paper_year",
+    "paper_journal", "species", "family", "subfamily", "genus",
+    "extraction_confidence", "flag_for_review", "source_type",
+    "pdf_source", "pdf_filename", "pdf_url", "notes", "processed_date",
+    "collection_locality", "country", "voucher_info",
+}
+
+# Fields that are inherently free-text and should never be charted
+_SKIP_FIELDS = {
+    "notes", "pdf_url", "pdf_filename", "paper_title", "paper_authors",
+    "doi", "collection_locality", "voucher_info", "karyotype_formula",
+    "chromosome_morphology", "heterochromatin_pattern", "NOR_position",
+}
+
+# Maximum unique values for a field to be treated as categorical
+_MAX_CATEGORICAL = 25
 
 
 def safe_read_csv(path):
@@ -46,31 +74,120 @@ def safe_read_json(path):
         return {}
 
 
-def read_project_name(project_root):
-    """Read project_name from collector_config.yaml. Falls back to 'TraitTrawler'."""
+def read_config(project_root):
+    """Read project_name and output_fields from collector_config.yaml."""
     config_path = os.path.join(project_root, "collector_config.yaml")
+    project_name = "TraitTrawler"
+    trait_name = ""
+    output_fields = []
+
     if not os.path.exists(config_path):
-        return "TraitTrawler"
+        return project_name, trait_name, output_fields
+
     try:
         with open(config_path, "r", encoding="utf-8") as f:
-            for line in f:
-                m = re.match(r'^project_name:\s*["\']?(.+?)["\']?\s*$', line)
-                if m:
-                    return m.group(1)
+            content = f.read()
+
+        # Project name
+        m = re.search(r'^project_name:\s*["\']?(.+?)["\']?\s*$', content, re.MULTILINE)
+        if m:
+            project_name = m.group(1)
+
+        # Trait name
+        m = re.search(r'^trait_name:\s*["\']?(.+?)["\']?\s*$', content, re.MULTILINE)
+        if m:
+            trait_name = m.group(1)
+
+        # Output fields — collect all "  - field_name" lines after "output_fields:"
+        in_fields = False
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if re.match(r'^output_fields\s*:', stripped):
+                in_fields = True
+                continue
+            if in_fields:
+                if stripped.startswith("- "):
+                    field = stripped[2:].strip().strip("'\"")
+                    if field and not field.startswith("#"):
+                        output_fields.append(field)
+                elif stripped.startswith("#"):
+                    continue  # skip comments within the list
+                elif stripped == "":
+                    continue  # skip blank lines within list
+                elif not stripped.startswith("-"):
+                    break  # end of list
     except Exception:
         pass
-    return "TraitTrawler"
+
+    return project_name, trait_name, output_fields
 
 
 def count_search_queries(config_py_path):
-    """Count total search queries defined in config.py."""
+    """Count total search queries defined in config.py by executing it."""
     if not os.path.exists(config_py_path):
         return 0
-    with open(config_py_path, "r", encoding="utf-8") as f:
-        content = f.read()
-    # Count quoted strings in lists — rough heuristic
-    matches = re.findall(r'["\']([^"\']{3,})["\']', content)
-    return len(matches)
+    try:
+        # Try to actually import and count SEARCH_TERMS
+        ns = {}
+        with open(config_py_path, "r", encoding="utf-8") as f:
+            exec(f.read(), ns)
+        terms = ns.get("SEARCH_TERMS", [])
+        if isinstance(terms, list):
+            return len(terms)
+    except Exception:
+        pass
+    # Fallback: count quoted strings
+    try:
+        with open(config_py_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return len(re.findall(r'["\']([^"\']{3,})["\']', content))
+    except Exception:
+        return 0
+
+
+def classify_field(values):
+    """Classify field values as 'categorical', 'numeric', or 'skip'.
+
+    Returns (classification, parsed_data) where parsed_data is:
+      - Counter for categorical
+      - list of numbers for numeric
+      - None for skip
+    """
+    if not values:
+        return "skip", None
+
+    # Try parsing as numbers
+    numbers = []
+    for v in values:
+        try:
+            numbers.append(float(v) if "." in str(v) else int(v))
+        except (ValueError, TypeError):
+            pass
+
+    # If >60% parse as numbers and there are enough unique values, treat as numeric
+    if len(numbers) > 0.6 * len(values) and len(set(numbers)) > _MAX_CATEGORICAL:
+        return "numeric", numbers
+
+    # If >60% parse as numbers but few unique values, treat as categorical
+    if len(numbers) > 0.6 * len(values) and len(set(numbers)) <= _MAX_CATEGORICAL:
+        counts = Counter(str(int(n)) if isinstance(n, (int, float)) and n == int(n) else str(n) for n in numbers)
+        return "categorical", counts
+
+    # Categorical: count unique values
+    counts = Counter(v for v in values if v)
+    unique = len(counts)
+
+    if unique > _MAX_CATEGORICAL:
+        return "skip", None  # too many unique values = probably free text
+    if unique < 2:
+        return "skip", None  # only one value = not interesting
+
+    return "categorical", counts
+
+
+def field_display_name(field):
+    """Convert field_name to a readable chart title."""
+    return field.replace("_", " ").replace("2n", "2n").title()
 
 
 def generate_dashboard(project_root):
@@ -82,56 +199,34 @@ def generate_dashboard(project_root):
     processed = safe_read_json(os.path.join(project_root, "state", "processed.json"))
     search_log = safe_read_json(os.path.join(project_root, "state", "search_log.json"))
     total_queries = count_search_queries(os.path.join(project_root, "config.py"))
-    project_name = read_project_name(project_root)
+    project_name, trait_name, output_fields = read_config(project_root)
 
     # --- Compute summary stats ---
     n_records = len(results)
     n_papers_processed = len(processed) if isinstance(processed, dict) else 0
     n_queries_run = len(search_log) if isinstance(search_log, (dict, list)) else 0
 
-    # --- Leads breakdown ---
+    # Leads
     n_leads = len(leads)
     lead_statuses = Counter(l.get("status", "new") for l in leads)
     lead_reasons = Counter(l.get("reason", "unknown") for l in leads)
 
-    # --- Taxonomic breakdown ---
+    # Taxonomy
     family_counts = Counter(r.get("family", "Unknown") for r in results if r.get("family"))
     top_families = family_counts.most_common(20)
-
     species_set = set(r.get("species", "") for r in results if r.get("species"))
     n_species = len(species_set)
-
     genus_set = set(r.get("genus", "") for r in results if r.get("genus"))
     n_genera = len(genus_set)
-
     family_set = set(r.get("family", "") for r in results if r.get("family"))
     n_families = len(family_set)
 
-    # --- Sex chromosome systems ---
-    sex_chr_counts = Counter(
-        r.get("sex_chr_system", "Not reported") or "Not reported"
-        for r in results
-    )
-    top_sex_chr = sex_chr_counts.most_common(15)
-
-    # --- Chromosome number distribution ---
-    chr_numbers = []
-    for r in results:
-        val = r.get("chromosome_number_2n", "")
-        if val:
-            try:
-                chr_numbers.append(int(val))
-            except (ValueError, TypeError):
-                pass
-
-    chr_histogram = Counter(chr_numbers)
-
-    # --- Source type breakdown ---
+    # Source type
     source_counts = Counter(
         r.get("pdf_source", "unknown") or "unknown" for r in results
     )
 
-    # --- Extraction confidence distribution ---
+    # Confidence
     confidence_buckets = Counter()
     for r in results:
         val = r.get("extraction_confidence", "")
@@ -139,19 +234,19 @@ def generate_dashboard(project_root):
             try:
                 c = float(val)
                 if c >= 0.9:
-                    confidence_buckets["0.90–1.00"] += 1
+                    confidence_buckets["0.90-1.00"] += 1
                 elif c >= 0.8:
-                    confidence_buckets["0.80–0.89"] += 1
+                    confidence_buckets["0.80-0.89"] += 1
                 elif c >= 0.7:
-                    confidence_buckets["0.70–0.79"] += 1
+                    confidence_buckets["0.70-0.79"] += 1
                 elif c >= 0.6:
-                    confidence_buckets["0.60–0.69"] += 1
+                    confidence_buckets["0.60-0.69"] += 1
                 else:
                     confidence_buckets["< 0.60"] += 1
             except (ValueError, TypeError):
                 pass
 
-    # --- Records over time ---
+    # Cumulative records over time
     date_counts = Counter(r.get("processed_date", "unknown") for r in results)
     sorted_dates = sorted(
         ((d, c) for d, c in date_counts.items() if d != "unknown"),
@@ -163,13 +258,13 @@ def generate_dashboard(project_root):
         running += c
         cumulative.append((d, running))
 
-    # --- Country distribution ---
+    # Country
     country_counts = Counter(
         r.get("country", "Not reported") or "Not reported" for r in results
     )
     top_countries = country_counts.most_common(15)
 
-    # --- Papers by year ---
+    # Year
     year_counts = Counter()
     for r in results:
         y = r.get("paper_year", "")
@@ -180,11 +275,21 @@ def generate_dashboard(project_root):
                 pass
     sorted_years = sorted(year_counts.items())
 
-    # --- Flag for review count ---
+    # Flagged
     n_flagged = sum(
         1 for r in results
         if str(r.get("flag_for_review", "")).lower() in ("true", "1", "yes")
     )
+
+    # --- Auto-detect trait-specific charts ---
+    trait_charts = []  # list of (field_name, classification, data)
+    trait_fields = [f for f in output_fields if f not in _CORE_FIELDS and f not in _SKIP_FIELDS]
+
+    for field in trait_fields:
+        values = [r.get(field, "") for r in results if r.get(field, "")]
+        classification, data = classify_field(values)
+        if classification != "skip" and data:
+            trait_charts.append((field, classification, data))
 
     # --- Generate timestamp ---
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -193,6 +298,7 @@ def generate_dashboard(project_root):
     html = _build_html(
         now=now,
         project_name=project_name,
+        trait_name=trait_name,
         n_records=n_records,
         n_species=n_species,
         n_genera=n_genera,
@@ -205,13 +311,12 @@ def generate_dashboard(project_root):
         lead_statuses=lead_statuses,
         lead_reasons=lead_reasons,
         top_families=top_families,
-        top_sex_chr=top_sex_chr,
-        chr_histogram=chr_histogram,
         source_counts=source_counts,
         confidence_buckets=confidence_buckets,
         cumulative=cumulative,
         top_countries=top_countries,
         sorted_years=sorted_years,
+        trait_charts=trait_charts,
     )
 
     out_path = os.path.join(project_root, "dashboard.html")
@@ -220,40 +325,133 @@ def generate_dashboard(project_root):
 
     print(f"Dashboard written to {out_path}")
     print(f"  Records: {n_records} | Species: {n_species} | Families: {n_families} | Papers: {n_papers_processed}")
+    if trait_charts:
+        print(f"  Trait charts: {', '.join(tc[0] for tc in trait_charts)}")
     return out_path
 
 
-def _js_array(items):
-    """Convert Python list to JS array literal string."""
-    return json.dumps(items)
+def _js(obj):
+    """Convert Python object to JS literal string."""
+    return json.dumps(obj)
+
+
+def _build_trait_chart_html(chart_id, field_name, classification):
+    """Build the HTML canvas element for a trait-specific chart."""
+    title = field_display_name(field_name)
+    wide = ' wide' if classification == "numeric" else ''
+    return f"""
+  <div class="chart-card{wide}">
+    <h3>{title}</h3>
+    <canvas id="{chart_id}"></canvas>
+  </div>"""
+
+
+def _build_trait_chart_js(chart_id, field_name, classification, data):
+    """Build the JS Chart.js constructor for a trait-specific chart."""
+    if classification == "categorical":
+        # Doughnut chart for categorical data
+        items = data.most_common(15)
+        labels = [item[0] for item in items]
+        values = [item[1] for item in items]
+        return f"""
+new Chart(document.getElementById('{chart_id}'), {{
+  type: 'doughnut',
+  data: {{
+    labels: {_js(labels)},
+    datasets: [{{
+      data: {_js(values)},
+      backgroundColor: palette({len(labels)}),
+      borderWidth: 0,
+    }}]
+  }},
+  options: {{
+    responsive: true,
+    plugins: {{
+      legend: {{ position: 'right', labels: {{ boxWidth: 12, padding: 8, font: {{ size: 11 }} }} }}
+    }}
+  }}
+}});"""
+
+    elif classification == "numeric":
+        # Histogram for numeric data
+        if not data:
+            return ""
+        # Use integer bins if all values are integers
+        all_int = all(isinstance(v, int) or (isinstance(v, float) and v == int(v)) for v in data)
+        if all_int:
+            int_data = [int(v) for v in data]
+            hist = Counter(int_data)
+            min_v = min(hist.keys())
+            max_v = max(hist.keys())
+            # If range is huge, bin into groups
+            span = max_v - min_v + 1
+            if span <= 60:
+                labels = list(range(min_v, max_v + 1))
+                values = [hist.get(n, 0) for n in labels]
+            else:
+                # Bin into ~30 groups
+                bin_size = max(1, span // 30)
+                labels = []
+                values = []
+                for start in range(min_v, max_v + 1, bin_size):
+                    end = min(start + bin_size - 1, max_v)
+                    label = f"{start}-{end}" if start != end else str(start)
+                    labels.append(label)
+                    values.append(sum(hist.get(n, 0) for n in range(start, end + 1)))
+        else:
+            # Float data — bin into 20 buckets
+            min_v = min(data)
+            max_v = max(data)
+            n_bins = 20
+            bin_width = (max_v - min_v) / n_bins if max_v > min_v else 1
+            labels = []
+            values = []
+            for i in range(n_bins):
+                lo = min_v + i * bin_width
+                hi = lo + bin_width
+                labels.append(f"{lo:.1f}")
+                count = sum(1 for v in data if lo <= v < hi)
+                if i == n_bins - 1:
+                    count = sum(1 for v in data if v >= lo)
+                values.append(count)
+
+        title = field_display_name(field_name)
+        return f"""
+new Chart(document.getElementById('{chart_id}'), {{
+  type: 'bar',
+  data: {{
+    labels: {_js([str(l) for l in labels])},
+    datasets: [{{
+      label: '# Records',
+      data: {_js(values)},
+      backgroundColor: COLORS.purple,
+      borderRadius: 2,
+    }}]
+  }},
+  options: {{
+    responsive: true,
+    plugins: {{ legend: {{ display: false }} }},
+    scales: {{
+      x: {{ title: {{ display: true, text: '{title}' }}, ticks: {{ maxTicksLimit: 30 }} }},
+      y: {{ beginAtZero: true, title: {{ display: true, text: 'Records' }} }}
+    }}
+  }}
+}});"""
+
+    return ""
 
 
 def _build_html(**d):
     """Build the full self-contained HTML dashboard."""
 
-    # Prepare chart data
+    # Prepare chart data for core charts
     family_labels = [f[0] for f in d["top_families"]]
     family_values = [f[1] for f in d["top_families"]]
-
-    sex_chr_labels = [s[0] for s in d["top_sex_chr"]]
-    sex_chr_values = [s[1] for s in d["top_sex_chr"]]
-
-    # Chromosome histogram — bin into ranges for cleaner display
-    chr_hist = d["chr_histogram"]
-    if chr_hist:
-        min_c = min(chr_hist.keys())
-        max_c = max(chr_hist.keys())
-        chr_labels = list(range(min_c, max_c + 1))
-        chr_values = [chr_hist.get(n, 0) for n in chr_labels]
-    else:
-        chr_labels = []
-        chr_values = []
 
     source_labels = list(d["source_counts"].keys())
     source_values = list(d["source_counts"].values())
 
-    conf_order = ["0.90–1.00", "0.80–0.89", "0.70–0.79", "0.60–0.69", "< 0.60"]
-    conf_labels = conf_order
+    conf_order = ["0.90-1.00", "0.80-0.89", "0.70-0.79", "0.60-0.69", "< 0.60"]
     conf_values = [d["confidence_buckets"].get(k, 0) for k in conf_order]
 
     cum_labels = [c[0] for c in d["cumulative"]]
@@ -267,7 +465,6 @@ def _build_html(**d):
 
     lead_status_labels = list(d["lead_statuses"].keys())
     lead_status_values = list(d["lead_statuses"].values())
-
     lead_reason_labels = list(d["lead_reasons"].keys())
     lead_reason_values = list(d["lead_reasons"].values())
 
@@ -275,6 +472,28 @@ def _build_html(**d):
         round(100 * d["n_queries_run"] / d["total_queries"], 1)
         if d["total_queries"] > 0 else 0
     )
+
+    # Build trait-specific chart sections
+    trait_html_blocks = []
+    trait_js_blocks = []
+    for i, (field, classification, data) in enumerate(d.get("trait_charts", [])):
+        chart_id = f"traitChart{i}"
+        trait_html_blocks.append(_build_trait_chart_html(chart_id, field, classification))
+        trait_js_blocks.append(_build_trait_chart_js(chart_id, field, classification, data))
+
+    trait_charts_html = "\n".join(trait_html_blocks)
+    trait_charts_js = "\n".join(trait_js_blocks)
+
+    # Trait section header
+    trait_section = ""
+    if trait_html_blocks:
+        trait_label = d.get("trait_name", "Trait").title() if d.get("trait_name") else "Trait"
+        trait_section = f"""
+<!-- Trait-Specific Charts -->
+<div class="section-header">{trait_label} Data</div>
+<div class="chart-grid">
+{trait_charts_html}
+</div>"""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -319,6 +538,22 @@ def _build_html(**d):
   .header .subtitle {{
     color: var(--muted);
     font-size: 14px;
+  }}
+  .header .refresh-note {{
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 4px;
+    opacity: 0.6;
+  }}
+  .section-header {{
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 28px 0 16px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
   }}
   .kpi-grid {{
     display: grid;
@@ -417,6 +652,7 @@ def _build_html(**d):
 <div class="header">
   <h1>TraitTrawler Dashboard</h1>
   <div class="subtitle">{d['project_name']} &mdash; Updated {d['now']}</div>
+  <div class="refresh-note">Auto-refreshes every 60 seconds</div>
 </div>
 
 <!-- KPI Cards -->
@@ -459,64 +695,54 @@ def _build_html(**d):
   </div>
 </div>
 
-<!-- Charts -->
+<!-- Core Charts -->
+<div class="section-header">Collection Progress</div>
 <div class="chart-grid">
 
-  <!-- Cumulative Records Over Time -->
   <div class="chart-card wide">
     <h3>Cumulative Records Over Time</h3>
     <canvas id="cumulativeChart"></canvas>
   </div>
 
-  <!-- Records by Family -->
   <div class="chart-card">
     <h3>Records by Family (Top 20)</h3>
     <canvas id="familyChart"></canvas>
   </div>
 
-  <!-- Sex Chromosome Systems -->
-  <div class="chart-card">
-    <h3>Sex Chromosome Systems</h3>
-    <canvas id="sexChrChart"></canvas>
-  </div>
-
-  <!-- Chromosome Number Distribution -->
-  <div class="chart-card wide">
-    <h3>Diploid Chromosome Number (2n) Distribution</h3>
-    <canvas id="chrHistChart"></canvas>
-  </div>
-
-  <!-- Papers by Publication Year -->
   <div class="chart-card">
     <h3>Records by Publication Year</h3>
     <canvas id="yearChart"></canvas>
   </div>
 
-  <!-- PDF Source Breakdown -->
   <div class="chart-card">
     <h3>Full-Text Source</h3>
     <canvas id="sourceChart"></canvas>
   </div>
 
-  <!-- Extraction Confidence -->
   <div class="chart-card">
     <h3>Extraction Confidence</h3>
     <canvas id="confChart"></canvas>
   </div>
 
-  <!-- Country Distribution -->
   <div class="chart-card">
     <h3>Records by Country (Top 15)</h3>
     <canvas id="countryChart"></canvas>
   </div>
 
-  <!-- Lead Failure Reasons -->
+</div>
+
+<!-- Trait-Specific Charts (auto-generated) -->
+{trait_section}
+
+<!-- Leads Charts -->
+<div class="section-header">Leads (Papers Needing Full Text)</div>
+<div class="chart-grid">
+
   <div class="chart-card">
     <h3>Lead Failure Reasons</h3>
     <canvas id="leadReasonChart"></canvas>
   </div>
 
-  <!-- Lead Status Breakdown -->
   <div class="chart-card">
     <h3>Lead Status</h3>
     <canvas id="leadStatusChart"></canvas>
@@ -544,14 +770,16 @@ Chart.defaults.color = '#94a3b8';
 Chart.defaults.borderColor = '#334155';
 Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
 
+// --- Core Charts ---
+
 // Cumulative records
 new Chart(document.getElementById('cumulativeChart'), {{
   type: 'line',
   data: {{
-    labels: {_js_array(cum_labels)},
+    labels: {_js(cum_labels)},
     datasets: [{{
       label: 'Total Records',
-      data: {_js_array(cum_values)},
+      data: {_js(cum_values)},
       borderColor: COLORS.blue,
       backgroundColor: 'rgba(56,189,248,0.1)',
       fill: true,
@@ -573,9 +801,9 @@ new Chart(document.getElementById('cumulativeChart'), {{
 new Chart(document.getElementById('familyChart'), {{
   type: 'bar',
   data: {{
-    labels: {_js_array(family_labels)},
+    labels: {_js(family_labels)},
     datasets: [{{
-      data: {_js_array(family_values)},
+      data: {_js(family_values)},
       backgroundColor: palette({len(family_labels)}),
       borderRadius: 4,
     }}]
@@ -588,54 +816,13 @@ new Chart(document.getElementById('familyChart'), {{
   }}
 }});
 
-// Sex chromosome doughnut
-new Chart(document.getElementById('sexChrChart'), {{
-  type: 'doughnut',
-  data: {{
-    labels: {_js_array(sex_chr_labels)},
-    datasets: [{{
-      data: {_js_array(sex_chr_values)},
-      backgroundColor: palette({len(sex_chr_labels)}),
-      borderWidth: 0,
-    }}]
-  }},
-  options: {{
-    responsive: true,
-    plugins: {{
-      legend: {{ position: 'right', labels: {{ boxWidth: 12, padding: 8, font: {{ size: 11 }} }} }}
-    }}
-  }}
-}});
-
-// Chromosome number histogram
-new Chart(document.getElementById('chrHistChart'), {{
-  type: 'bar',
-  data: {{
-    labels: {_js_array(chr_labels)},
-    datasets: [{{
-      label: '# Records',
-      data: {_js_array(chr_values)},
-      backgroundColor: COLORS.purple,
-      borderRadius: 2,
-    }}]
-  }},
-  options: {{
-    responsive: true,
-    plugins: {{ legend: {{ display: false }} }},
-    scales: {{
-      x: {{ title: {{ display: true, text: '2n' }}, ticks: {{ maxTicksLimit: 30 }} }},
-      y: {{ beginAtZero: true, title: {{ display: true, text: 'Records' }} }}
-    }}
-  }}
-}});
-
 // Year chart
 new Chart(document.getElementById('yearChart'), {{
   type: 'bar',
   data: {{
-    labels: {_js_array(year_labels)},
+    labels: {_js(year_labels)},
     datasets: [{{
-      data: {_js_array(year_values)},
+      data: {_js(year_values)},
       backgroundColor: COLORS.teal,
       borderRadius: 3,
     }}]
@@ -654,9 +841,9 @@ new Chart(document.getElementById('yearChart'), {{
 new Chart(document.getElementById('sourceChart'), {{
   type: 'doughnut',
   data: {{
-    labels: {_js_array(source_labels)},
+    labels: {_js(source_labels)},
     datasets: [{{
-      data: {_js_array(source_values)},
+      data: {_js(source_values)},
       backgroundColor: palette({len(source_labels)}),
       borderWidth: 0,
     }}]
@@ -673,9 +860,9 @@ new Chart(document.getElementById('sourceChart'), {{
 new Chart(document.getElementById('confChart'), {{
   type: 'bar',
   data: {{
-    labels: {_js_array(conf_labels)},
+    labels: {_js(conf_order)},
     datasets: [{{
-      data: {_js_array(conf_values)},
+      data: {_js(conf_values)},
       backgroundColor: [COLORS.green, COLORS.blue, COLORS.amber, COLORS.orange, COLORS.red],
       borderRadius: 4,
     }}]
@@ -691,9 +878,9 @@ new Chart(document.getElementById('confChart'), {{
 new Chart(document.getElementById('countryChart'), {{
   type: 'bar',
   data: {{
-    labels: {_js_array(country_labels)},
+    labels: {_js(country_labels)},
     datasets: [{{
-      data: {_js_array(country_values)},
+      data: {_js(country_values)},
       backgroundColor: palette({len(country_labels)}),
       borderRadius: 4,
     }}]
@@ -706,13 +893,18 @@ new Chart(document.getElementById('countryChart'), {{
   }}
 }});
 
+// --- Trait-Specific Charts ---
+{trait_charts_js}
+
+// --- Leads Charts ---
+
 // Lead failure reasons
 new Chart(document.getElementById('leadReasonChart'), {{
   type: 'bar',
   data: {{
-    labels: {_js_array(lead_reason_labels)},
+    labels: {_js(lead_reason_labels)},
     datasets: [{{
-      data: {_js_array(lead_reason_values)},
+      data: {_js(lead_reason_values)},
       backgroundColor: COLORS.amber,
       borderRadius: 4,
     }}]
@@ -729,9 +921,9 @@ new Chart(document.getElementById('leadReasonChart'), {{
 new Chart(document.getElementById('leadStatusChart'), {{
   type: 'doughnut',
   data: {{
-    labels: {_js_array(lead_status_labels)},
+    labels: {_js(lead_status_labels)},
     datasets: [{{
-      data: {_js_array(lead_status_values)},
+      data: {_js(lead_status_values)},
       backgroundColor: palette({len(lead_status_labels)}),
       borderWidth: 0,
     }}]
@@ -743,6 +935,9 @@ new Chart(document.getElementById('leadStatusChart'), {{
     }}
   }}
 }});
+
+// --- Auto-refresh every 60 seconds ---
+setTimeout(function() {{ location.reload(); }}, 60000);
 </script>
 </body>
 </html>"""

@@ -16,7 +16,9 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> &bull;
   <a href="#how-it-works">How it works</a> &bull;
-  <a href="#customize-for-your-system">Customize</a> &bull;
+  <a href="#running-a-session">Running a session</a> &bull;
+  <a href="#understanding-the-output">Output</a> &bull;
+  <a href="#starting-a-new-project">New project</a> &bull;
   <a href="#validation-study">Validation</a> &bull;
   <a href="#citation">Citation</a>
 </p>
@@ -25,34 +27,51 @@
 
 TraitTrawler is an autonomous literature-mining agent that runs inside [Claude Cowork](https://claude.ai). Point it at a taxon and a trait, and it will search PubMed and bioRxiv, retrieve full-text PDFs (including paywalled papers through your library proxy), extract structured data from prose, tables, and catalogues, and write validated records to a CSV. No API keys, no Python environment, no setup scripts.
 
-This repository contains the agent code configured for **Coleoptera karyotype data**, plus a complete validation study comparing TraitTrawler's output against a human-curated database of 4,959 records.
+The skill is fully taxon- and trait-agnostic. This repository includes two complete example configurations (Coleoptera karyotypes and avian body mass) and a validation study comparing TraitTrawler's output against a human-curated database of 4,959 Coleoptera karyotype records.
 
 ## Quickstart
 
-```bash
-# 1. Clone this repo
-git clone https://github.com/coleoguy/TraitTrawler.git
+**Prerequisites:** A [Claude](https://claude.ai) Pro or Max subscription with Cowork mode enabled, and the Claude in Chrome extension installed.
 
-# 2. Open Cowork and select the TraitTrawler folder as your workspace
+### Option A — Use an example configuration
 
-# 3. Install the skill plugin
-#    Drag traittrawler.skill into Cowork (Settings → Plugins → Install)
+1. **Clone the repository.**
+   ```bash
+   git clone https://github.com/coleoguy/TraitTrawler.git
+   ```
 
-# 4. Say "let's collect some data"
-#    The agent picks up where it left off, or runs first-time setup on a fresh clone
-```
+2. **Copy an example to a new project folder.**
+   ```bash
+   cp -r TraitTrawler/examples/coleoptera-karyotypes ~/my-karyotype-project
+   ```
 
-**Requirements:** [Claude Cowork](https://claude.ai) Pro or Max subscription, Chrome extension, and your institution's library proxy URL.
+3. **Edit the config.** Open `collector_config.yaml` in the new folder and set your `proxy_url`, `institution`, and `contact_email`.
+
+4. **Install the skill in Cowork.** Open Cowork settings → Plugins → Install from file → select `traittrawler.skill` from the repository root.
+
+5. **Open the project folder in Cowork** and say "let's collect some data."
+
+### Option B — Start from scratch
+
+1. **Install the skill** (same as step 4 above).
+
+2. **Create an empty folder** for your project and open it in Cowork.
+
+3. **Say "let's collect some data."** The agent detects that no configuration exists and walks you through a setup wizard — it asks about your target taxa, trait, keywords, institution, and output fields, then generates all config files for you.
+
+### Authenticating your library proxy
+
+Open Chrome and log into your institution's library portal before starting a session. The agent uses your active browser session to access paywalled papers. If you skip this, it still works but is limited to open-access papers and abstracts.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    A["🔍 Search\nPubMed\nbioRxiv"] --> B["📋 Triage\nlikely | uncertain\nunlikely"]
-    B --> C["📄 Retrieve\nUnpaywall → OpenAlex\n→ EuropePMC → Proxy"]
-    C --> D["🧬 Extract\nprose | table\ncatalogue"]
-    D --> E["✅ Validate\n22 cross-field\nchecks"]
-    E --> F["💾 results.csv"]
+    A["Search\nPubMed\nbioRxiv"] --> B["Triage\nlikely | uncertain\nunlikely"]
+    B --> C["Retrieve\nUnpaywall | OpenAlex\nEuropePMC | Proxy"]
+    C --> D["Extract\nprose | table\ncatalogue"]
+    D --> E["Validate\ncross-field\nchecks"]
+    E --> F["results.csv"]
     F -.->|"next session\nresumes here"| A
 
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
@@ -65,14 +84,96 @@ flowchart LR
 
 Each session the agent:
 
-1. **Searches** unrun queries from `config.py` across PubMed and bioRxiv
-2. **Triages** papers by relevance using rules in `collector_config.yaml` and domain knowledge from `guide.md`
-3. **Retrieves** full text through a cascade: Unpaywall → OpenAlex → Europe PMC → Semantic Scholar → institutional proxy (using your browser session)
-4. **Extracts** structured records, with a two-pass strategy for dense tables (enumerate species, then extract each row, then verify count)
-5. **Validates** records against 22 cross-field consistency rules before writing
-6. **Appends** to `results.csv` with atomic writes; updates `state/` so the next session resumes exactly where this one stopped
+1. **Searches** the next unrun queries from `config.py` across PubMed and bioRxiv. If the PubMed or bioRxiv MCPs aren't available, it falls back to their public APIs automatically.
+2. **Triages** each paper as likely, uncertain, or unlikely using rules in `collector_config.yaml` and domain knowledge from `guide.md`. Unlikely papers are skipped; likely and uncertain papers proceed to fetch.
+3. **Retrieves** full text through a cascade of sources: Unpaywall → OpenAlex → Europe PMC → Semantic Scholar → your institutional proxy (via Chrome). If none succeed, it falls back to the abstract and logs the paper in `leads.csv` for manual follow-up.
+4. **Extracts** structured records. For table-heavy papers it runs a two-pass strategy: first enumerate every species, then extract each row, then verify the count matches. Catalogue entries (one-line-per-taxon reference books) are chunked and processed the same way.
+5. **Validates** each record against cross-field consistency rules defined in `guide.md` before writing.
+6. **Appends** validated records to `results.csv` with atomic writes. Updates state files so the next session resumes exactly where this one stopped.
 
-Stop anytime. Nothing is lost.
+The agent handles scanned PDFs by reading them natively through Claude's PDF vision. It handles large PDFs (100+ pages) by processing them in 50-page batches across sessions.
+
+## Running a session
+
+### What to expect
+
+When you start a session, the agent reads all project files, checks dependencies, and prints a status report showing records collected, papers processed, queue depth, and search progress. It then enters the main loop and prints rolling updates every 5 papers.
+
+Stop anytime by telling the agent to stop or closing the session. All state is saved after every paper — nothing is lost.
+
+### Each project is a folder
+
+Every project lives in its own folder with its own config files and state. To work on a different project, open a different folder in Cowork. The skill reads config from whatever folder is open.
+
+### The dashboard
+
+The agent generates a self-contained HTML dashboard at `dashboard.html`, updated at session start, every 10 papers, and session end. Open it in any browser — it auto-refreshes every 60 seconds so you can watch progress live while the agent runs. The dashboard auto-detects your project's trait-specific fields and generates appropriate charts (doughnut for categorical data, histograms for numeric data) alongside the standard collection progress charts.
+
+### Session length
+
+You control how long it runs. Some practical patterns:
+
+- **Background collection:** Start a session and let it run while you do other work.
+- **Targeted burst:** "Run through the Chrysomelidae queries" — point it at a specific subset.
+- **Manual PDF follow-up:** Review `leads.csv`, manually obtain PDFs, drop them in `pdfs/`, and run again. The agent detects local PDFs automatically.
+
+## Understanding the output
+
+### results.csv
+
+One row per species per paper. Fields are defined by your project's `collector_config.yaml`. Every record has an `extraction_confidence` score (0.0–1.0) and a `flag_for_review` boolean. Records with confidence below 0.75 are automatically flagged.
+
+### leads.csv
+
+Papers the agent identified as relevant but couldn't obtain full text for. Each row includes the DOI, title, failure reason, whether abstract extraction was done, and how many records came from the abstract. To resolve: obtain the PDF, save it to `pdfs/`, and run another session.
+
+### pdfs/
+
+Downloaded PDFs organized by the grouping field in your config (default: family). Naming convention: `{FirstAuthor}_{Year}_{JournalAbbrev}_{ShortDOI}.pdf`.
+
+### state/
+
+Session state that lets the agent resume across sessions: `processed.json` (every paper handled), `queue.json` (papers awaiting extraction), `search_log.json` (queries completed), and `large_pdf_progress.json` (bookmarks for large PDFs). You should never need to edit these.
+
+### dashboard.html
+
+Self-contained HTML with Chart.js. Shows KPI cards, search progress, cumulative records over time, taxonomic breakdowns, source distribution, confidence distribution, country distribution, trait-specific charts, and leads pipeline. Auto-refreshes every 60 seconds.
+
+## Starting a new project
+
+There are two ways to start a new project.
+
+### From an example
+
+Copy one of the example directories to a new folder, edit the config files, and open the folder in Cowork:
+
+```bash
+cp -r examples/coleoptera-karyotypes ~/my-project
+# Edit collector_config.yaml, config.py, guide.md as needed
+```
+
+Available examples:
+
+| Example | Description | Queries |
+|:--------|:------------|--------:|
+| `examples/coleoptera-karyotypes/` | Beetle chromosome data (validation study config) | 1,669 |
+| `examples/avian-body-mass/` | Bird body mass from morphometric literature | 91 |
+
+Each example includes `collector_config.yaml`, `config.py`, `guide.md`, and a README explaining the configuration.
+
+### From scratch (setup wizard)
+
+Open an empty folder in Cowork and say "let's collect some data." The agent asks 8 questions about your taxon, trait, keywords, institution, and extraction conventions, then generates all project files. It builds `config.py` by cross-producting your taxonomic groups and trait keywords, and creates `guide.md` from your description of how the trait is reported in the literature.
+
+### The three project files
+
+**`collector_config.yaml`** is the master configuration. It defines target taxa, trait name, triage rules, proxy URL, and output fields. The `output_fields` list controls what columns appear in `results.csv`.
+
+**`config.py`** contains the search query list as a Python list called `SEARCH_TERMS`. The Coleoptera example uses a cross-product of 148 family names × 11 keywords (1,669 total). For a new system, replace the taxa and keywords.
+
+**`guide.md`** is the domain knowledge document. The agent reads it at startup and uses it for every triage and extraction decision. Be specific: include notation conventions, worked examples, validation rules, and common pitfalls. The more precise the rules, the better the extractions.
+
+**`extraction_examples.md`** (optional) provides worked examples of notation, catalogue entries, and edge cases specific to your trait. The Coleoptera example includes one; not all projects need it.
 
 ## Repository structure
 
@@ -80,112 +181,44 @@ Stop anytime. Nothing is lost.
 TraitTrawler/
 │
 ├── traittrawler.skill            # Install this in Cowork
-├── collector_config.yaml         # Main configuration (taxa, traits, fields, proxy)
-├── config.py                     # Search query list (1,286 queries for Coleoptera)
-├── guide.md                      # Domain knowledge for extraction
-├── context.md                    # Technical reference for Claude (do not edit)
 │
-├── skill/                        # Skill source code (do not edit)
+├── examples/
+│   ├── coleoptera-karyotypes/    # Complete Coleoptera karyotype config
+│   │   ├── collector_config.yaml
+│   │   ├── config.py             # 1,669 search queries
+│   │   ├── guide.md              # Domain knowledge (notation, validation rules)
+│   │   └── extraction_examples.md
+│   ├── avian-body-mass/          # Complete avian body mass config
+│   │   ├── collector_config.yaml
+│   │   ├── config.py             # 91 search queries
+│   │   └── guide.md
+│   └── sample_results.csv        # Example output (5 records)
+│
+├── skill/                        # Skill source (taxon-agnostic)
+│   ├── SKILL.md                  # Agent behavior specification
+│   ├── dashboard_generator.py    # Generates dashboard.html
 │   └── references/
-│       ├── csv_schema.md         # Output field definitions and types
-│       ├── config_template.yaml  # Blank config template for new projects
-│       └── extraction_examples.md
+│       ├── csv_schema.md         # Generic field definitions and confidence guidelines
+│       └── config_template.yaml  # Blank config template for setup wizard
+│
+├── docs/
+│   └── traittrawler_logo.svg
 │
 ├── validation/                   # MEE manuscript validation study
 │   ├── data/                     # Both datasets (human + AI)
 │   ├── analysis/                 # R scripts (fully reproducible)
 │   ├── results/                  # All analysis outputs
 │   ├── manuscript/               # Manuscript, figures, supplements
-│   └── README.md                 # Reproducibility instructions
+│   └── README.md
 │
-├── CITATION.cff                  # Citation metadata (GitHub "Cite" button)
-├── CONTRIBUTING.md               # How to contribute
-├── LICENSE                       # MIT
-└── README.md                     # This file
+├── CHANGELOG.md
+├── CITATION.cff
+├── CONTRIBUTING.md
+├── LICENSE
+└── README.md
 ```
 
-Auto-created on first run: `state/`, `pdfs/`, `results.csv`
-
-## Customize for your system
-
-TraitTrawler is taxon-agnostic. To collect data for a different organism and trait, edit three files:
-
-<table>
-<tr>
-<th>File</th>
-<th>What to change</th>
-</tr>
-<tr>
-<td><code>collector_config.yaml</code></td>
-<td>Project name, target taxa, trait definition, triage keywords, institutional proxy URL, output field schema</td>
-</tr>
-<tr>
-<td><code>config.py</code></td>
-<td>Search queries as a Python list — one query per entry</td>
-</tr>
-<tr>
-<td><code>guide.md</code></td>
-<td>Domain knowledge: notation conventions, taxonomic synonymies, extraction rules, example records</td>
-</tr>
-</table>
-
-The core skill logic requires no modification.
-
-<details>
-<summary><strong>Example: adapting for avian body mass</strong></summary>
-
-**collector_config.yaml**
-```yaml
-project_name: "Avian Body Mass Database"
-target_taxa:
-  - "Aves"
-  - "birds"
-  - "Passeriformes"
-trait_name: "body mass"
-trait_description: >
-  Body mass (g) from wild-caught specimens. Include sex,
-  sample size, and measurement method where reported.
-triage_keywords:
-  - body mass
-  - body weight
-  - morphometrics
-proxy_url: "https://ezproxy.youruniversity.edu/login?url="
-output_fields:
-  - doi
-  - species
-  - family
-  - body_mass_g
-  - sex
-  - sample_size
-  - locality
-```
-
-**config.py**
-```python
-SEARCH_TERMS = [
-    "Passeriformes body mass",
-    "Columbiformes morphometrics",
-    "bird body size scaling",
-    # ...
-]
-```
-
-**guide.md** — replace with field-specific guidance on measurement units, which body-mass values to prefer (breeding vs. non-breeding, male vs. female), and how to handle ranges reported as mean +/- SD.
-
-</details>
-
-<details>
-<summary><strong>Institution proxy setup</strong></summary>
-
-1. Set `proxy_url` in `collector_config.yaml` to your institution's EZProxy address
-   - Texas A&M: `http://proxy.library.tamu.edu/login?url=`
-   - Most universities: `https://ezproxy.youruniversity.edu/login?url=`
-2. Log into your library proxy in Chrome before starting a session
-3. The skill uses Chrome silently — you'll see `🌐 browser` when it fetches a paywalled paper
-
-If not authenticated, the skill reports it once and falls back to open-access sources.
-
-</details>
+Auto-created in each project folder on first run: `state/`, `pdfs/`, `results.csv`, `leads.csv`, `dashboard.html`
 
 ## Validation study
 
@@ -208,12 +241,6 @@ We validated TraitTrawler against a manually curated Coleoptera karyotype databa
 The manuscript is in preparation for *Methods in Ecology and Evolution*:
 
 > Blackmon, H. (2026). TraitTrawler: an autonomous AI agent for large-scale extraction of phenotypic data from the scientific literature. *Methods in Ecology and Evolution* (in prep).
-
-## Output format
-
-Records are written to `results.csv` with one row per species per paper. Fields are defined in `collector_config.yaml` → `output_fields`. The complete field reference with types, constraints, and confidence guidelines is in [`skill/references/csv_schema.md`](skill/references/csv_schema.md).
-
-PDFs are saved to `pdfs/{family}/{FirstAuthor}_{Year}_{Journal}_{DOI}.pdf`.
 
 ## Citation
 

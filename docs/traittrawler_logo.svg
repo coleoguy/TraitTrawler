@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 120">
+  <defs>
+    <linearGradient id="trawl" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <!-- Net/trawl icon -->
+  <g transform="translate(16,16)" stroke="#3b82f6" stroke-width="2" fill="none">
+    <!-- Magnifying glass body -->
+    <circle cx="36" cy="36" r="28" stroke-width="3"/>
+    <line x1="56" y1="56" x2="78" y2="78" stroke-width="4" stroke-linecap="round"/>
+    <!-- Grid lines inside glass (the "trawl net") -->
+    <line x1="18" y1="26" x2="54" y2="26" stroke-width="1.5" opacity="0.5"/>
+    <line x1="14" y1="36" x2="58" y2="36" stroke-width="1.5" opacity="0.5"/>
+    <line x1="18" y1="46" x2="54" y2="46" stroke-width="1.5" opacity="0.5"/>
+    <line x1="26" y1="14" x2="26" y2="58" stroke-width="1.5" opacity="0.5"/>
+    <line x1="36" y1="10" x2="36" y2="62" stroke-width="1.5" opacity="0.5"/>
+    <line x1="46" y1="14" x2="46" y2="58" stroke-width="1.5" opacity="0.5"/>
+    <!-- Small dots at intersections (data points) -->
+    <circle cx="26" cy="26" r="2.5" fill="#10b981" stroke="none"/>
+    <circle cx="36" cy="36" r="2.5" fill="#10b981" stroke="none"/>
+    <circle cx="46" cy="26" r="2.5" fill="#10b981" stroke="none"/>
+    <circle cx="36" cy="46" r="2.5" fill="#10b981" stroke="none"/>
+    <circle cx="26" cy="46" r="2.5" fill="#f59e0b" stroke="none"/>
+    <circle cx="46" cy="46" r="2.5" fill="#10b981" stroke="none"/>
+  </g>
+  <!-- Text -->
+  <text x="116" y="58" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="44" font-weight="700" fill="url(#trawl)">Trait</text>
+  <text x="243" y="58" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="44" font-weight="700" fill="#1e293b">Trawler</text>
+  <text x="116" y="82" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#64748b" letter-spacing="0.5">Autonomous trait extraction from the scientific literature</text>
+</svg>

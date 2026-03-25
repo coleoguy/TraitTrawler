@@ -1,23 +1,19 @@
 # OS
 .DS_Store
+Thumbs.db
 
-# State files (live in the data collection folder, not the repo)
+# Runtime data (created by the agent, not tracked in repo)
 state/
 pdfs/
 results.csv
 leads.csv
-needs_attention.csv
 dashboard.html
 
-# Packaged skill backups
-*.skill.bak
+# Packaged skill (built artifact — distribute via GitHub Releases)
 *.skill
+*.skill.bak
 
 # Python cache
 __pycache__/
 *.pyc
-
-# Obsolete root-level config files (now in agent/)
-/config.py
-/collector_config.yaml
-/guide.md
+*.pyo

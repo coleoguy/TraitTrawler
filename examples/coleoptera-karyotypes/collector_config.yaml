@@ -1,0 +1,106 @@
+# ============================================================
+# Coleoptera Karyotype Database — Project Configuration
+# ============================================================
+# This is a working example. To use it:
+# 1. Copy this entire folder to a new location
+# 2. Update proxy_url and institution for your library
+# 3. Update contact_email
+# 4. Open the folder in Cowork with TraitTrawler installed
+# 5. Say "let's collect some data"
+# ============================================================
+
+project_name: "Coleoptera Karyotype Database"
+project_root: "."
+contact_email: "you@university.edu"
+
+target_taxa:
+  - "Coleoptera"
+  - "beetles"
+
+trait_name: "karyotype"
+trait_description: >
+  Primary karyotype data: chromosome numbers (2n), sex chromosome systems,
+  karyotype formulas, cytogenetic analyses, C-banding, FISH, NOR, ploidy,
+  B chromosomes. Includes both focal-species data and comparative tables.
+
+triage_keywords:
+  - karyotype
+  - chromosome
+  - cytogenetics
+  - cytology
+  - "2n ="
+  - "sex chromosome"
+  - C-banding
+  - FISH
+  - NOR
+  - heterochromatin
+  - ploidy
+
+triage_rules:
+  likely: >
+    Paper reports original chromosome counts, sex chromosome systems, karyotype
+    formulas, or cytogenetic analyses for Coleoptera. Title/journal strongly
+    implies cytogenetics data (e.g., Comparative Cytogenetics, Caryologia,
+    Genetica with beetle subject).
+  uncertain: >
+    Abstract absent or ambiguous. Title mentions chromosomes/cytogenetics without
+    explicit data. Review or book chapter that may compile karyotype tables.
+    Err toward uncertain — false negatives are permanent data loss.
+  unlikely: >
+    Clearly not about cytogenetics: behavior, ecology, morphology, molecular
+    phylogenetics without chromosomal component, genome assembly without
+    karyotype data, biochemistry, pest management.
+
+proxy_url: "http://proxy.library.tamu.edu/login?url="
+institution: "Texas A&M University"
+
+pdf_subfolder_field: "family"
+vision_extraction: "ask"
+
+taxonomy_api: "gbif"
+gbif_kingdom: "Animalia"
+
+output_csv: "results.csv"
+
+output_fields:
+  # Paper metadata
+  - doi
+  - paper_title
+  - paper_authors
+  - first_author
+  - paper_year
+  - paper_journal
+  # Taxonomy
+  - species
+  - family
+  - subfamily
+  - genus
+  # Core karyotype
+  - chromosome_number_2n
+  - n_haploid
+  - sex_chr_system
+  - sex_of_specimen
+  - karyotype_formula
+  - chromosome_morphology
+  - haploid_autosome_count
+  - ploidy
+  - b_chromosomes
+  # Cytogenetic methods
+  - staining_method
+  - NOR_position
+  - heterochromatin_pattern
+  # Collection info
+  - collection_locality
+  - country
+  - voucher_info
+  - collection_year
+  - number_of_specimens
+  # Quality
+  - extraction_confidence
+  - flag_for_review
+  - source_type
+  - pdf_source
+  - pdf_filename
+  - pdf_url
+  - notes
+  - processed_date

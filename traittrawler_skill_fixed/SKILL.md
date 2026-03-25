@@ -1,14 +1,13 @@
 ---
 name: traittrawler
 description: >
-  Autonomous literature data collector for Heath Blackmon (TAMU Biology).
-  Invoke this skill when Heath wants to run the karyotype agent, collect beetle
-  cytogenetics data, process papers, search for karyotype records, extract chromosome
-  data from literature, fetch PDFs through the TAMU library proxy, or add records
-  to results.csv. Also use when Heath says anything like "run the agent", "collect
-  some data", "work on karyotypes", or "let's gather some papers". The skill runs
-  for as long as Heath wants — an hour, a session, whenever — and picks up exactly
-  where it left off each time.
+  Autonomous literature data collector. Invoke this skill when the user wants to
+  collect trait data from the scientific literature, process papers, extract
+  structured records, fetch PDFs through a library proxy, or add records to
+  results.csv. Also triggers on phrases like "run the agent", "collect some data",
+  "work on the database", or "let's gather some papers". The skill is taxon- and
+  trait-agnostic — it adapts to any system defined in the project's config files.
+  It runs for as long as the user wants and picks up exactly where it left off.
 compatibility: "Requires Bash, Read, Write, WebFetch, Claude in Chrome MCP, PubMed MCP, bioRxiv MCP"
 ---
 
@@ -16,58 +15,94 @@ compatibility: "Requires Bash, Read, Write, WebFetch, Claude in Chrome MCP, PubM
 
 This skill searches the scientific literature, retrieves full-text papers, and
 extracts structured data records into a CSV. Everything about *what* to collect
-and *who* is collecting it lives in `collector_config.yaml` — the skill itself
-is reusable for any taxa and any trait by swapping that file.
+lives in three project files: `collector_config.yaml` (taxa, trait, fields),
+`config.py` (search queries), and `guide.md` (domain knowledge for extraction).
+The skill itself is taxon- and trait-agnostic.
 
 You run until the user stops you or the search queue is exhausted. Pick up
 exactly where the previous session ended.
 
-**Project root**: Read from `collector_config.yaml` → `project_root`.
-All paths below are relative to that root.
+**Project root**: the folder Cowork has open (the current working directory).
+All paths below are relative to this root.
 
 ---
 
 ## 0. First-Run Detection
 
 Before anything else, check whether `collector_config.yaml` exists in the
-current working directory or any parent folder the user might have selected.
+current working directory.
 
 **If `collector_config.yaml` does NOT exist → run setup wizard:**
 
 Ask the user the following questions one at a time (wait for each answer):
 
-1. "What folder should I use as the project root? (I'll create all files there)"
-2. "What taxa are you collecting data for? (e.g. Coleoptera, Aves, Mammalia)"
-3. "What trait or data type are you collecting? (e.g. karyotype, body size, mating system)"
-4. "What keywords in a paper title make it clearly relevant even without an abstract?"
-5. "What is your contact email? (used for API polite-pool access)"
-6. "What institution do you use for library access? (for the proxy URL)"
+1. "What taxa are you collecting data for? (e.g. Coleoptera, Aves, Mammalia)"
+2. "What trait or data type are you collecting? (e.g. karyotype, body size, mating system)"
+3. "What keywords in a paper title make it clearly relevant even without an abstract?"
+4. "What is your contact email? (used for API polite-pool access)"
+5. "What institution do you use for library access? (for the proxy URL)"
    — For Texas A&M: proxy is `http://proxy.library.tamu.edu/login?url=`
    — For others: offer to look it up or ask them to paste it
-7. "What should I call the output CSV file? (default: results.csv)"
 
 Then:
 - Locate the skill directory (same as §1a):
   ```bash
   SKILL_DIR="$(dirname "$(find /sessions -path '*/skills/traittrawler/SKILL.md' -print -quit 2>/dev/null)")"
   ```
-- Create `collector_config.yaml` from answers (using the template in
-  `$SKILL_DIR/references/config_template.yaml`). **Important**: based on the
-  user's answer to question 3 (trait type), populate `output_fields` with the
-  appropriate trait-specific fields from `$SKILL_DIR/references/csv_schema.md`.
-  Do NOT leave trait fields commented out — the generated config must include
-  all fields the project will actually use.
+- Create `collector_config.yaml` from answers using the template in
+  `$SKILL_DIR/references/config_template.yaml`. **Important**: populate
+  the `{TRAIT_FIELDS}` section with trait-specific field names. Use your
+  knowledge of the trait to generate appropriate field names. Follow these
+  conventions:
+  - Use snake_case for all field names
+  - Include the unit in the name when applicable (e.g. `body_mass_g_mean`, not `body_mass_mean`)
+  - Include `_mean`, `_sd`, `_min`, `_max` suffixes for continuous measurements
+  - Include `sex`, `sample_size`, `age_class` when the trait is measured per individual
+  - Include method/technique fields when relevant (e.g. `staining_method`, `measurement_method`)
+  - Show the user the generated field list and ask "Does this cover what you need,
+    or should I add/remove any fields?"
+- The generated config must use a single flat `output_fields` list (not separate
+  core/trait lists). The template already includes paper metadata and quality
+  fields — you only need to fill in the trait-specific section.
 - Create `state/` folder with empty state files (see §9a for schemas):
   `processed.json` (`{}`), `queue.json` (`[]`), `search_log.json` (`{}`),
   `large_pdf_progress.json` (`{}`)
 - Create `pdfs/` folder
-- Create `results.csv` with just the header row (field order from csv_schema.md)
-- Check for `config.py` (search terms) and `guide.md` (domain knowledge):
-  - If missing: create minimal templates and tell the user:
-    "I've created template files for `config.py` (search terms) and `guide.md`
-    (domain knowledge). You'll want to customize both before running — `config.py`
-    controls what the agent searches for, and `guide.md` tells it how to interpret
-    what it finds."
+- Create `results.csv` with just the header row (field order from `output_fields`
+  in the generated `collector_config.yaml`)
+- **Generate `config.py`** (search terms) if it doesn't exist:
+  Ask the user two more questions:
+  6. "What are the major taxonomic groups I should search? (e.g. family names,
+     order names — I'll cross these with the trait keywords)"
+  7. "Any specific journals or author names that are especially relevant?"
+
+  Then generate `config.py` by cross-producting the taxonomic groups × trait
+  keywords (derived from the triage_keywords in collector_config.yaml), plus
+  the journal/author terms. The file MUST define a list called `SEARCH_TERMS`:
+  ```python
+  """Search queries for {project_name}."""
+  _TAXA = ["Family1", "Family2", ...]
+  _TRAIT_KW = ["keyword1", "keyword2", ...]  # from triage_keywords
+  _GENERAL = ["broad query 1", ...]
+  _JOURNAL = ["keyword JournalName", ...]
+  SEARCH_TERMS = [f"{t} {k}" for t in _TAXA for k in _TRAIT_KW]
+  SEARCH_TERMS += _GENERAL
+  SEARCH_TERMS += _JOURNAL
+  SEARCH_TERMS = list(dict.fromkeys(SEARCH_TERMS))  # deduplicate
+  ```
+  Tell the user the query count and remind them they can edit `config.py`
+  to add or remove terms anytime.
+
+- **Generate `guide.md`** (domain knowledge) if it doesn't exist:
+  Ask the user:
+  8. "What should I know about how this trait is reported in the literature?
+     (units, notation conventions, common pitfalls, what to extract vs. skip)"
+
+  Generate `guide.md` from their answer, structured with sections for:
+  Units/notation, What to extract, What to skip, Common pitfalls, and
+  Taxonomy notes. Tell the user: "I've created `guide.md` from your answers.
+  You can edit it anytime to add rules — the more specific you are, the
+  better the extractions will be."
 
 Once setup is complete, proceed to §1 (Startup) normally.
 
@@ -77,7 +112,7 @@ Once setup is complete, proceed to §1 (Startup) normally.
 
 ## 1. Startup
 
-### 1a. Locate the skill directory
+### 1a. Locate the skill directory and check dependencies
 
 The skill's bundled reference files live alongside this SKILL.md file.
 Resolve once at startup and store as `SKILL_DIR`:
@@ -85,6 +120,27 @@ Resolve once at startup and store as `SKILL_DIR`:
 ```bash
 SKILL_DIR="$(dirname "$(find /sessions -path '*/skills/traittrawler/SKILL.md' -print -quit 2>/dev/null)")"
 ```
+
+**Check Python dependencies** (run once per session):
+```bash
+python3 -c "import pdfplumber" 2>/dev/null || pip install pdfplumber --break-system-packages -q
+python3 -c "import yaml" 2>/dev/null || pip install pyyaml --break-system-packages -q
+```
+
+If either install fails, warn the user but continue — PDF text extraction will
+fall back to reading PDFs as text via the Read tool, and YAML parsing uses regex.
+
+**Check MCP availability** — try calling each MCP to see if it's connected:
+- PubMed MCP (`search_articles`): if unavailable, fall back to WebFetch with
+  the PubMed E-utilities API: `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={query}&retmode=json&retmax=20`
+  followed by `efetch` for metadata. Use `contact_email` in the `tool` parameter.
+- bioRxiv MCP (`search_preprints`): if unavailable, fall back to WebFetch with
+  the bioRxiv API: `https://api.biorxiv.org/details/biorxiv/{date_from}/{date_to}`
+  or use the Crossref search.
+- Claude in Chrome: if unavailable, skip proxy fetch (§5c) and rely on OA sources only.
+  Warn the user: `⚠ Claude in Chrome not available — proxy access disabled. Only open-access papers will be retrieved.`
+
+Do not fail hard on any missing MCP — degrade gracefully and inform the user.
 
 ### 1b. Read files in order before doing anything else
 
@@ -102,12 +158,16 @@ SKILL_DIR="$(dirname "$(find /sessions -path '*/skills/traittrawler/SKILL.md' -p
 8. `leads.csv` — papers where full text was unavailable but triage was
    likely/uncertain (see §5g). Count for status report.
 
-**Skill reference files** (in `SKILL_DIR/references/` — read these too):
+**Skill reference files** (in `SKILL_DIR/references/`):
 
-9. `extraction_examples.md` — notation rules for catalogues, tables, sex
-   chromosome systems, OCR artifacts. Essential for correct extraction.
-10. `csv_schema.md` — full field list with types, rules, and confidence guidelines.
-    Defines the CSV field order for append compatibility.
+9. `csv_schema.md` — generic field definitions for paper metadata, data quality,
+   and leads.csv. Read for reference on confidence guidelines and field types.
+
+**Project-specific reference files** (in project root, optional):
+
+10. `extraction_examples.md` — if present, read it. Contains notation rules,
+    worked examples, and edge cases specific to this project's trait/taxon.
+    Not all projects will have this file.
 
 Report status before starting the loop, using `project_name` from config:
 
@@ -115,12 +175,12 @@ Report status before starting the loop, using `project_name` from config:
 ════════════════════════════════════════════════
  {project_name} — Starting
 ════════════════════════════════════════════════
- Records in database : 1,247
- Papers processed    : 340
- Leads (need PDF)    : 18
- Queue depth         : 12 pending
- Queries run         : 89 / 730
- Next query          : "Chrysomelidae karyotype"
+ Records in database : {count}
+ Papers processed    : {count}
+ Leads (need PDF)    : {count}
+ Queue depth         : {count} pending
+ Queries run         : {n} / {total}
+ Next query          : "{next query from config.py}"
 ════════════════════════════════════════════════
 ```
 
@@ -195,11 +255,24 @@ Try each using WebFetch (use `contact_email` from `collector_config.yaml`):
 4. **Semantic Scholar**: `https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}?fields=openAccessPdf`
    Check `openAccessPdf.url`. Also try title search if no DOI.
 
-If a PDF URL is found: download with WebFetch and save to disk, then extract
-text with pdfplumber. If pdfplumber returns empty text (scanned PDF), see §5d.
+If a PDF URL is found, download and extract text:
 
-**Note**: Always use WebFetch for HTTP requests — never use `curl`, `wget`, or
-Python `requests` directly, as these may be blocked by the runtime sandbox.
+1. First try WebFetch to get the PDF URL's content. WebFetch may return the
+   text content directly for HTML-hosted papers.
+2. If you need the actual PDF file on disk (for pdfplumber or vision extraction),
+   use Python with urllib (which is in the standard library and usually works):
+   ```python
+   import urllib.request
+   urllib.request.urlretrieve(pdf_url, local_path)
+   ```
+3. Then extract text with pdfplumber. If pdfplumber returns empty text
+   (scanned PDF), see §5d.
+4. If both WebFetch and urllib fail, try using Claude in Chrome to navigate
+   to the PDF URL and save it.
+
+**Note**: Always try WebFetch first for API calls (JSON endpoints like Unpaywall,
+OpenAlex, etc.). For actual PDF file downloads, urllib is more reliable since
+WebFetch is optimized for text content, not binary files.
 
 ### 5c. Institution proxy (paywalled papers)
 
@@ -228,9 +301,13 @@ automatically burn vision tokens. Instead:
     scanned-only sources like Biodiversity Heritage Library).
   - If `never`: mark `pdf_source: scanned_skipped`, fall through to abstract.
 
-For vision extraction: render pages as JPEG (300 DPI, first 30 pages max),
-send to Claude with the OCR prompt from `guide.md`. Watch for common artifacts
-(l/1 confusion, O/0 confusion, dropped superscripts) — note in `notes` field.
+For vision extraction, use the Read tool to read the PDF file directly —
+Claude can read PDF files natively and extract text from scanned pages.
+Read in chunks of 20 pages at a time using the `pages` parameter (e.g.,
+`pages: "1-20"`, then `pages: "21-40"`). First 30 pages max unless the
+user approves more. Watch for common OCR-like artifacts in the extracted
+text (l/1 confusion, O/0 confusion, dropped superscripts) — note in
+`notes` field.
 
 ### 5e. Large PDF handling
 
@@ -252,7 +329,7 @@ multiple sessions without losing progress or reprocessing pages.
 
 If everything else fails, use the abstract. Set `source_type: abstract_only`
 and `extraction_confidence ≤ 0.5`. Still extract — abstracts often contain
-a 2n count and sex chromosome system.
+key data values even without full methodology.
 
 ### 5g. Leads tracking
 
@@ -321,8 +398,8 @@ Before extracting, read enough text to identify document type:
 ### 7b. Extraction strategy by type
 
 **Prose papers — single pass:**
-Read full text and extract all records. Apply all rules from `guide.md` and the
-`extraction_rules` in `collector_config.yaml`.
+Read full text and extract all records. Apply all rules from `guide.md` and
+the triage/trait rules in `collector_config.yaml`.
 
 **Table-heavy papers — two passes (critical for completeness):**
 
@@ -330,7 +407,7 @@ Read full text and extract all records. Apply all rules from `guide.md` and the
 all tables. Count the rows. Write the list explicitly before proceeding:
 ```
 Tables found: 3 | Total species rows: 47
-Species: Carabus auratus, Carabus nemoralis, Pterostichus melanarius...
+Species: Species_1, Species_2, Species_3...
 ```
 
 *Pass 2 — Extract:* Work through the enumerated list one by one. After extraction,
@@ -338,8 +415,8 @@ verify: record count should match enumerated species count. If not, find the gap
 
 **Catalogue entries — chunked two-pass:**
 Break into chunks of ~100 taxon lines. For each chunk: enumerate names first,
-then extract. See `SKILL_DIR/references/extraction_examples.md` for notation rules
-(already read at startup §1b).
+then extract. If the project has `extraction_examples.md`, refer to it for
+notation rules (already read at startup §1b).
 
 ### 7c. Field definitions
 
@@ -350,9 +427,9 @@ collaborator with a different trait will have a different list.
 
 ### 7d. Domain rules
 
-All project-specific extraction rules live in `guide.md` and `collector_config.yaml`
-→ `extraction_rules`. Read both before extracting. The rules in those files take
-precedence over general reasoning.
+All project-specific extraction rules live in `guide.md` and the triage rules
+in `collector_config.yaml`. Read both before extracting. The rules in those
+files take precedence over general reasoning.
 
 Universal rules (apply to all projects):
 - Extract data EXPLICITLY stated — never infer values not present in the text.
@@ -390,15 +467,15 @@ Use `extrasaction="ignore"` so unknown fields never crash the write.
 **`processed.json`** — object keyed by DOI (or normalized title if no DOI):
 ```json
 {
-  "10.3897/compcytogen.v10i3.9504": {
-    "title": "Karyotype of Carabus auratus",
+  "10.1234/example.1111": {
+    "title": "Title of a relevant paper",
     "triage": "likely",
     "outcome": "extracted",
     "records": 3,
     "date": "2026-03-20"
   },
-  "10.1234/example.5678": {
-    "title": "Weevil feeding behavior",
+  "10.1234/example.2222": {
+    "title": "Title of an irrelevant paper",
     "triage": "unlikely",
     "outcome": "skipped",
     "records": 0,
@@ -411,12 +488,12 @@ Use `extrasaction="ignore"` so unknown fields never crash the write.
 ```json
 [
   {
-    "doi": "10.1234/example.9999",
-    "title": "Chrysomelidae chromosome survey",
+    "doi": "10.1234/example.3333",
+    "title": "A paper awaiting processing",
     "authors": "Smith et al.",
     "year": 2021,
-    "journal": "Comp Cytogenet",
-    "abstract": "We report karyotypes for 12 species...",
+    "journal": "Journal Name",
+    "abstract": "Abstract text...",
     "triage": "likely",
     "source": "pubmed",
     "added_date": "2026-03-20"
@@ -427,7 +504,7 @@ Use `extrasaction="ignore"` so unknown fields never crash the write.
 **`search_log.json`** — object keyed by query string:
 ```json
 {
-  "Carabidae karyotype": {
+  "Taxon keyword": {
     "date": "2026-03-20",
     "pubmed_results": 23,
     "biorxiv_results": 1,
@@ -453,20 +530,20 @@ Use atomic writes (write to `.tmp` then `os.rename`) to avoid corruption.
 After every 5 papers, print a rolling update:
 
 ```
-📄 [15/45 queued] "Smith et al. 2003 — Carabidae cytogenetics"
-   → 8 records | source: proxy 🌐 | pdfs/Carabidae/Smith_2003_CompCytogen_9504.pdf
+📄 [15/45 queued] "Smith et al. 2003 — Paper title"
+   → 8 records | source: proxy 🌐 | pdfs/Family/Smith_2003_Journal_9504.pdf
    → Session: +34 records | Database total: 1,281
 ```
 
 Zero-record papers:
 ```
-📄 [16/45] "Jones 1998 — Weevil feeding behavior"
+📄 [16/45] "Jones 1998 — Paper title"
    → 0 records (no target trait data — marked processed)
 ```
 
 Large PDF progress:
 ```
-📚 [large PDF, pages 51-100/380] "John 1975 — Animal Cytogenetics Vol. 3"
+📚 [large PDF, pages 51-100/380] "Author 1975 — Book title"
    → 142 records this batch | resuming next session from page 101
 ```
 
@@ -544,22 +621,22 @@ loaded from CDN at generation time and all data is inlined.
 ### What the dashboard shows
 
 **KPI cards** (top row):
-- Total records, unique species, genera, families
-- Papers processed, leads (need full text), flagged for review
+- Total records, unique species, papers processed
+- Leads (need full text), flagged for review
 
 **Search progress bar**: queries completed vs. total from `config.py`
 
-**Charts** (10 panels):
+**Charts** (auto-generated based on available data):
 - Cumulative records over time (line chart)
-- Records by family — top 20 (horizontal bar)
-- Sex chromosome systems (doughnut)
-- Diploid chromosome number distribution (histogram)
+- Records by taxonomic group — top 20 (horizontal bar)
 - Records by publication year (bar)
 - Full-text source breakdown (doughnut)
 - Extraction confidence distribution (bar)
 - Records by country — top 15 (horizontal bar)
 - Lead failure reasons (horizontal bar)
 - Lead status breakdown (doughnut)
+- Additional trait-specific charts if recognized fields are present
+  (e.g., chromosome number distribution for karyotype projects)
 
 ### Dashboard output location
 

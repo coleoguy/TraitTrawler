@@ -1,0 +1,87 @@
+# ============================================================
+# Example: Avian Body Mass Database
+# Demonstrates how to adapt TraitTrawler for a different
+# taxon and trait. See the main README for instructions.
+# ============================================================
+
+project_name: "Avian Body Mass Database"
+project_root: "/path/to/your/avian-body-mass"  # Update after cloning
+contact_email: "you@university.edu"
+
+target_taxa:
+  - "Aves"
+  - "birds"
+
+trait_name: "body mass"
+trait_description: >
+  Body mass (g) from wild-caught or museum specimens. Prefer breeding-season
+  measurements when available. Record sex, sample size, mean, SD, and range
+  where reported. Convert oz/lb to grams. Ignore captive-reared birds unless
+  the paper explicitly states wild-origin.
+
+triage_keywords:
+  - body mass
+  - body weight
+  - morphometrics
+  - morphometric measurements
+  - mass (g)
+
+triage_rules:
+  likely: >
+    Paper reports original body mass measurements for wild birds, with species-level
+    data, sample sizes, or summary statistics. Tables of morphometric data that
+    include mass/weight columns.
+  uncertain: >
+    Abstract absent or mentions morphometrics without specifying which measurements.
+    Review papers that may compile mass data from other sources.
+  unlikely: >
+    Behavioral ecology, population genetics, song analysis, habitat modeling,
+    or other topics with no morphometric data component.
+
+proxy_url: "https://ezproxy.youruniversity.edu/login?url="
+institution: "Your University"
+
+pdf_subfolder_field: "order"
+
+vision_extraction: "ask"
+
+taxonomy_api: "gbif"
+gbif_kingdom: "Animalia"
+
+output_csv: "results.csv"
+
+output_fields:
+  # Paper metadata
+  - doi
+  - paper_title
+  - paper_authors
+  - first_author
+  - paper_year
+  - paper_journal
+  # Taxonomy
+  - species
+  - order
+  - family
+  - genus
+  # Body mass data
+  - body_mass_g_mean
+  - body_mass_g_sd
+  - body_mass_g_min
+  - body_mass_g_max
+  - sex
+  - sample_size
+  - age_class
+  - season
+  - measurement_method
+  # Collection info
+  - collection_locality
+  - country
+  # Quality
+  - extraction_confidence
+  - flag_for_review
+  - source_type
+  - pdf_source
+  - pdf_filename
+  - pdf_url
+  - notes
+  - processed_date

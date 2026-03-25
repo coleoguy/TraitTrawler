@@ -1,14 +1,13 @@
 ---
 name: traittrawler
 description: >
-  Autonomous literature data collector for Heath Blackmon (TAMU Biology).
-  Invoke this skill when Heath wants to run the karyotype agent, collect beetle
-  cytogenetics data, process papers, search for karyotype records, extract chromosome
-  data from literature, fetch PDFs through the TAMU library proxy, or add records
-  to results.csv. Also use when Heath says anything like "run the agent", "collect
-  some data", "work on karyotypes", or "let's gather some papers". The skill runs
-  for as long as Heath wants — an hour, a session, whenever — and picks up exactly
-  where it left off each time.
+  Autonomous literature data collector. Invoke this skill when the user wants to
+  collect trait data from the scientific literature, process papers, extract
+  structured records, fetch PDFs through a library proxy, or add records to
+  results.csv. Also triggers on phrases like "run the agent", "collect some data",
+  "work on the database", or "let's gather some papers". The skill is taxon- and
+  trait-agnostic — it adapts to any system defined in the project's config files.
+  It runs for as long as the user wants and picks up exactly where it left off.
 compatibility: "Requires Bash, Read, Write, WebFetch, Claude in Chrome MCP, PubMed MCP, bioRxiv MCP"
 ---
 
@@ -16,14 +15,15 @@ compatibility: "Requires Bash, Read, Write, WebFetch, Claude in Chrome MCP, PubM
 
 This skill searches the scientific literature, retrieves full-text papers, and
 extracts structured data records into a CSV. Everything about *what* to collect
-and *who* is collecting it lives in `collector_config.yaml` — the skill itself
-is reusable for any taxa and any trait by swapping that file.
+lives in three project files: `collector_config.yaml` (taxa, trait, fields),
+`config.py` (search queries), and `guide.md` (domain knowledge for extraction).
+The skill itself is taxon- and trait-agnostic.
 
 You run until the user stops you or the search queue is exhausted. Pick up
 exactly where the previous session ended.
 
-**Project root**: Read from `collector_config.yaml` → `project_root`.
-All paths below are relative to that root.
+**Project root**: the folder Cowork has open (the current working directory).
+All paths below are relative to this root.
 
 ---
 
@@ -62,12 +62,39 @@ Then:
   `large_pdf_progress.json` (`{}`)
 - Create `pdfs/` folder
 - Create `results.csv` with just the header row (field order from csv_schema.md)
-- Check for `config.py` (search terms) and `guide.md` (domain knowledge):
-  - If missing: create minimal templates and tell the user:
-    "I've created template files for `config.py` (search terms) and `guide.md`
-    (domain knowledge). You'll want to customize both before running — `config.py`
-    controls what the agent searches for, and `guide.md` tells it how to interpret
-    what it finds."
+- **Generate `config.py`** (search terms) if it doesn't exist:
+  Ask the user two more questions:
+  8. "What are the major taxonomic groups I should search? (e.g. family names,
+     order names — I'll cross these with the trait keywords)"
+  9. "Any specific journals or author names that are especially relevant?"
+
+  Then generate `config.py` by cross-producting the taxonomic groups × trait
+  keywords (derived from the triage_keywords in collector_config.yaml), plus
+  the journal/author terms. Follow this structure:
+  ```python
+  """Search queries for {project_name}."""
+  _TAXA = ["Family1", "Family2", ...]
+  _TRAIT_KW = ["keyword1", "keyword2", ...]  # from triage_keywords
+  _GENERAL = ["broad query 1", ...]
+  _JOURNAL = ["keyword JournalName", ...]
+  SEARCH_TERMS = [f"{t} {k}" for t in _TAXA for k in _TRAIT_KW]
+  SEARCH_TERMS += _GENERAL
+  SEARCH_TERMS += _JOURNAL
+  SEARCH_TERMS = list(dict.fromkeys(SEARCH_TERMS))  # deduplicate
+  ```
+  Tell the user the query count and remind them they can edit `config.py`
+  to add or remove terms anytime.
+
+- **Generate `guide.md`** (domain knowledge) if it doesn't exist:
+  Ask the user:
+  10. "What should I know about how this trait is reported in the literature?
+      (units, notation conventions, common pitfalls, what to extract vs. skip)"
+
+  Generate `guide.md` from their answer, structured with sections for:
+  Units/notation, What to extract, What to skip, Common pitfalls, and
+  Taxonomy notes. Tell the user: "I've created `guide.md` from your answers.
+  You can edit it anytime to add rules — the more specific you are, the
+  better the extractions will be."
 
 Once setup is complete, proceed to §1 (Startup) normally.
 
@@ -102,12 +129,16 @@ SKILL_DIR="$(dirname "$(find /sessions -path '*/skills/traittrawler/SKILL.md' -p
 8. `leads.csv` — papers where full text was unavailable but triage was
    likely/uncertain (see §5g). Count for status report.
 
-**Skill reference files** (in `SKILL_DIR/references/` — read these too):
+**Skill reference files** (in `SKILL_DIR/references/`):
 
-9. `extraction_examples.md` — notation rules for catalogues, tables, sex
-   chromosome systems, OCR artifacts. Essential for correct extraction.
-10. `csv_schema.md` — full field list with types, rules, and confidence guidelines.
-    Defines the CSV field order for append compatibility.
+9. `csv_schema.md` — generic field definitions for paper metadata, data quality,
+   and leads.csv. Read for reference on confidence guidelines and field types.
+
+**Project-specific reference files** (in project root, optional):
+
+10. `extraction_examples.md` — if present, read it. Contains notation rules,
+    worked examples, and edge cases specific to this project's trait/taxon.
+    Not all projects will have this file.
 
 Report status before starting the loop, using `project_name` from config:
 
@@ -338,8 +369,8 @@ verify: record count should match enumerated species count. If not, find the gap
 
 **Catalogue entries — chunked two-pass:**
 Break into chunks of ~100 taxon lines. For each chunk: enumerate names first,
-then extract. See `SKILL_DIR/references/extraction_examples.md` for notation rules
-(already read at startup §1b).
+then extract. If the project has `extraction_examples.md`, refer to it for
+notation rules (already read at startup §1b).
 
 ### 7c. Field definitions
 
@@ -544,22 +575,22 @@ loaded from CDN at generation time and all data is inlined.
 ### What the dashboard shows
 
 **KPI cards** (top row):
-- Total records, unique species, genera, families
-- Papers processed, leads (need full text), flagged for review
+- Total records, unique species, papers processed
+- Leads (need full text), flagged for review
 
 **Search progress bar**: queries completed vs. total from `config.py`
 
-**Charts** (10 panels):
+**Charts** (auto-generated based on available data):
 - Cumulative records over time (line chart)
-- Records by family — top 20 (horizontal bar)
-- Sex chromosome systems (doughnut)
-- Diploid chromosome number distribution (histogram)
+- Records by taxonomic group — top 20 (horizontal bar)
 - Records by publication year (bar)
 - Full-text source breakdown (doughnut)
 - Extraction confidence distribution (bar)
 - Records by country — top 15 (horizontal bar)
 - Lead failure reasons (horizontal bar)
 - Lead status breakdown (doughnut)
+- Additional trait-specific charts if recognized fields are present
+  (e.g., chromosome number distribution for karyotype projects)
 
 ### Dashboard output location
 
