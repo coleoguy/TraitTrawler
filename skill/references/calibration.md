@@ -3,8 +3,14 @@
 ## 0a. Researching wizard answers
 
 When the user delegates a setup wizard question ("you figure it out",
-"research it", "I don't know"), use the taxon and trait from Q1–Q2 to
-find the answer. Always present findings for user approval.
+"research it", "I don't know"), **spawn a haiku subagent** to do the
+research. Pass the subagent the taxon, trait, question, and the specific
+research strategy below. The subagent returns a concise answer (not the
+raw search results). Present findings for user approval.
+
+This is critical for context management — delegated research can involve
+dozens of API calls and abstract reads that would bloat the main context.
+The subagent's internal work is discarded after it returns.
 
 **Q3 (keywords)**: Search OpenAlex for 10–20 recent papers matching the
 taxon + trait. Extract the most common title words that co-occur with the
@@ -121,9 +127,14 @@ Report:
    Added to search queue    : {N}
    guide.md is now {lines} lines with {sections} sections
 
-Ready to start collecting. The search queue has {N} papers from citations
-plus {M} keyword queries. Begin? [y/n]
+Start a new conversation and say "continue collecting" to begin the first
+collection session with a fresh context window.
 ```
+
+Write `state/calibration_complete.json` with the stats above. **Do NOT
+proceed to §1 in this invocation** — the wizard + calibration has consumed
+most of the context budget. A fresh session ensures full context for
+collection.
 
 ---
 

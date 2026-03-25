@@ -45,6 +45,24 @@
       "rationale": "Audit mode trigger phrase."
     },
     {
+      "id": "trigger-positive-8",
+      "type": "should_trigger",
+      "query": "I want to build a trait database of mating systems across all bird families. Can you mine the literature for me?",
+      "rationale": "Uses 'build a trait database' and 'mine the literature' — explicit triggers. Tests non-karyotype trait."
+    },
+    {
+      "id": "trigger-positive-9",
+      "type": "should_trigger",
+      "query": "continue collecting",
+      "rationale": "Minimal trigger phrase. Tests that the skill recognizes terse session-resume commands."
+    },
+    {
+      "id": "trigger-positive-10",
+      "type": "should_trigger",
+      "query": "I have about 40 papers here that report chromosome numbers for grasshoppers. Can you process them and add the records to my database?",
+      "rationale": "PDF-first mode with explicit record extraction. Natural phrasing without using exact trigger words."
+    },
+    {
       "id": "trigger-negative-1",
       "type": "should_not_trigger",
       "query": "What's known about sex chromosome evolution in beetles?",
@@ -60,19 +78,49 @@
       "id": "trigger-negative-3",
       "type": "should_not_trigger",
       "query": "Collect some thoughts on this paper and give me feedback.",
-      "rationale": "Uses 'collect' but in a non-data-collection context. Should not trigger."
+      "rationale": "Uses 'collect' but in a non-data-collection context. Near-miss on the keyword 'collect'."
     },
     {
       "id": "trigger-negative-4",
       "type": "should_not_trigger",
       "query": "Make me a chart showing the distribution of body sizes in my CSV.",
-      "rationale": "Data visualization request — should trigger data-viz, not trait-trawler."
+      "rationale": "Data visualization of existing data — should trigger data-viz, not trait-trawler."
     },
     {
       "id": "trigger-negative-5",
       "type": "should_not_trigger",
       "query": "Help me write the methods section for my paper.",
       "rationale": "Manuscript writing — not data collection."
+    },
+    {
+      "id": "trigger-negative-6",
+      "type": "should_not_trigger",
+      "query": "I need to find papers about how CRISPR has been used in beetle research — what are the open questions and untested hypotheses?",
+      "rationale": "Near-miss: mentions 'find papers' and beetles, but this is a conceptual literature synthesis (deepscholar), not structured data extraction."
+    },
+    {
+      "id": "trigger-negative-7",
+      "type": "should_not_trigger",
+      "query": "Can you read this PDF and pull out the key findings? It's a review of lepidopteran karyotype diversity.",
+      "rationale": "Near-miss: mentions PDF, extraction, and karyotype — but the request is to summarize a single review paper, not to extract structured records into a database."
+    },
+    {
+      "id": "trigger-negative-8",
+      "type": "should_not_trigger",
+      "query": "I have a spreadsheet with chromosome counts for 500 species. Can you clean it up, fix the formatting, and add a column for family?",
+      "rationale": "Near-miss: involves trait data (chromosome counts) and a CSV, but this is spreadsheet editing, not literature mining. Should trigger xlsx skill."
+    },
+    {
+      "id": "trigger-negative-9",
+      "type": "should_not_trigger",
+      "query": "What gaps exist in our understanding of insect chromosome evolution? Draft an introduction paragraph for my manuscript.",
+      "rationale": "Near-miss: 'gaps' and 'chromosome' overlap with campaign-planning language, but this is manuscript drafting."
+    },
+    {
+      "id": "trigger-negative-10",
+      "type": "should_not_trigger",
+      "query": "Run a statistical analysis on results.csv — I want to know if chromosome number correlates with body size across families.",
+      "rationale": "Near-miss: references results.csv and trait data, but this is statistical analysis of existing data, not literature mining for new records."
     }
   ]
 }

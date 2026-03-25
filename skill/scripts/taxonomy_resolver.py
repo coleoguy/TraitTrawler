@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# PURPOSE: Execute this script. Do not read it into context.
+# USAGE: python3 scripts/taxonomy_resolver.py --species "Name1" "Name2" --cache state/taxonomy_cache.json --kingdom Animalia
+# OUTPUT: JSON to stdout with resolution results for each species
 """
 TraitTrawler Taxonomy Resolver
 ===============================

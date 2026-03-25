@@ -102,6 +102,21 @@ access. Crossref also respects the `mailto` parameter.
    - `search_log.json` → loses query progress (may re-run some queries)
    - `run_log.jsonl` → loses session history (non-critical)
 
+### processed.json out of sync with results.csv
+
+**Symptom:** DOIs appear in results.csv but not in processed.json, or
+search_log.json is missing queries that clearly ran (papers from those
+queries are in the CSV). Often discovered at next session start.
+
+**Cause:** Large batch writes (e.g., 29 records from one paper) update
+results.csv successfully but the subsequent processed.json / search_log.json
+writes are incomplete — typically because the agent's generated code updates
+them in a separate step that silently fails or is skipped after an error.
+
+**Fix:** The state sync check in §8b (extraction_and_validation.md) now runs
+after every batch write and auto-patches missing entries. If you discover
+desync at session start, run the sync check manually before continuing.
+
 ### results.csv write failure
 
 **Symptom:** Agent stops with "results.csv write failure" error.
@@ -112,6 +127,20 @@ disk is full.
 **Fix:** Close any programs that have results.csv open. Check disk space.
 The agent stops immediately on write failure to prevent data loss — no
 records are silently dropped.
+
+### Duplicate dict key in generated Python code
+
+**Symptom:** Agent-generated batch write script crashes with unexpected
+behavior because a dict key (commonly `flag_for_review` or `processed_date`)
+is set twice — once in a base dict literal and again in a per-record loop.
+
+**Cause:** When the agent writes batch scripts for large papers (>10 records),
+it sometimes creates a base record dict with default values and then
+overwrites specific keys in a loop, inadvertently duplicating keys.
+
+**Fix:** The code generation guardrails in §8a now explicitly prohibit this
+pattern. If you see this error, the agent should use the template code from
+§8a verbatim rather than improvising a new write script.
 
 ---
 

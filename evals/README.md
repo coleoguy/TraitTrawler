@@ -8,18 +8,25 @@ This directory contains evaluations for the `trait-trawler` skill organized into
 
 Tests whether the skill activates on the right prompts and stays silent on the wrong ones.
 
-**Should trigger (7 cases):**
+**Should trigger (10 cases):**
 - Explicit data collection requests ("collect trait data", "run a session")
-- PDF-first mode ("extract data from these PDFs")
+- PDF-first mode ("extract data from these PDFs", "process these papers")
 - Campaign planning ("plan the campaign", "coverage report")
 - Audit mode ("audit the database")
+- Minimal trigger ("continue collecting")
+- Natural phrasing without exact keywords ("build a trait database", "mine the literature")
 
-**Should NOT trigger (5 cases):**
+**Should NOT trigger (10 cases):**
 - Literature review questions (deepscholar territory)
 - One-off paper summaries
 - "Collect some thoughts" (non-data use of "collect")
-- Data visualization requests
+- Data visualization of existing data
 - Manuscript writing
+- Near-miss: single-paper PDF summary with karyotype keywords
+- Near-miss: spreadsheet cleaning of trait data (xlsx territory)
+- Near-miss: manuscript introduction drafting with "gaps" language
+- Near-miss: statistical analysis of results.csv
+- Near-miss: conceptual literature synthesis with "find papers" phrasing
 
 ### 2. Functional Tests (`functional_tests.json`)
 
@@ -54,7 +61,7 @@ The original eval files remain for backward compatibility. They follow the per-t
   "skills": ["trait-trawler"],
   "query": "User request to the agent",
   "files": [{"name": "file.json", "content": "..."}],
-  "expected_behavior": ["Condition 1", "Condition 2"]
+  "expectations": ["Condition 1", "Condition 2"]
 }
 ```
 
@@ -64,7 +71,7 @@ The original eval files remain for backward compatibility. They follow the per-t
 1. Install the skill in Cowork
 2. Prepare any mock files from the `files` array
 3. Submit the `query` to the agent
-4. Verify all `expected_behavior` conditions are met
+4. Verify all `expectations` conditions are met
 
 ### Automated
 ```bash
@@ -79,4 +86,4 @@ claude eval evals/performance_tests.json
 **Fail:** One or more expected behaviors not observed
 **Needs Investigation:** Behaviors partially met or edge cases
 
-For triggering tests, the key metric is zero false triggers on should-not-trigger cases. For functional tests, check each expected_behavior line. For performance tests, the skill should match or exceed bare-model accuracy while adding provenance, confidence, and validation that the bare model omits.
+For triggering tests, the key metric is zero false triggers on should-not-trigger cases. For functional tests, check each expectations line. For performance tests, the skill should match or exceed bare-model accuracy while adding provenance, confidence, and validation that the bare model omits.

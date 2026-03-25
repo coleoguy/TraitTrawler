@@ -30,7 +30,7 @@
           "content": "## Sex Chromosome Systems\nNormalize to standard codes: Xyp, XY, neo-XY, X0, etc.\n'parachute' = Xyp. 'X+y' = Xyp.\nXyp is the ancestral system in most Chrysomelidae.\n\n## Chromosome Numbers\nRecord 2n as reported. If conflicting values given, use the one supported by figures or methods description. Flag conflicting reports.\nB chromosomes: if mentioned, note in b_chromosomes field, do not add to 2n count."
         }
       ],
-      "expected_behavior": [
+      "expectations": [
         "C. bankii extracted cleanly with high confidence (>= 0.85) — no escalation needed",
         "C. americana should have confidence <= 0.6 due to conflicting 2n values (18+Xyp vs 2n=20) and notation inconsistency (Xyp/parachute/X+y). Sex system normalizes to Xyp. Should note the B chromosome possibility.",
         "C. herbacea should have confidence <= 0.5 due to author's own doubt about the count and the single specimen. Flag_for_review should be true.",
@@ -53,7 +53,7 @@
           "content": "{\"timestamp\": \"2026-03-01T10:00:00Z\", \"session_id\": \"2026-03-01T10:00:00Z\", \"event\": \"session_start\", \"guide_md5\": \"abc111\"}\n{\"timestamp\": \"2026-03-05T14:00:00Z\", \"session_id\": \"2026-03-05T14:00:00Z\", \"event\": \"session_start\", \"guide_md5\": \"abc111\"}\n{\"timestamp\": \"2026-03-10T09:00:00Z\", \"session_id\": \"2026-03-10T09:00:00Z\", \"event\": \"session_start\", \"guide_md5\": \"def222\"}"
         }
       ],
-      "expected_behavior": [
+      "expectations": [
         "Priority 1 (low confidence, threshold 0.6): Identifies doi c (0.45) and doi d (0.38) — 2 records",
         "Priority 2 (guide-drift): Identifies records from sessions 2026-03-01 and 2026-03-05 (guide_md5=abc111), since current guide has md5=def222 — 10 records. Doi c and d already in priority 1, so 8 new records added.",
         "Priority 3 (statistical outliers): Doi e (2n=18, singleton in family where 2n=20 is modal) and doi i (X0 system, singleton in family where XY is dominant with 10+ records). Doi k (2n=22) is also a singleton count but the group has only 12 records total for that value — borderline.",

@@ -1,0 +1,57 @@
+{
+  "skill_name": "trait-trawler",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Let's collect some data on beetle body sizes. I want to focus on Coleoptera.",
+      "expected_output": "Setup wizard activates: detects missing collector_config.yaml and asks interactive setup questions one at a time.",
+      "files": [],
+      "expectations": [
+        "Detects that collector_config.yaml does not exist in the working directory",
+        "Initiates interactive setup wizard — asks questions one at a time",
+        "Asks about target taxa, trait type, and triage keywords",
+        "Does NOT attempt to query databases before configuration is complete"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Extract karyotype data from this paper. Write records to results.csv.",
+      "expected_output": "Extracts exactly 5 records from the table, each with correct species, 2n, and sex chromosome system values.",
+      "files": ["evals/files/collector_config.yaml", "evals/files/guide.md", "evals/files/test_paper.txt"],
+      "expectations": [
+        "Extracts exactly 5 records (one per species row in the table)",
+        "All species names match the table exactly",
+        "All 2n values are integers matching the table",
+        "All sex chromosome systems match the table notation (XY, Xyp, XO, neo-XY)",
+        "Each record has an extraction_confidence score between 0.85 and 1.0",
+        "Does NOT hallucinate additional species not in the table"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Let's continue collecting. Pick up where we left off.",
+      "expected_output": "Reads state files, reports prior progress (3 records, 2 papers, 2/50 queries), and resumes from next unprocessed query.",
+      "files": ["evals/files/collector_config.yaml", "evals/files/processed.json", "evals/files/search_log.json", "evals/files/results.csv"],
+      "expectations": [
+        "Reads state/processed.json and state/search_log.json to determine prior progress",
+        "Reports current status including record count, papers processed, and queries completed",
+        "Does NOT reprocess papers already in processed.json",
+        "Starts searching from the next unrun query",
+        "Asks about session duration before beginning"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Run QC on the data and tell me how we're doing.",
+      "expected_output": "Runs statistical_qc.py, reports Chao1 estimate, confidence distribution, outlier count, and accumulation slope.",
+      "files": ["evals/files/collector_config.yaml", "evals/files/results_large.csv"],
+      "expectations": [
+        "Executes scripts/statistical_qc.py (does not read the script into context)",
+        "Reports species count and Chao1 estimated total",
+        "Reports mean extraction confidence",
+        "Reports number of outliers detected",
+        "Provides a recommendation about whether to continue collecting"
+      ]
+    }
+  ]
+}

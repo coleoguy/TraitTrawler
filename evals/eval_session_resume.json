@@ -19,7 +19,7 @@
       "content": "[\n  {\n    \"query_index\": 6,\n    \"query_text\": \"Chrysomela populi chromosome\",\n    \"status\": \"ready\",\n    \"papers_identified\": 4,\n    \"papers_triaged\": 0\n  },\n  {\n    \"query_index\": 7,\n    \"query_text\": \"ground beetle karyotype\",\n    \"status\": \"ready\",\n    \"papers_identified\": 3,\n    \"papers_triaged\": 0\n  },\n  {\n    \"query_index\": 8,\n    \"query_text\": \"weevil sex determination\",\n    \"status\": \"queued\",\n    \"papers_identified\": 0,\n    \"papers_triaged\": 0\n  }\n]\n"
     }
   ],
-  "expected_behavior": [
+  "expectations": [
     "Reads session_state.json and correctly reports: 5 queries completed, 3 papers processed, 8 records extracted",
     "Confirms that papers with DOI 10.1007/s10577-023-09445-5, 10.1016/j.ygeno.2023.110512, and 10.1186/s12915-024-01834-5 have been processed",
     "Skips these 3 papers and does not re-extract their data",

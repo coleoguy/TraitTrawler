@@ -44,7 +44,9 @@ report_every: 5
 
 taxonomy_api: "gbif"
 
-output_csv: "{OUTPUT_CSV}"
+# Output is always written to results.csv in the project root.
+# Do not change this — the dashboard, verification, and all other
+# tools depend on this filename.
 
 # All output fields in CSV column order.
 # The setup wizard populates this list with paper metadata fields

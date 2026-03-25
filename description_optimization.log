@@ -1,0 +1,96 @@
+Split: 12 train, 8 test (holdout=0.4)
+
+============================================================
+Iteration 1/5
+Description: Autonomous scientific literature mining agent that builds structured trait databases (karyotype, morphometric, life-history, any phenotype) from the primary literature. Searches PubMed, OpenAlex, bioRxiv, and Crossref; retrieves full-text PDFs via open-access cascades and institutional proxies (Chrome); extracts structured data from prose, tables, and catalogues; resolves taxonomy against GBIF; validates and writes to CSV with full provenance. Includes statistical QC (Chao1, Grubbs outlier detection), bidirectional citation chaining, self-improving domain knowledge, and multi-session campaign planning. Use when the user wants to: collect trait data, mine the literature, run a session, trawl for data, build a trait database, process papers, extract data from papers, add records, fetch PDFs, run QC, plan the campaign, audit the database, or continue collecting. Do NOT use for casual literature review (use deepscholar), simple data exploration, or one-off paper summaries.
+============================================================
+Train: 18/36 correct, precision=100% recall=0% accuracy=50% (40.8s)
+  [FAIL] rate=0/3 expected=True: Audit the database and re-check the low-confidence records.
+  [FAIL] rate=0/3 expected=True: Trawl for data on avian body mass from the literature.
+  [FAIL] rate=0/3 expected=True: I have about 40 papers here that report chromosome numbers f
+  [FAIL] rate=0/3 expected=True: Plan the campaign — what families still need coverage?
+  [FAIL] rate=0/3 expected=True: Run a session and continue collecting karyotype data.
+  [FAIL] rate=0/3 expected=True: Let's collect some data on beetle body sizes. I want to focu
+  [PASS] rate=0/3 expected=False: Summarize this paper for me.
+  [PASS] rate=0/3 expected=False: I have a spreadsheet with chromosome counts for 500 species.
+  [PASS] rate=0/3 expected=False: Can you read this PDF and pull out the key findings? It's a 
+  [PASS] rate=0/3 expected=False: Run a statistical analysis on results.csv — I want to know i
+  [PASS] rate=0/3 expected=False: What gaps exist in our understanding of insect chromosome ev
+  [PASS] rate=0/3 expected=False: What's known about sex chromosome evolution in beetles?
+Test : 12/24 correct, precision=100% recall=0% accuracy=50% (0.0s)
+  [FAIL] rate=0/3 expected=True: I want to build a trait database of mating systems across al
+  [FAIL] rate=0/3 expected=True: I dropped some PDFs in the pdfs/ folder. Can you extract the
+  [FAIL] rate=0/3 expected=True: How many species do we have so far? Can we run QC on the dat
+  [FAIL] rate=0/3 expected=True: continue collecting
+  [PASS] rate=0/3 expected=False: Make me a chart showing the distribution of body sizes in my
+  [PASS] rate=0/3 expected=False: I need to find papers about how CRISPR has been used in beet
+  [PASS] rate=0/3 expected=False: Collect some thoughts on this paper and give me feedback.
+  [PASS] rate=0/3 expected=False: Help me write the methods section for my paper.
+
+Improving description...
+Proposed (13.5s): Use this skill when the user wants to collect, trawl, or mine trait data (karyotype, body size, life-history, any phenotype) from scientific papers into a structured database. Triggers on: "collect data", "trawl for data", "run a session", "continue collecting", "process papers", "add records", "plan the campaign", "audit the database", "run QC", "fetch PDFs", or "build a trait database". Also use when the user has PDFs to process and extract structured data from, or wants to check data quality, review low-confidence records, or assess taxonomic coverage gaps. Do NOT use for casual literature review (use deepscholar), simple data exploration, one-off paper summaries, reading a single PDF, or cleaning existing spreadsheets.
+
+============================================================
+Iteration 2/5
+Description: Use this skill when the user wants to collect, trawl, or mine trait data (karyotype, body size, life-history, any phenotype) from scientific papers into a structured database. Triggers on: "collect data", "trawl for data", "run a session", "continue collecting", "process papers", "add records", "plan the campaign", "audit the database", "run QC", "fetch PDFs", or "build a trait database". Also use when the user has PDFs to process and extract structured data from, or wants to check data quality, review low-confidence records, or assess taxonomic coverage gaps. Do NOT use for casual literature review (use deepscholar), simple data exploration, one-off paper summaries, reading a single PDF, or cleaning existing spreadsheets.
+============================================================
+Train: 18/36 correct, precision=100% recall=0% accuracy=50% (40.4s)
+  [FAIL] rate=0/3 expected=True: Audit the database and re-check the low-confidence records.
+  [FAIL] rate=0/3 expected=True: Plan the campaign — what families still need coverage?
+  [FAIL] rate=0/3 expected=True: Trawl for data on avian body mass from the literature.
+  [FAIL] rate=0/3 expected=True: I have about 40 papers here that report chromosome numbers f
+  [FAIL] rate=0/3 expected=True: Run a session and continue collecting karyotype data.
+  [FAIL] rate=0/3 expected=True: Let's collect some data on beetle body sizes. I want to focu
+  [PASS] rate=0/3 expected=False: Summarize this paper for me.
+  [PASS] rate=0/3 expected=False: I have a spreadsheet with chromosome counts for 500 species.
+  [PASS] rate=0/3 expected=False: Can you read this PDF and pull out the key findings? It's a 
+  [PASS] rate=0/3 expected=False: Run a statistical analysis on results.csv — I want to know i
+  [PASS] rate=0/3 expected=False: What gaps exist in our understanding of insect chromosome ev
+  [PASS] rate=0/3 expected=False: What's known about sex chromosome evolution in beetles?
+Test : 12/24 correct, precision=100% recall=0% accuracy=50% (0.0s)
+  [FAIL] rate=0/3 expected=True: I want to build a trait database of mating systems across al
+  [FAIL] rate=0/3 expected=True: I dropped some PDFs in the pdfs/ folder. Can you extract the
+  [FAIL] rate=0/3 expected=True: How many species do we have so far? Can we run QC on the dat
+  [FAIL] rate=0/3 expected=True: continue collecting
+  [PASS] rate=0/3 expected=False: Make me a chart showing the distribution of body sizes in my
+  [PASS] rate=0/3 expected=False: Collect some thoughts on this paper and give me feedback.
+  [PASS] rate=0/3 expected=False: I need to find papers about how CRISPR has been used in beet
+  [PASS] rate=0/3 expected=False: Help me write the methods section for my paper.
+
+Improving description...
+Proposed (14.6s): Use this skill any time the user wants to systematically collect, trawl, or mine trait data from scientific literature into a database. This is the ONLY skill for building structured trait databases (karyotype, body size, life-history, any phenotype) by processing batches of papers. Trigger on any of: collecting data, trawling for data, running a session, continuing collecting, processing papers to add records, planning the campaign, auditing the database, running QC, or fetching PDFs for extraction. Also trigger when the user has multiple PDFs with trait data to process, wants to check data quality or low-confidence records, or asks about taxonomic coverage gaps. Do NOT use for casual literature review (use deepscholar), one-off paper summaries, reading a single PDF, cleaning existing spreadsheets, or statistical analysis of existing data.
+
+============================================================
+Iteration 3/5
+Description: Use this skill any time the user wants to systematically collect, trawl, or mine trait data from scientific literature into a database. This is the ONLY skill for building structured trait databases (karyotype, body size, life-history, any phenotype) by processing batches of papers. Trigger on any of: collecting data, trawling for data, running a session, continuing collecting, processing papers to add records, planning the campaign, auditing the database, running QC, or fetching PDFs for extraction. Also trigger when the user has multiple PDFs with trait data to process, wants to check data quality or low-confidence records, or asks about taxonomic coverage gaps. Do NOT use for casual literature review (use deepscholar), one-off paper summaries, reading a single PDF, cleaning existing spreadsheets, or statistical analysis of existing data.
+============================================================
+Train: 18/36 correct, precision=100% recall=0% accuracy=50% (40.9s)
+  [FAIL] rate=0/3 expected=True: Audit the database and re-check the low-confidence records.
+  [FAIL] rate=0/3 expected=True: Plan the campaign — what families still need coverage?
+  [FAIL] rate=0/3 expected=True: Trawl for data on avian body mass from the literature.
+  [FAIL] rate=0/3 expected=True: I have about 40 papers here that report chromosome numbers f
+  [FAIL] rate=0/3 expected=True: Run a session and continue collecting karyotype data.
+  [FAIL] rate=0/3 expected=True: Let's collect some data on beetle body sizes. I want to focu
+  [PASS] rate=0/3 expected=False: Summarize this paper for me.
+  [PASS] rate=0/3 expected=False: I have a spreadsheet with chromosome counts for 500 species.
+  [PASS] rate=0/3 expected=False: Can you read this PDF and pull out the key findings? It's a 
+  [PASS] rate=0/3 expected=False: Run a statistical analysis on results.csv — I want to know i
+  [PASS] rate=0/3 expected=False: What gaps exist in our understanding of insect chromosome ev
+  [PASS] rate=0/3 expected=False: What's known about sex chromosome evolution in beetles?
+Test : 12/24 correct, precision=100% recall=0% accuracy=50% (0.0s)
+  [FAIL] rate=0/3 expected=True: I want to build a trait database of mating systems across al
+  [FAIL] rate=0/3 expected=True: I dropped some PDFs in the pdfs/ folder. Can you extract the
+  [FAIL] rate=0/3 expected=True: How many species do we have so far? Can we run QC on the dat
+  [FAIL] rate=0/3 expected=True: continue collecting
+  [PASS] rate=0/3 expected=False: Make me a chart showing the distribution of body sizes in my
+  [PASS] rate=0/3 expected=False: I need to find papers about how CRISPR has been used in beet
+  [PASS] rate=0/3 expected=False: Collect some thoughts on this paper and give me feedback.
+  [PASS] rate=0/3 expected=False: Help me write the methods section for my paper.
+
+Improving description...
+Proposed (30.0s): Autonomous scientific literature mining agent that builds structured trait databases (karyotype, morphometric, life-history, any phenotype) from the primary literature. Searches PubMed, OpenAlex, bioRxiv, and Crossref; retrieves full-text PDFs via open-access cascades and institutional proxies (Chrome); extracts structured data from prose, tables, and catalogues; resolves taxonomy against GBIF; validates and writes to CSV with full provenance. Includes statistical QC (Chao1, Grubbs outlier detection), bidirectional citation chaining, self-improving domain knowledge, and multi-session campaign planning. Use when the user wants to: collect trait data, mine the literature, run a session, trawl for data, build a trait database, process papers, extract data from papers, add records, fetch PDFs, run QC, plan the campaign, audit the database, or continue collecting. Do NOT use for casual literature review (use deepscholar), simple data exploration, or one-off paper summaries.
+
+============================================================
+Iteration 4/5
+Description: Autonomous scientific literature mining agent that builds structured trait databases (karyotype, morphometric, life-history, any phenotype) from the primary literature. Searches PubMed, OpenAlex, bioRxiv, and Crossref; retrieves full-text PDFs via open-access cascades and institutional proxies (Chrome); extracts structured data from prose, tables, and catalogues; resolves taxonomy against GBIF; validates and writes to CSV with full provenance. Includes statistical QC (Chao1, Grubbs outlier detection), bidirectional citation chaining, self-improving domain knowledge, and multi-session campaign planning. Use when the user wants to: collect trait data, mine the literature, run a session, trawl for data, build a trait database, process papers, extract data from papers, add records, fetch PDFs, run QC, plan the campaign, audit the database, or continue collecting. Do NOT use for casual literature review (use deepscholar), simple data exploration, or one-off paper summaries.
+============================================================

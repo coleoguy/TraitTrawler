@@ -2,7 +2,7 @@
   "skills": ["trait-trawler"],
   "query": "Let's collect some data on beetle body sizes. I want to focus on Coleoptera.",
   "files": [],
-  "expected_behavior": [
+  "expectations": [
     "Detects that collector_config.yaml does not exist in the working directory",
     "Explicitly confirms that configuration is missing and proposes to run setup wizard",
     "Initiates interactive setup wizard",

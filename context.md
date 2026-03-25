@@ -171,6 +171,73 @@ Dry-run simulation fixes: traced full fresh-install execution path through Cowor
 - [x] Added subagent mandate to calibration.md Step 3 — prevents context pressure from 3–5 rapid seed paper extractions accumulating PDF text in main context
 - [x] Added calibration-to-session-1 transition logic in SKILL.md §0b — explicit flow: §0 → §0b → §1 → §3 in same invocation, §1f still applies
 
+## Bug fixes from first production run (2026-03-25)
+
+### 1. Dashboard stopped updating after initial generation
+§13 said "every 10 papers — alongside §10" but §10, §9b, and §3b had zero mention of dashboard regeneration. Agent follows those sections during its loop and never re-reads §13. Fix: added `python3 dashboard_generator.py --project-root .` to §10, §9b, and §3b.
+
+### 2. State desync — processed.json vs results.csv
+Large batch writes succeeded for CSV but processed.json/search_log.json updates were incomplete. No verification existed. Fix: added §8b state sync check (extraction_and_validation.md) — runs after every batch write, auto-patches missing DOIs.
+
+### 3. Duplicate dict key crash in generated batch write code
+Agent improvised scripts setting `flag_for_review` twice (base dict + loop). Fix: added code generation guardrails to §8a requiring use of the template verbatim.
+
+### 4. Context window exhaustion during wizard + calibration
+The design mandated §0 → §0b → §1 → §3 all in one invocation (SKILL.md line 139). Wizard (9 Q&A rounds, possible research) + calibration (3-5 seed papers + knowledge review + citation seeding + example generation) + §1 startup (reads all config/state files) + §3 (reads extraction_and_validation.md 453 lines) simply doesn't fit. Three fixes:
+- Wizard + calibration now end with a checkpoint flag (`state/calibration_complete.json`) and tell the user to start a new conversation. §1 detects the checkpoint and acknowledges it.
+- Delegated wizard research ("you figure it out") now uses haiku subagents — API calls, abstract reads, and intermediate reasoning happen in isolated context that's discarded after returning the answer.
+- Added explicit instruction to only read calibration.md during §0/§0b — no pre-loading of extraction or session management reference files.
+
+### 5. CSV column shift mid-session
+Template code read `fieldnames` from `collector_config.yaml` on every write. If the agent's YAML parsing varied between writes (different field order, missing field), later rows would have different column positions than the header. `csv.DictReader` silently absorbs this by mapping values to wrong field names, so `verify_session.py` never caught it. Two fixes:
+- Template code in §8a now reads fieldnames from the existing CSV header (not config) for all writes after the first. This anchors column order to the header row.
+- Added `check_column_count()` to `verify_session.py` — reads raw CSV with `csv.reader`, compares field count per row against header, flags mismatches as errors. Runs first in the check sequence.
+- Added explicit instruction to always use `csv.DictWriter`, never string concatenation.
+
+### 6. Agent writing to wrong CSV file after calibration
+The wizard asked "What should I call the output CSV file?" (Q6) and stored the answer in `collector_config.yaml` as `output_csv`. The §8 prose said "append to the `output_csv` path from config" while the template code hardcoded `path = "results.csv"`. Calibration followed the template → wrote to `results.csv`. Main collection followed the prose → read `output_csv` from config → wrote to a different file. Dashboard, verify_session.py, state sync, campaign planner, and taxonomy resolver all hardcode `results.csv`, so everything downstream only saw calibration data. Fix: removed wizard Q6 entirely, removed `output_csv` from config_template.yaml, hardcoded `results.csv` in §8 prose. The filename is no longer configurable — 15+ locations depend on it.
+
+### Files changed
+- `skill/SKILL.md` — removed wizard Q6; dashboard regen in §3b; broke wizard/calibration into separate session; added reference file loading restriction for §0/§0b; added calibration checkpoint detection to §1
+- `skill/references/calibration.md` — updated completion report, session-break instruction, subagent research
+- `skill/references/config_template.yaml` — removed `output_csv` field, added comment explaining results.csv is fixed
+- `skill/references/session_management.md` — dashboard regen in §10 and §9b
+- `skill/references/extraction_and_validation.md` — §8 hardcodes results.csv; §8a reads header from existing CSV; §8b state sync; code generation guardrails; old §8b→§8c
+- `skill/references/troubleshooting.md` — state desync + duplicate key entries
+- `skill/verify_session.py` — added `check_column_count()` raw-line field count check
+
+## v2.0.4 changes (2026-03-25)
+Best-practices compliance audit against `claude_skill_best_practices.md`.
+
+- [x] Added `# PURPOSE: Execute this script. Do not read it into context.` annotation to all 5 Python scripts (§11 requirement: every script must clarify execute vs. read)
+- [x] Renamed `expected_behavior` → `expectations` in all eval JSON files to match §15 evals.json schema
+- [x] Created canonical `evals/evals.json` with 4 representative test cases per §2 directory architecture requirement
+- [x] Expanded trigger_tests.json from 7+5 → 10+10 (§16 recommends 10 should-trigger, 10 should-not-trigger)
+- [x] Added 5 near-miss negative trigger tests (single-paper PDF summary, spreadsheet editing, manuscript drafting, statistical analysis, conceptual synthesis) — these are the highest-value tests per §16
+- [x] Updated evals/README.md with correct field names and expanded trigger test counts
+- [ ] Run description optimization loop via `run_loop.py` (trigger_tests.json ready but not yet benchmarked)
+- [ ] Generate baseline comparison data for performance_tests.json evals
+- [ ] Clean up repo: remove tracked `traittrawler.skill` and `untitled folder/` from git
+
+### Audit findings — no action needed (already compliant)
+- SKILL.md is 413 lines (under 500-line limit) ✓
+- Description is 133 words (within 75–200 range) ✓
+- Zero ALL-CAPS emphasis markers (ALWAYS/NEVER/CRITICAL/IMPORTANT) in SKILL.md ✓
+- All reference files >300 lines have TOCs (extraction_and_validation.md, session_management.md) ✓
+- Every reference file is mentioned in SKILL.md with what it contains + when to load ✓
+- Progressive disclosure: 11 reference files loaded on-demand, SKILL.md is the navigation layer ✓
+- Atomic writes pattern used for all JSON state files ✓
+- State written after every unit of work, not just batch end ✓
+- Single-item failures never abort pipeline (§12 error handling) ✓
+- needs_attention mechanism exists (state/needs_attention.csv) ✓
+- Session protocol section present (§11 Session End + Stop Conditions) ✓
+- context.md convention used for multi-session calibration data ✓
+- `${CLAUDE_SKILL_DIR}` used for all bundled file references ✓
+- `disable-model-invocation` not set (correct — this skill should auto-trigger) ✓
+- `allowed-tools` follows least-privilege ✓
+- Voice is imperative + explanatory throughout ✓
+- Negative boundary clause present in description (differentiates from deepscholar) ✓
+
 ## Next actions
 - [ ] Register Zenodo DOI (flip GitHub integration on, tag v2.0.0 release)
 - [ ] Attach rebuilt .skill archive to GitHub Release

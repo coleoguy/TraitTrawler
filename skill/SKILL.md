@@ -64,6 +64,10 @@ exhausted. Pick up exactly where the previous session ended.
 | Troubleshooting | — | [troubleshooting.md](references/troubleshooting.md) | When something goes wrong |
 
 Read the appropriate reference file when entering that pipeline stage.
+**During the setup wizard (§0) and calibration (§0b), only read
+`calibration.md` and `config_template.yaml`.** Do not pre-load
+extraction_and_validation.md, session_management.md, or other reference
+files — they are not needed until §1+ and loading them wastes context.
 
 ---
 
@@ -82,15 +86,19 @@ Ask these questions one at a time (wait for each answer):
 5. "What institution do you use for library access? (for the proxy URL)"
    — For Texas A&M: proxy is `http://proxy.library.tamu.edu/login?url=`
    — For others: offer to look it up or ask them to paste it
-6. "What should I call the output CSV file? (default: results.csv)"
 
 ### Researching answers the user delegates
 
 For any wizard question, the user may say "you figure it out", "look it up",
-or "research it." When this happens, use OpenAlex, PubMed, and web search
-to research the answer. See [calibration.md](references/calibration.md) §0a
-for specific research strategies per question. Always present researched
-answers for user approval before writing config files.
+or "research it." **Spawn a haiku subagent** to do the research — pass it
+the taxon, trait, and the specific question. The subagent does the API
+calls, reads abstracts, and returns a concise answer (proposed keyword list,
+proxy URL, taxonomic group list, etc.). Present the subagent's findings to
+the user for approval. This keeps search results, abstracts, and intermediate
+reasoning out of the main context.
+
+See [calibration.md](references/calibration.md) §0a for the research
+strategy per question — include these instructions in the subagent prompt.
 
 ### Create project files
 
@@ -134,16 +142,36 @@ discovery logging → immediate knowledge review → citation-seed the queue →
 auto-generate `extraction_examples.md`. The first real session starts with
 battle-tested domain knowledge and a warm queue.
 
-**After calibration completes**, proceed directly to §1 (Startup). Calibration
-and the first collection session happen in the same invocation — the agent
-runs §0 → §0b → §1 → §3 without stopping. §1f (session duration) still
-applies to the first real batch after calibration.
+**After calibration completes**, write a checkpoint flag to
+`state/calibration_complete.json`:
+```json
+{"completed": true, "date": "2026-03-25", "seed_papers": 4, "records": 45}
+```
+Then tell the user:
+
+```
+Calibration complete — config files, guide.md, and extraction examples are
+ready. Start a new conversation and say "continue collecting" or "run a
+session" to begin the first collection batch with a fresh context window.
+```
+
+**Do NOT proceed to §1 in the same invocation.** The wizard + calibration
+consumes most of the context window. Starting §1 → §3 here risks context
+exhaustion mid-session, causing state desync, skipped papers, or silent
+failures. A fresh session gets the full context budget for actual collection.
 
 **If `collector_config.yaml` exists → skip to §1.**
 
 ---
 
 ## 1. Startup
+
+If `state/calibration_complete.json` exists and this is the first session
+after calibration, acknowledge it briefly:
+```
+Calibration data loaded — {N} records from {M} seed papers, queue has {Q} papers.
+```
+Then proceed normally with §1a–§1f.
 
 ### 1a. Check dependencies
 
@@ -289,6 +317,12 @@ For each stage, read the relevant reference file and use the model per §2:
 - **State & Reporting** (haiku): [session_management.md](references/session_management.md)
 
 Aim to fully process 5–10 papers per reporting cycle.
+
+**Every 10 papers processed**, regenerate the dashboard so the browser
+auto-refresh picks up new data:
+```bash
+python3 dashboard_generator.py --project-root .
+```
 
 **When `session_target` is reached**, print session summary and ask:
 ```

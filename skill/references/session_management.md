@@ -117,6 +117,11 @@ a brief status checkpoint to `state/session_checkpoint.json`:
 ```
 If the session crashes or the context compacts, re-read this checkpoint
 at the start of the next session to resume exactly where you left off.
+Also regenerate the dashboard at each checkpoint so the browser auto-refresh
+picks up current data:
+```bash
+python3 "{project_root}/dashboard_generator.py" --project-root "{project_root}"
+```
 
 **4. Don't hold PDF text.** After extracting records from a paper, do NOT
 retain the PDF text in conversation. The subagent architecture handles
@@ -197,6 +202,12 @@ Large PDF progress:
 ```
 📚 [large PDF, pages 51-100/380] "Author 1975 — Book title"
    → 142 records this batch | resuming next session from page 101
+```
+
+**Dashboard update:** Every 10 papers processed, regenerate the dashboard
+so that the browser auto-refresh picks up new data (see §13):
+```bash
+python3 "{project_root}/dashboard_generator.py" --project-root "{project_root}"
 ```
 
 ---

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# PURPOSE: Execute this script. Do not read it into context.
+# USAGE: python3 export_dwc.py --project-root /path/to/project --output-dir /path/to/output [--zip]
+# OUTPUT: DwC-compliant files (occurrence.txt, meta.xml, eml.xml) in the output directory
 """
 Darwin Core Archive Export Utility for TraitTrawler
 

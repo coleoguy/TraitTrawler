@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# PURPOSE: Execute this script. Do not read it into context.
+# USAGE: python3 dashboard_generator.py [--project-root /path/to/root]
+# OUTPUT: Creates {project_root}/dashboard.html (self-contained HTML with Chart.js)
 """
 TraitTrawler Dashboard Generator
 =================================

@@ -7,7 +7,7 @@
       "name": "Setup wizard activates when no config exists",
       "query": "Let's collect some data on beetle body sizes. I want to focus on Coleoptera.",
       "files": [],
-      "expected_behavior": [
+      "expectations": [
         "Detects that collector_config.yaml does not exist in the working directory",
         "Initiates interactive setup wizard — asks questions one at a time",
         "Asks user to specify target taxa (should accept 'Coleoptera' or similar)",
@@ -32,7 +32,7 @@
           "content": "ABSTRACT 1: \"Karyotypic characterization of Harmonia axyridis (Coleoptera: Coccinellidae): Novel sex chromosome dimorphism. We report the first complete karyotype analysis of the Asian lady beetle, Harmonia axyridis. 2n=20 for both sexes with an XY sex determination system.\" - Journal of Insect Cytogenetics, 2023.\n\nABSTRACT 2: \"Ecological niche modeling and geographic distribution of Chrysomela populi in response to climate change. This study uses species occurrence data from 47 localities across Europe.\" - Ecological Entomology, 2022.\n\nABSTRACT 3: \"Genome assembly and annotation of the Colorado potato beetle. We present a de novo genome assembly using long-read sequencing. The final assembly spans 490 Mb.\" - Genome Biology, 2023.\n\nABSTRACT 4: \"Meiotic behavior and chromosome segregation in Tribolium castaneum. The karyotype consists of 2n=20 autosomes plus XY sex chromosomes in males.\" - Chromosome Research, 2021.\n\nABSTRACT 5: \"Molecular phylogenetics of Cerambycidae using phylogenomic data. Some clades show evidence of ancient chromosomal rearrangements based on synteny comparisons, but no karyotypic data were collected.\" - Systematic Entomology, 2023."
         }
       ],
-      "expected_behavior": [
+      "expectations": [
         "Classifies Abstract 1 (Harmonia karyotype) as LIKELY RELEVANT",
         "Classifies Abstract 2 (ecological niche modeling) as UNLIKELY RELEVANT",
         "Classifies Abstract 3 (genome assembly, no karyotype) as UNLIKELY RELEVANT",
@@ -60,7 +60,7 @@
           "content": "Table 1. Karyotype data for five Chrysomelidae species.\n\nSpecies | Family | 2n | Sex chromosomes | Source\nLeptinotarsa decemlineata | Chrysomelidae | 34 | XY | This study\nChrysomela populi | Chrysomelidae | 42 | Xyp | Smith 1998\nGonioctena quinquepunctata | Chrysomelidae | 26 | XO | This study\nTimarcha tenebricosa | Chrysomelidae | 20 | neo-XY | Jones 2005\nChrysomela vigintipunctata | Chrysomelidae | 42 | Xyp | This study\n"
         }
       ],
-      "expected_behavior": [
+      "expectations": [
         "Extracts exactly 5 records (one per species row)",
         "All species names match the table exactly",
         "All 2n values are integers matching the table",
@@ -93,7 +93,7 @@
           "content": "doi,species,family,2n,sex_chromosome_system,extraction_confidence,flag_for_review\n10.1234/paper1,Leptinotarsa decemlineata,Chrysomelidae,34,XY,0.95,false\n10.1234/paper1,Chrysomela populi,Chrysomelidae,42,Xyp,0.88,false\n10.1234/paper1,Gonioctena quinquepunctata,Chrysomelidae,26,XO,0.92,false\n"
         }
       ],
-      "expected_behavior": [
+      "expectations": [
         "Reads state/processed.json and state/search_log.json to determine prior progress",
         "Reports current status: 3 records, 2 papers processed, 2 of 50 queries completed",
         "Does NOT reprocess papers already in processed.json",
@@ -115,7 +115,7 @@
           "content": "Integrated pest management strategies for Diabrotica virgifera virgifera: Genetic control approaches. This review summarizes genetic control methods including sterile insect technique (SIT) and CRISPR-based approaches. Genetic control via chromosomal translocations is highlighted as a promising strategy."
         }
       ],
-      "expected_behavior": [
+      "expectations": [
         "Classifies as UNLIKELY or UNCERTAIN — not LIKELY",
         "Recognizes that 'chromosomal translocations' is in a genetic control context, not karyotyping",
         "Notes that no original karyotype data would be extractable from a review of control methods",
@@ -132,7 +132,7 @@
           "content": "target_taxa: Coleoptera\ntrait_name: Karyotype\noutput_fields:\n  - doi\n  - species\n  - family\n  - 2n\n  - sex_chromosome_system\n  - extraction_confidence\n"
         }
       ],
-      "expected_behavior": [
+      "expectations": [
         "Uses haiku-tier for search queries and initial triage (lightweight tasks)",
         "Uses sonnet-tier for full-text extraction and validation (complex reasoning)",
         "Does NOT use opus unless encountering escalation triggers (low confidence, row mismatch, OCR artifacts)",

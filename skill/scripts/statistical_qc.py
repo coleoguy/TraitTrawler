@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# PURPOSE: Execute this script. Do not read it into context.
+# USAGE: python3 scripts/statistical_qc.py --project-root /path/to/project [--full]
+# OUTPUT: qc_summary.json (always), qc_report.html (with --full flag)
 """
 TraitTrawler Statistical QC
 =============================

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# PURPOSE: Execute this script. Do not read it into context.
+# USAGE: python3 verify_session.py [--project-root /path/to/project]
+# OUTPUT: state/verification_report.json + human-readable summary to stdout
 """
 TraitTrawler Deterministic Session Verification Script
 
@@ -286,6 +289,45 @@ def check_confidence_anomaly(rows: List[Dict[str, str]]) -> List[Dict[str, Any]]
     return issues
 
 
+def check_column_count(csv_path: str) -> List[Dict[str, Any]]:
+    """
+    Check for column shift by counting raw fields per line.
+
+    csv.DictReader silently absorbs column shifts by mapping values to wrong
+    field names. This check reads the raw CSV and compares the number of
+    fields in each row against the header. A mismatch indicates an unquoted
+    delimiter, missing field, or fieldnames list change mid-session.
+
+    Args:
+        csv_path: Path to results.csv
+
+    Returns:
+        List of issues found
+    """
+    issues = []
+    try:
+        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if header is None:
+                return issues
+            expected = len(header)
+            for line_num, raw_row in enumerate(reader, start=2):
+                actual = len(raw_row)
+                if actual != expected:
+                    issues.append({
+                        'type': 'column_count_mismatch',
+                        'severity': 'error',
+                        'field': None,
+                        'row_number': line_num,
+                        'message': f"Row has {actual} fields but header has {expected} — likely column shift from unquoted delimiter or changed fieldnames",
+                        'value': f"expected={expected}, actual={actual}"
+                    })
+    except Exception:
+        pass  # File read errors handled elsewhere
+    return issues
+
+
 def check_required_fields(rows: List[Dict[str, str]]) -> List[Dict[str, Any]]:
     """
     Verify that required fields are present and non-empty.
@@ -475,8 +517,9 @@ def verify_session(project_root: str) -> Tuple[Dict[str, Any], int]:
             })
             report['summary']['warnings'] += 1
 
-    # Run all checks
+    # Run all checks — column count first (most critical, catches shifts early)
     all_issues = []
+    all_issues.extend(check_column_count(str(results_csv)))
     all_issues.extend(detect_duplicates(rows, fieldnames))
     all_issues.extend(validate_schema(rows, fieldnames, config))
     all_issues.extend(check_confidence_anomaly(rows))

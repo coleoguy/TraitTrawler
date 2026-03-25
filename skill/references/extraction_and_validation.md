@@ -7,7 +7,7 @@
 - [§7. Extraction](#7-extraction) — paper classification, two-pass table strategy, field definitions, domain rules, provenance
 - [§7f. Record Validation](#7f-record-validation) — universal and project-specific checks, failure actions
 - [§7g. Taxonomy Check](#7g-taxonomy-check-after-extraction-before-writing) — GBIF resolution, synonym handling
-- [§8. Write to results.csv](#8-write-to-resultscsv) — deduplication logic, post-batch verification
+- [§8. Write to results.csv](#8-write-to-resultscsv) — deduplication logic, state sync, post-batch verification
 
 ---
 
@@ -317,7 +317,9 @@ are recognized as the same species for dedup purposes.
 
 ## 8. Write to results.csv
 
-Append extracted records to the `output_csv` path from `collector_config.yaml`.
+Append extracted records to `results.csv` in the project root. **Always use
+the filename `results.csv`** — the dashboard, verification script, state sync,
+campaign planner, and taxonomy resolver all depend on this name.
 Use only the fields listed in `output_fields`. Add `session_id` to every record.
 
 ### 8a. Deduplication
@@ -337,10 +339,18 @@ agent identifies them from `collector_config.yaml`.
 ```python
 import csv, os
 
-fieldnames = [...]  # from collector_config.yaml output_fields
 rows = [...]        # extracted records (after taxonomy check)
 session_id = "2026-03-24T14:30:00Z"  # from §1c
 path = "results.csv"
+
+# CRITICAL: Read fieldnames from the EXISTING CSV header, not from config.
+# This prevents column order drift if config parsing varies between writes.
+if os.path.exists(path):
+    with open(path, "r") as f:
+        reader = csv.DictReader(f)
+        fieldnames = list(reader.fieldnames)
+else:
+    fieldnames = [...]  # from collector_config.yaml output_fields (first write only)
 
 # Core fields excluded from dedup key
 core_fields = {
@@ -384,8 +394,63 @@ with open(path, "a", newline="") as f:
 ```
 
 Use `extrasaction="ignore"` so unknown fields never crash the write.
+**Always use `csv.DictWriter`** — never write CSV by string concatenation
+or manual comma-joining. DictWriter handles quoting of values that contain
+commas, newlines, or quotes.
 
-### 8b. Post-batch verification
+**Code generation guardrails** — when writing batch scripts:
+- Never set the same dict key twice in a Python literal or loop. Build each
+  record dict once; use a single assignment for `flag_for_review`, `session_id`,
+  and `processed_date` — not a base dict plus a per-record override.
+- Always use the template above as the starting point. If adapting it for a
+  large batch (>10 records), still use the same structure: build `rows` list
+  first, dedup, then single `writer.writerows()` call.
+
+### 8b. State sync verification
+
+After every CSV write, verify that `processed.json` is consistent with
+`results.csv`. Run this check inline (not as a separate script):
+
+```python
+import csv, json
+
+# Collect DOIs present in results.csv
+csv_dois = set()
+with open("results.csv", "r") as f:
+    for row in csv.DictReader(f):
+        doi = row.get("doi", "").strip()
+        if doi:
+            csv_dois.add(doi)
+
+# Check processed.json
+with open("state/processed.json", "r") as f:
+    processed = json.load(f)
+
+missing = csv_dois - set(processed.keys())
+if missing:
+    print(f"WARNING: {len(missing)} DOIs in results.csv but not in processed.json")
+    # Patch them in
+    for doi in missing:
+        processed[doi] = {
+            "title": "recovered from results.csv",
+            "triage": "unknown",
+            "outcome": "extracted",
+            "records": 0,
+            "date": datetime.now().strftime("%Y-%m-%d")
+        }
+    tmp = "state/processed.json.tmp"
+    with open(tmp, "w") as f:
+        json.dump(processed, f, indent=2)
+    os.rename(tmp, "state/processed.json")
+    print(f"  → Patched {len(missing)} entries into processed.json")
+```
+
+Run this check after every batch write (not every single record — after
+the batch of records from one paper). If discrepancies are found, patch
+and continue. This prevents the slow state drift that compounds over long
+sessions.
+
+### 8c. Post-batch verification
 
 After writing a batch of records, run the verification script:
 

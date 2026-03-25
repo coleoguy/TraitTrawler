@@ -1,0 +1,82 @@
+[
+  {
+    "query": "Let's collect some data on beetle body sizes. I want to focus on Coleoptera.",
+    "should_trigger": true
+  },
+  {
+    "query": "Run a session and continue collecting karyotype data.",
+    "should_trigger": true
+  },
+  {
+    "query": "How many species do we have so far? Can we run QC on the data?",
+    "should_trigger": true
+  },
+  {
+    "query": "I dropped some PDFs in the pdfs/ folder. Can you extract the morphometric data from them?",
+    "should_trigger": true
+  },
+  {
+    "query": "Trawl for data on avian body mass from the literature.",
+    "should_trigger": true
+  },
+  {
+    "query": "Plan the campaign \u2014 what families still need coverage?",
+    "should_trigger": true
+  },
+  {
+    "query": "Audit the database and re-check the low-confidence records.",
+    "should_trigger": true
+  },
+  {
+    "query": "I want to build a trait database of mating systems across all bird families. Can you mine the literature for me?",
+    "should_trigger": true
+  },
+  {
+    "query": "continue collecting",
+    "should_trigger": true
+  },
+  {
+    "query": "I have about 40 papers here that report chromosome numbers for grasshoppers. Can you process them and add the records to my database?",
+    "should_trigger": true
+  },
+  {
+    "query": "What's known about sex chromosome evolution in beetles?",
+    "should_trigger": false
+  },
+  {
+    "query": "Summarize this paper for me.",
+    "should_trigger": false
+  },
+  {
+    "query": "Collect some thoughts on this paper and give me feedback.",
+    "should_trigger": false
+  },
+  {
+    "query": "Make me a chart showing the distribution of body sizes in my CSV.",
+    "should_trigger": false
+  },
+  {
+    "query": "Help me write the methods section for my paper.",
+    "should_trigger": false
+  },
+  {
+    "query": "I need to find papers about how CRISPR has been used in beetle research \u2014 what are the open questions and untested hypotheses?",
+    "should_trigger": false
+  },
+  {
+    "query": "Can you read this PDF and pull out the key findings? It's a review of lepidopteran karyotype diversity.",
+    "should_trigger": false
+  },
+  {
+    "query": "I have a spreadsheet with chromosome counts for 500 species. Can you clean it up, fix the formatting, and add a column for family?",
+    "should_trigger": false
+  },
+  {
+    "query": "What gaps exist in our understanding of insect chromosome evolution? Draft an introduction paragraph for my manuscript.",
+    "should_trigger": false
+  },
+  {
+    "query": "Run a statistical analysis on results.csv \u2014 I want to know if chromosome number correlates with body size across families.",
+    "should_trigger": false
+  }
+]
