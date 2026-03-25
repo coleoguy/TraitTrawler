@@ -19,3 +19,11 @@ dashboard.html
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+
+# Description optimization artifacts
+description_optimization.log
+description_optimization_results/
+
+# Misc
+untitled folder/
