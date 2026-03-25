@@ -1,0 +1,27 @@
+{
+  "skills": ["traittrawler"],
+  "query": "Extract all karyotype data from the provided paper. Use a two-pass strategy: first enumerate all species in tables, then extract structured data. Generate a CSV with columns: Species, 2n, Sex Chromosome System, Locality.",
+  "files": [
+    {
+      "name": "collector_config.yaml",
+      "content": "target_taxa: Coleoptera\ntrait_name: Karyotype (2n and sex chromosome system)\ntarget_journals:\n  - Chromosome Research\n  - Cytogenetic and Genome Research\n  - Insect Cytogenetics\n"
+    },
+    {
+      "name": "mock_paper_karyotypes.txt",
+      "content": "MOCK PAPER: \"Comparative cytogenetic analysis of southeastern Cerambycidae (longhorn beetles)\"\nAuthors: Smith, J., Johnson, M., Williams, R.\nJournal: Chromosome Research\nVolume: 32, Issue: 4, Pages: 445-458\nDOI: 10.1007/s10577-024-09682-9\nYear: 2024\n\nABSTRACT:\nWe conducted a comprehensive karyotypic survey of eight Cerambycidae species collected from southeastern United States. Using conventional staining and FISH analysis, we determined chromosome numbers and identified sex determination systems. This study provides the first karyotypic data for three previously unstudied species and confirms recent taxonomic revisions based on molecular data.\n\n---TABLE 1: KARYOTYPE DATA FOR EXAMINED CERAMBYCIDAE SPECIES---\n\nSpecies | 2n | Sex Chromosome System | Locality\n---|---|---|---\nAcanthocinus aedilis | 24 | XY | Georgia, USA\nArhopalus rusticus | 22 | XY | North Carolina, USA\nChrysobothris mali | 20 | XY | South Carolina, USA\nDendrobium cylindricum | 28 | XY | Florida, USA\nEucnemidae chrysomeloides | 26 | ZW | Georgia, USA\nFramire pubicornis | 24 | XY | Alabama, USA\nGryllotalpa africana | 30 | XY | Louisiana, USA\nHylotrupes bajulus | 22 | XX/XY | Mississippi, USA\n\n---END TABLE 1---\n\nMATERIALS AND METHODS:\nBeetles were collected using pan traps and window traps during June-August 2023. Individuals were euthanized and whole body tissues were processed for chromosomal preparation using standard cytological protocols. Metaphase I cells were examined at 1000x magnification under oil immersion.\n\nRESULTS:\nAll species examined possessed either 20 or 30 chromosome arms in diploid complement. Sex determination systems were predominantly XY in males (7 species) with one species (Eucnemidae chrysomeloides) showing a ZW system. Banding patterns were consistent within species across multiple individuals.\n\nDISCUSSION:\nOur results show substantial karyotypic diversity within Cerambycidae, with chromosome numbers ranging from 20 to 30. The presence of a ZW system in E. chrysomeloides is noteworthy and may reflect ancestral sex chromosome evolution within the family.\n\nCONCLUSION:\nThis work expands the karyotypic database for North American Cerambycidae and provides a foundation for future studies on sex chromosome evolution in wood-boring beetles.\n"
+    }
+  ],
+  "expected_behavior": [
+    "Identifies that the paper contains a structured table with karyotype data",
+    "Enumerates all 8 species present in Table 1 before attempting extraction",
+    "Confirms enumeration: 'I identify 8 species to extract: Acanthocinus aedilis, Arhopalus rusticus, Chrysobothris mali, Dendrobium cylindricum, Eucnemidae chrysomeloides, Framire pubicornis, Gryllotalpa africana, Hylotrupes bajulus'",
+    "Extracts all 8 species with correct 2n values: 24, 22, 20, 28, 26, 24, 30, 22",
+    "Correctly identifies sex chromosome systems: 7 XY systems and 1 ZW system",
+    "Accurately maps localities: Georgia, North Carolina, South Carolina, Florida, Georgia, Alabama, Louisiana, Mississippi",
+    "Outputs structured CSV format with correct column headers: Species, 2n, Sex Chromosome System, Locality",
+    "All 8 rows in output CSV have complete data across all four fields",
+    "Does not miss or conflate any species",
+    "Follows two-pass extraction strategy (enumerate then extract)",
+    "Notes the unusual ZW system in Eucnemidae chrysomeloides as potentially significant"
+  ]
+}

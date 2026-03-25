@@ -1,0 +1,71 @@
+{
+  "skills": ["traittrawler"],
+  "description": "Validates that model routing does not degrade accuracy. Tests three claims: (1) haiku matches opus on triage classification, (2) sonnet matches opus on structured table extraction, (3) escalation triggers fire appropriately on ambiguous cases. Run each test case on haiku, sonnet, and opus independently; compare outputs.",
+  "test_cases": [
+    {
+      "name": "triage_model_comparison",
+      "description": "Same 10 abstracts from eval_triage_accuracy.json, run on haiku vs. opus. Triage is a simple classification task — haiku should match opus on 9/10+.",
+      "method": "Run eval_triage_accuracy.json test abstracts using Agent tool with model:haiku, then again with model:opus. Compare classifications.",
+      "pass_criteria": "Haiku agrees with opus on >= 9 of 10 abstracts. Any disagreement should be on Abstract 5 or 7 (the near-miss cases), not on clear-cut cases like Abstract 1, 6, 8, or 10.",
+      "files": ["eval_triage_accuracy.json"]
+    },
+    {
+      "name": "extraction_model_comparison",
+      "description": "Same 8-row karyotype table from eval_table_extraction.json, run on sonnet vs. opus. Tests whether sonnet handles structured table data without accuracy loss.",
+      "method": "Run eval_table_extraction.json test table using Agent tool with model:sonnet, then again with model:opus. Compare extracted records field by field.",
+      "pass_criteria": "Sonnet extracts all 8 species rows. Field-level agreement with opus >= 95%. Any disagreements should be in notes/confidence, not in 2n or sex_chr_system values.",
+      "files": ["eval_table_extraction.json"]
+    },
+    {
+      "name": "escalation_trigger_test",
+      "description": "Tests that the escalation protocol fires correctly on a genuinely ambiguous case.",
+      "query": "Extract karyotype data from the following passage. Use the provided guide.md for notation rules.",
+      "files": [
+        {
+          "name": "ambiguous_passage.txt",
+          "content": "From Table 3 of Petitpierre (1999), Chrysomelidae:\n\nSpecies: Chrysolina americana\nLocality: Barcelona, Spain\nThe diploid number was reported as '18+Xyp' in the original, but a footnote states 'some cells showed 2n=20, possibly due to B chromosomes or preparation artifacts.' The sex chromosome system is listed as 'Xyp' in the table but 'parachute' in the text, and one figure caption refers to 'X+y' configuration.\n\nSpecies: Chrysolina bankii\nLocality: Mallorca, Spain\nClear preparation: 2n=24, sex system Xyp confirmed by C-banding. No ambiguity.\n\nSpecies: Chrysolina herbacea\nLocality: Montpellier, France\nTable lists 2n=46 but the text on p.114 states 'The high chromosome number of 2n=46 in C. herbacea is unusual for Chrysomelinae, where 2n=24 is modal. We cannot exclude counting error from the single available male specimen.'"
+        },
+        {
+          "name": "guide_excerpt.md",
+          "content": "## Sex Chromosome Systems\nNormalize to standard codes: Xyp, XY, neo-XY, X0, etc.\n'parachute' = Xyp. 'X+y' = Xyp.\nXyp is the ancestral system in most Chrysomelidae.\n\n## Chromosome Numbers\nRecord 2n as reported. If conflicting values given, use the one supported by figures or methods description. Flag conflicting reports.\nB chromosomes: if mentioned, note in b_chromosomes field, do not add to 2n count."
+        }
+      ],
+      "expected_behavior": [
+        "C. bankii extracted cleanly with high confidence (>= 0.85) — no escalation needed",
+        "C. americana should have confidence <= 0.6 due to conflicting 2n values (18+Xyp vs 2n=20) and notation inconsistency (Xyp/parachute/X+y). Sex system normalizes to Xyp. Should note the B chromosome possibility.",
+        "C. herbacea should have confidence <= 0.5 due to author's own doubt about the count and the single specimen. Flag_for_review should be true.",
+        "On sonnet: if C. americana and C. herbacea both come back with confidence < 0.5, the escalation trigger should fire (majority of records below threshold)",
+        "On opus: should still flag these as low confidence but produce more detailed extraction_reasoning explaining the conflicts",
+        "The test PASSES if sonnet correctly identifies the ambiguity (even if it doesn't resolve it as well as opus) and the escalation trigger would fire"
+      ]
+    },
+    {
+      "name": "audit_queue_construction",
+      "description": "Tests that haiku can correctly build an audit queue from a mock results.csv with known issues.",
+      "query": "Analyze this results.csv and build an audit queue following the audit mode rules in §15. Group by priority: low confidence, then guide-drift, then statistical outliers.",
+      "files": [
+        {
+          "name": "mock_results.csv",
+          "content": "doi,species,family,chromosome_number_2n,sex_chr_system,extraction_confidence,session_id,audit_status,source_page\n10.1000/a,Coccinella septempunctata,Coccinellidae,20,XY,0.92,2026-03-01T10:00:00Z,unaudited,12\n10.1000/b,Harmonia axyridis,Coccinellidae,20,XY,0.88,2026-03-01T10:00:00Z,unaudited,8\n10.1000/c,Adalia bipunctata,Coccinellidae,20,Xyp,0.45,2026-03-01T10:00:00Z,unaudited,3\n10.1000/d,Epilachna vigintioctomaculata,Coccinellidae,20,XY,0.38,2026-03-01T10:00:00Z,unaudited,15\n10.1000/e,Coccidula rufa,Coccinellidae,18,XY,0.91,2026-03-05T14:00:00Z,unaudited,22\n10.1000/f,Subcoccinella vigintiquatuorpunctata,Coccinellidae,20,XY,0.87,2026-03-05T14:00:00Z,unaudited,9\n10.1000/g,Psyllobora vigintiduopunctata,Coccinellidae,20,XY,0.90,2026-03-05T14:00:00Z,unaudited,5\n10.1000/h,Halyzia sedecimguttata,Coccinellidae,20,XY,0.85,2026-03-05T14:00:00Z,unaudited,7\n10.1000/i,Anatis ocellata,Coccinellidae,20,X0,0.72,2026-03-05T14:00:00Z,unaudited,11\n10.1000/j,Thea vigintiduopunctata,Coccinellidae,20,XY,0.89,2026-03-05T14:00:00Z,unaudited,4\n10.1000/k,Chilocorus renipustulatus,Coccinellidae,22,XY,0.91,2026-03-10T09:00:00Z,unaudited,14\n10.1000/l,Scymnus frontalis,Coccinellidae,20,XY,0.86,2026-03-10T09:00:00Z,unaudited,6"
+        },
+        {
+          "name": "mock_run_log.jsonl",
+          "content": "{\"timestamp\": \"2026-03-01T10:00:00Z\", \"session_id\": \"2026-03-01T10:00:00Z\", \"event\": \"session_start\", \"guide_md5\": \"abc111\"}\n{\"timestamp\": \"2026-03-05T14:00:00Z\", \"session_id\": \"2026-03-05T14:00:00Z\", \"event\": \"session_start\", \"guide_md5\": \"abc111\"}\n{\"timestamp\": \"2026-03-10T09:00:00Z\", \"session_id\": \"2026-03-10T09:00:00Z\", \"event\": \"session_start\", \"guide_md5\": \"def222\"}"
+        }
+      ],
+      "expected_behavior": [
+        "Priority 1 (low confidence, threshold 0.6): Identifies doi c (0.45) and doi d (0.38) — 2 records",
+        "Priority 2 (guide-drift): Identifies records from sessions 2026-03-01 and 2026-03-05 (guide_md5=abc111), since current guide has md5=def222 — 10 records. Doi c and d already in priority 1, so 8 new records added.",
+        "Priority 3 (statistical outliers): Doi e (2n=18, singleton in family where 2n=20 is modal) and doi i (X0 system, singleton in family where XY is dominant with 10+ records). Doi k (2n=22) is also a singleton count but the group has only 12 records total for that value — borderline.",
+        "Does NOT flag Xyp for doi c as an outlier (it only appears once, but it's already in the queue as low-confidence)",
+        "Total audit queue: approximately 10-12 records",
+        "This test validates that haiku can handle the bookkeeping logic correctly"
+      ]
+    }
+  ],
+  "meta": {
+    "purpose": "Empirical validation of model routing. Run each test_case at multiple model tiers to measure accuracy vs. cost tradeoff. Results feed directly into the MEE manuscript's cost-efficiency analysis.",
+    "how_to_run": "For test_cases 1-2, use the Agent tool to run the existing eval files at different model levels. For test_cases 3-4, copy the file contents to the project root and run TraitTrawler in the specified mode.",
+    "success_metric": "Model routing is validated if haiku matches opus on triage (>= 90% agreement), sonnet matches opus on extraction (>= 95% field agreement), escalation triggers fire on the ambiguous test case, and haiku correctly constructs the audit queue."
+  }
+}

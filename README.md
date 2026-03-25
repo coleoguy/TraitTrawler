@@ -67,8 +67,8 @@ Open Chrome and log into your institution's library portal before starting a ses
 
 ```mermaid
 flowchart LR
-    A["Search\nPubMed\nbioRxiv"] --> B["Triage\nlikely | uncertain\nunlikely"]
-    B --> C["Retrieve\nUnpaywall | OpenAlex\nEuropePMC | Proxy"]
+    A["Search\nPubMed | OpenAlex\nbioRxiv | Crossref"] --> B["Triage\nlikely | uncertain\nunlikely"]
+    B --> C["Retrieve\nUnpaywall | OpenAlex\nEuropePMC | CORE | Proxy"]
     C --> D["Extract\nprose | table\ncatalogue"]
     D --> E["Validate\ncross-field\nchecks"]
     E --> F["results.csv"]
@@ -84,7 +84,7 @@ flowchart LR
 
 Each session the agent:
 
-1. **Searches** the next unrun queries from `config.py` across PubMed and bioRxiv. If the PubMed or bioRxiv MCPs aren't available, it falls back to their public APIs automatically.
+1. **Searches** the next unrun queries from `config.py` across PubMed, bioRxiv, and Crossref. If the PubMed or bioRxiv MCPs aren't available, it falls back to their public APIs automatically. Once keyword searches are exhausted, it can optionally chain through references of high-confidence papers to find additional sources.
 2. **Triages** each paper as likely, uncertain, or unlikely using rules in `collector_config.yaml` and domain knowledge from `guide.md`. Unlikely papers are skipped; likely and uncertain papers proceed to fetch.
 3. **Retrieves** full text through a cascade of sources: Unpaywall → OpenAlex → Europe PMC → Semantic Scholar → your institutional proxy (via Chrome). If none succeed, it falls back to the abstract and logs the paper in `leads.csv` for manual follow-up.
 4. **Extracts** structured records. For table-heavy papers it runs a two-pass strategy: first enumerate every species, then extract each row, then verify the count matches. Catalogue entries (one-line-per-taxon reference books) are chunked and processed the same way.
@@ -99,7 +99,7 @@ The agent handles scanned PDFs by reading them natively through Claude's PDF vis
 
 When you start a session, the agent reads all project files, checks dependencies, and prints a status report showing records collected, papers processed, queue depth, and search progress. It then enters the main loop and prints rolling updates every 5 papers.
 
-Stop anytime by telling the agent to stop or closing the session. All state is saved after every paper — nothing is lost.
+Stop anytime by telling the agent to stop or closing the session. All state is saved after every paper — nothing is lost. You can also set `batch_size` in `collector_config.yaml` (default: 20) to have the agent pause automatically after processing that many papers, giving you a natural review point.
 
 ### Each project is a folder
 
@@ -111,11 +111,9 @@ The agent generates a self-contained HTML dashboard at `dashboard.html`, updated
 
 ### Session length
 
-You control how long it runs. Some practical patterns:
+At the start of each session, the agent asks how long you want it to run. You can give a paper count ("do 30 papers"), a time estimate ("I have an hour"), or a preset ("quick pass" for ~10, "long session" for 50+, "until done" for unlimited). For long sessions, the agent checkpoints every 10 papers and asks to continue every 20, preventing context exhaustion and runaway cost. You can also stop anytime by telling it to stop — all state is saved after every paper, so nothing is lost.
 
-- **Background collection:** Start a session and let it run while you do other work.
-- **Targeted burst:** "Run through the Chrysomelidae queries" — point it at a specific subset.
-- **Manual PDF follow-up:** Review `leads.csv`, manually obtain PDFs, drop them in `pdfs/`, and run again. The agent detects local PDFs automatically.
+Some practical patterns: start a session and let it run while you do other work; point it at a specific subset ("run through the Chrysomelidae queries"); or review `leads.csv`, manually obtain PDFs, drop them in `pdfs/`, and run again — the agent detects local PDFs automatically and offers to process them first.
 
 ## Understanding the output
 
@@ -163,11 +161,11 @@ Each example includes `collector_config.yaml`, `config.py`, `guide.md`, and a RE
 
 ### From scratch (setup wizard)
 
-Open an empty folder in Cowork and say "let's collect some data." The agent asks 8 questions about your taxon, trait, keywords, institution, and extraction conventions, then generates all project files. It builds `config.py` by cross-producting your taxonomic groups and trait keywords, and creates `guide.md` from your description of how the trait is reported in the literature.
+Open an empty folder in Cowork and say "let's collect some data." The agent asks about your taxon, trait, keywords, institution, and extraction conventions, then generates all project files. For any question, you can say "you figure it out" and the agent will research the answer using OpenAlex and PubMed. After setup, it runs a calibration phase: processing 3–5 seed papers to learn the real notation and table formats for your trait, then seeding the search queue from those papers' citations. The first real session starts with battle-tested domain knowledge instead of a cold start.
 
 ### The three project files
 
-**`collector_config.yaml`** is the master configuration. It defines target taxa, trait name, triage rules, proxy URL, and output fields. The `output_fields` list controls what columns appear in `results.csv`.
+**`collector_config.yaml`** is the master configuration. It defines target taxa, trait name, triage rules, proxy URL, and output fields. The `output_fields` list controls what columns appear in `results.csv`. It also has session-control options: `batch_size` (how many papers before pausing), `report_every` (progress update frequency), optional `pause_triggers` (pause on low confidence, high record count, or non-English papers), and optional `validation_rules` (cross-field checks before writing each record).
 
 **`config.py`** contains the search query list as a Python list called `SEARCH_TERMS`. The Coleoptera example uses a cross-product of 148 family names × 11 keywords (1,669 total). For a new system, replace the taxa and keywords.
 
@@ -187,7 +185,9 @@ TraitTrawler/
 │   │   ├── collector_config.yaml
 │   │   ├── config.py             # 1,669 search queries
 │   │   ├── guide.md              # Domain knowledge (notation, validation rules)
-│   │   └── extraction_examples.md
+│   │   ├── extraction_examples.md
+│   │   ├── csv_schema.md         # Karyotype-specific field schema with validation
+│   │   └── db_scanner.py         # Post-hoc database anomaly scanner
 │   ├── avian-body-mass/          # Complete avian body mass config
 │   │   ├── collector_config.yaml
 │   │   ├── config.py             # 91 search queries
@@ -195,21 +195,29 @@ TraitTrawler/
 │   └── sample_results.csv        # Example output (5 records)
 │
 ├── skill/                        # Skill source (taxon-agnostic)
-│   ├── SKILL.md                  # Agent behavior specification
+│   ├── SKILL.md                  # Core agent specification (~490 lines)
 │   ├── dashboard_generator.py    # Generates dashboard.html
+│   ├── verify_session.py         # Post-batch deterministic verification
+│   ├── export_dwc.py             # Darwin Core Archive export
 │   └── references/
 │       ├── csv_schema.md         # Generic field definitions and confidence guidelines
-│       └── config_template.yaml  # Blank config template for setup wizard
+│       ├── config_template.yaml  # Blank config template for setup wizard
+│       ├── search_and_triage.md  # §3–4: Search and triage logic
+│       ├── extraction_and_validation.md  # §5–8: Fetch, extract, validate, write
+│       ├── session_management.md # §9–13: State, reporting, dashboard, context management
+│       ├── calibration.md        # §0b: First-run calibration and self-research
+│       └── audit_mode.md         # §15: Self-cleaning data audit system
+│
+├── evals/                        # Skill evaluation suite
+│   ├── eval_setup_wizard.json
+│   ├── eval_triage_accuracy.json
+│   ├── eval_table_extraction.json
+│   ├── eval_session_resume.json
+│   ├── eval_near_miss_triage.json
+│   └── eval_model_routing.json   # Model routing validation (haiku/sonnet/opus)
 │
 ├── docs/
 │   └── traittrawler_logo.svg
-│
-├── validation/                   # MEE manuscript validation study
-│   ├── data/                     # Both datasets (human + AI)
-│   ├── analysis/                 # R scripts (fully reproducible)
-│   ├── results/                  # All analysis outputs
-│   ├── manuscript/               # Manuscript, figures, supplements
-│   └── README.md
 │
 ├── CHANGELOG.md
 ├── CITATION.cff
@@ -218,11 +226,15 @@ TraitTrawler/
 └── README.md
 ```
 
-Auto-created in each project folder on first run: `state/`, `pdfs/`, `results.csv`, `leads.csv`, `dashboard.html`
+Auto-created in each project folder on first run: `state/`, `pdfs/`, `results.csv`, `leads.csv`, `dashboard.html`, `state/discoveries.jsonl`, `state/session_checkpoint.json`, `extraction_examples.md` (from calibration)
+
+## Self-improving domain knowledge
+
+TraitTrawler includes a learning system. As the agent processes papers, it logs notation variants, new taxa, ambiguity patterns, and validation gaps it encounters to `state/discoveries.jsonl`. At the end of each session, the agent reviews its discoveries and proposes specific, diff-formatted amendments to `guide.md`. The user approves or rejects each proposed change. Over multiple sessions, the domain knowledge document grows collaboratively — the agent contributes patterns it finds in the literature, the human provides judgment. All changes are logged to `state/run_log.jsonl` for full reproducibility.
 
 ## Validation study
 
-We validated TraitTrawler against a manually curated Coleoptera karyotype database (4,959 records, 4,298 species) assembled over two years. Full details, data, and reproducible analysis scripts are in [`validation/`](validation/).
+We validated TraitTrawler against a manually curated Coleoptera karyotype database (4,959 records, 4,298 species) assembled over two years. Full details, data, and reproducible analysis scripts will be archived with the MEE manuscript submission.
 
 | Metric | Value |
 |:-------|------:|
@@ -258,6 +270,16 @@ If you use TraitTrawler or the validation datasets, please cite:
 ```
 
 GitHub's **"Cite this repository"** button (top right) provides formatted citations via [`CITATION.cff`](CITATION.cff).
+
+## Building the skill from source
+
+The `traittrawler.skill` file is a ZIP archive containing the contents of `skill/`. To rebuild it after making changes:
+
+```bash
+cd skill && zip -r ../traittrawler.skill SKILL.md dashboard_generator.py references/ && cd ..
+```
+
+Pre-built `.skill` files are attached to each [GitHub Release](https://github.com/coleoguy/TraitTrawler/releases).
 
 ## Contributing
 

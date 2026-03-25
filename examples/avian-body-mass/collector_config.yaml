@@ -45,6 +45,24 @@ pdf_subfolder_field: "order"
 
 vision_extraction: "ask"
 
+# --- Audit mode (optional) ---
+# Uncomment to enable periodic self-auditing of low-confidence records.
+# audit_config:
+#   auto_audit: true
+#   confidence_threshold: 0.6
+#   max_records: 50
+
+# --- Model routing (optional) ---
+# Body mass extraction is straightforward — defaults are fine.
+# Uncomment to customize. See config_template.yaml for all options.
+# model_routing:
+#   extraction: sonnet
+#   escalation_model: opus
+
+# --- Session control ---
+batch_size: 20
+report_every: 5
+
 taxonomy_api: "gbif"
 gbif_kingdom: "Animalia"
 
@@ -58,6 +76,7 @@ output_fields:
   - first_author
   - paper_year
   - paper_journal
+  - session_id
   # Taxonomy
   - species
   - order
@@ -76,6 +95,10 @@ output_fields:
   # Collection info
   - collection_locality
   - country
+  # Provenance
+  - source_page
+  - source_context
+  - extraction_reasoning
   # Quality
   - extraction_confidence
   - flag_for_review

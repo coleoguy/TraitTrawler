@@ -1,0 +1,30 @@
+{
+  "skills": ["traittrawler"],
+  "query": "These five abstracts are 'near misses'—papers that appear superficially relevant but should NOT trigger data extraction for our Coleoptera karyotype collection. Classify each as unlikely relevant or uncertain, and explain why extraction should not occur despite apparent topic overlap.",
+  "files": [
+    {
+      "name": "collector_config.yaml",
+      "content": "target_taxa: Coleoptera\ntrait_name: Karyotype (2n and sex chromosome system)\ndata_types_excluded:\n  - reviews that cite but do not report original data\n  - comparative genomics without karyotype focus\n  - phylogenetic analyses mentioning chromosomes in context of evolution, not karyotyping\n  - genetic control or pest management papers\n  - papers on non-Coleoptera taxa\n  - methods papers without species-specific data\n"
+    },
+    {
+      "name": "near_miss_abstracts.txt",
+      "content": "ABSTRACT 1 - REVIEW PAPER CITING KARYOTYPES BUT REPORTING NONE:\n\"Sex chromosome evolution in beetles: A comprehensive review. This review synthesizes 15 years of karyotypic literature on Coleoptera, compiling data from over 200 published studies. We present integrated phylogenetic trees and summarize patterns of sex chromosome differentiation across major beetle families. Our synthesis highlights hotspots of chromosome evolution in Carabidae, Cerambycidae, and Coccinellidae. However, we present no new karyotypic data; instead, we integrate and interpret existing published results to propose new hypotheses about sex chromosome transitions in beetles.\" - Biological Reviews, 2024.\n\nABSTRACT 2 - PHYLOGENOMICS MENTIONING CHROMOSOMAL REARRANGEMENTS IN EVOLUTION CONTEXT:\n\"Phylogenomic resolution of the weevil superfamily Curculionoidea. We assembled and sequenced 31 whole genomes from representative weevil species and constructed a time-calibrated phylogeny using 3,841 orthologous genes. Synteny analysis revealed evidence of ancient chromosomal rearrangements at the base of major weevil clades, particularly inversions and translocations that accompanied the diversification of host plant specificity. These chromosomal events were inferred from genomic data and computational comparison; no cytological karyotyping was performed.\" - Molecular Phylogenetics and Evolution, 2024.\n\nABSTRACT 3 - PEST MANAGEMENT PAPER MENTIONING GENETIC CONTROL:\n\"Integrated management of Diabrotica virgifera virgifera using sterile insect technique and CRISPR-mediated chromosome engineering. We evaluate the efficacy of combining classical SIT with emerging genetic control strategies based on chromosomal translocations and targeted gene drives. Field trials were conducted in three states. Results show 73% population suppression after three generations. The genetic modifications target specific chromosomes but no baseline karyotype data for the target population is reported.\" - Journal of Applied Entomology, 2023.\n\nABSTRACT 4 - PAPER ON CHROMOSOMES BUT IN NON-COLEOPTERA TAXON:\n\"Karyotypic variation in the genus Periplaneta (Blattodea: Blattidae). Specimens of five cockroach species were examined for chromosomal polymorphism using conventional staining and FISH. All species examined possessed 2n=48 with XY sex determination. Populations of P. americana from three geographic regions showed subtle heteromorphisms in the Y chromosome. These findings expand understanding of sex chromosome dynamics in orthopteran insects.\" - Cytogenetic and Genome Research, 2023.\n\nABSTRACT 5 - METHODS EDITORIAL WITH NO SPECIES-SPECIFIC DATA:\n\"Modern trends in insect cytogenetics: Technical innovations and best practices. This editorial reviews recent advances in chromosomal preparation, imaging, and analysis methods for insects, including optimizations in larval tissue dissociation, hypotonic treatment, and FISH probe design. We highlight emerging techniques such as DAPI banding and high-resolution karyotyping platforms. The editorial discusses methodology but presents no novel species-specific chromosomal data or taxonomic applications.\" - Insect Systematics and Evolution, 2024.\n"
+    }
+  ],
+  "expected_behavior": [
+    "Classifies Abstract 1 (review paper) as UNLIKELY RELEVANT",
+    "Explicitly states: 'This is a review that CITES karyotypic data but reports no original data. Extraction impossible and inappropriate.'",
+    "Classifies Abstract 2 (phylogenomics) as UNLIKELY RELEVANT",
+    "Explicitly states: 'Chromosomal rearrangements mentioned in phylogenetic context, not karyotyping context. No cytological data reported; chromosomes inferred computationally from genomics.'",
+    "Classifies Abstract 3 (genetic control) as UNLIKELY RELEVANT",
+    "Explicitly states: 'Pest management application paper. Genetic modifications target chromosomes but no baseline karyotype data for the species is provided.'",
+    "Classifies Abstract 4 (Periplaneta cockroaches) as UNLIKELY RELEVANT",
+    "Explicitly states: 'Target taxon is Blattodea (cockroaches), not Coleoptera (beetles). Despite valid karyotypic data, this paper is outside the target taxa scope.'",
+    "Classifies Abstract 5 (methods editorial) as UNLIKELY RELEVANT",
+    "Explicitly states: 'Methods and technical review paper with no species-specific chromosomal data. Not a data source for extraction.'",
+    "Never classifies any abstract as LIKELY RELEVANT",
+    "Provides scientifically sound reasoning for each rejection",
+    "Demonstrates understanding that topic overlap (chromosomes, genetics, insects) is insufficient—actual karyotype data for target taxa must be reported",
+    "Achieves 5 of 5 correct classifications (all negative/unlikely/uncertain)"
+  ]
+}

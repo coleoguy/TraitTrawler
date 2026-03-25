@@ -14,6 +14,7 @@ existing rows.
 | `first_author` | string | Last name of first author only, ASCII |
 | `paper_year` | integer | 4-digit year |
 | `paper_journal` | string | Journal name as published |
+| `session_id` | string | ISO timestamp of the session that created this record, e.g. `2026-03-24T14:30:00` |
 | `processed_date` | string | ISO date this record was added, e.g. `2026-03-20` |
 
 ### Taxonomy
@@ -34,6 +35,20 @@ existing rows.
 | `pdf_filename` | string | Human-readable filename, e.g. `Smith_2003_Genetica_9504.pdf` |
 | `pdf_url` | string | URL the PDF was downloaded from (if applicable) |
 | `notes` | string | Caveats, ambiguities, verbatim source text if applicable |
+
+### Provenance
+| Field | Type | Notes |
+|---|---|---|
+| `source_page` | string | Page number(s) where data was found, e.g. `12` or `45-47` |
+| `source_context` | string | Verbatim text passage or table row (≤200 chars) the record was extracted from |
+| `extraction_reasoning` | string | One-sentence note when ambiguity existed; blank when unambiguous |
+
+### Audit tracking (added by audit mode §15)
+| Field | Type | Notes |
+|---|---|---|
+| `audit_status` | string | `unaudited` (default), `confirmed`, `corrected`, or `skipped` |
+| `audit_session` | string | Session ID of the audit that reviewed this record |
+| `audit_prior_values` | string | JSON of original values before correction; empty if confirmed/unaudited |
 
 ## Trait-specific fields
 

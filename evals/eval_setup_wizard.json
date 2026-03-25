@@ -1,0 +1,18 @@
+{
+  "skills": ["traittrawler"],
+  "query": "Let's collect some data on beetle body sizes. I want to focus on Coleoptera.",
+  "files": [],
+  "expected_behavior": [
+    "Detects that collector_config.yaml does not exist in the working directory",
+    "Explicitly confirms that configuration is missing and proposes to run setup wizard",
+    "Initiates interactive setup wizard",
+    "Asks user to specify target taxa (should accept 'Coleoptera' or similar)",
+    "Asks user to define the trait being collected (expects input like 'body size' or 'body length')",
+    "Asks about triage keywords that indicate relevant papers",
+    "Asks about keywords or phrases that indicate irrelevant papers",
+    "Offers to create collector_config.yaml with provided values",
+    "Does NOT attempt to query scientific databases before configuration is complete",
+    "Does NOT attempt to search PDFs or extract data before configuration is complete",
+    "Explains next steps after configuration (e.g., 'Config saved. Ready to search databases.')."
+  ]
+}

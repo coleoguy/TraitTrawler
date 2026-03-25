@@ -57,6 +57,36 @@ institution: "Texas A&M University"
 pdf_subfolder_field: "family"
 vision_extraction: "ask"
 
+# --- Audit mode ---
+# Karyotypes benefit heavily from audit: sex chromosome notation is the #1
+# source of low-confidence records, and guide.md updates frequently fix these.
+audit_config:
+  auto_audit: true
+  auto_audit_interval: 5
+  confidence_threshold: 0.6
+  max_records: 50
+  outlier_sd_threshold: 3
+  outlier_min_group_size: 10
+
+# --- Model routing ---
+# Karyotype notation is complex enough that sonnet handles most extraction,
+# but dense catalogue tables and ambiguous sex chromosome formulas benefit
+# from opus escalation. Search/triage are trivial → haiku.
+model_routing:
+  search: haiku
+  triage: haiku
+  state_management: haiku
+  extraction: sonnet
+  validation: sonnet
+  knowledge_review: sonnet
+  escalation_model: opus
+  escalation_confidence_threshold: 0.5
+  escalation_row_mismatch_pct: 10
+
+# --- Session control ---
+batch_size: 20
+report_every: 5
+
 taxonomy_api: "gbif"
 gbif_kingdom: "Animalia"
 
@@ -70,6 +100,7 @@ output_fields:
   - first_author
   - paper_year
   - paper_journal
+  - session_id
   # Taxonomy
   - species
   - family
@@ -95,6 +126,10 @@ output_fields:
   - voucher_info
   - collection_year
   - number_of_specimens
+  # Provenance
+  - source_page
+  - source_context
+  - extraction_reasoning
   # Quality
   - extraction_confidence
   - flag_for_review

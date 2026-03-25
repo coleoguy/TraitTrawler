@@ -1,0 +1,34 @@
+{
+  "skills": ["traittrawler"],
+  "query": "Resume the existing collection session. Review the state files to determine progress, skip already-processed papers, and continue from the next pending query. Report current status before proceeding.",
+  "files": [
+    {
+      "name": "collector_config.yaml",
+      "content": "target_taxa: Coleoptera\ntrait_name: Karyotype (2n and sex chromosome system)\nquery_list:\n  - query_1: \"Harmonia axyridis karyotype\"\n  - query_2: \"Coccinellidae chromosome number\"\n  - query_3: \"ladybug sex chromosomes\"\n  - query_4: \"Collembolida karyotype\"\n  - query_5: \"Asian lady beetle cytogenetics\"\n  - query_6: \"Chrysomela populi chromosome\"\n  - query_7: \"ground beetle karyotype\"\n  - query_8: \"weevil sex determination\"\n"
+    },
+    {
+      "name": "session_state.json",
+      "content": "{\n  \"session_id\": \"session_20240324_001\",\n  \"start_time\": \"2024-03-24T09:15:00Z\",\n  \"last_updated\": \"2024-03-24T14:32:15Z\",\n  \"status\": \"in_progress\",\n  \"queries_completed\": 5,\n  \"queries_total\": 8,\n  \"papers_found\": 23,\n  \"papers_processed\": 3,\n  \"papers_skipped\": 14,\n  \"papers_pending\": 6,\n  \"records_extracted\": 8\n}\n"
+    },
+    {
+      "name": "processed_papers.json",
+      "content": "[\n  {\n    \"query_index\": 1,\n    \"query_text\": \"Harmonia axyridis karyotype\",\n    \"doi\": \"10.1007/s10577-023-09445-5\",\n    \"title\": \"Karyotypic characterization of Harmonia axyridis: Novel sex chromosome dimorphism\",\n    \"authors\": \"Chen, L., Nakamura, S., Rodriguez, M.\",\n    \"journal\": \"Journal of Insect Cytogenetics\",\n    \"year\": 2023,\n    \"triage_result\": \"likely_relevant\",\n    \"extraction_status\": \"completed\",\n    \"records_extracted\": 1,\n    \"timestamp\": \"2024-03-24T09:18:42Z\"\n  },\n  {\n    \"query_index\": 3,\n    \"query_text\": \"ladybug sex chromosomes\",\n    \"doi\": \"10.1016/j.ygeno.2023.110512\",\n    \"title\": \"Sex chromosome differentiation in Coccinellidae: A comparative analysis\",\n    \"authors\": \"Thompson, A., Garcia, P., Chen, X.\",\n    \"journal\": \"Genome Research\",\n    \"year\": 2023,\n    \"triage_result\": \"likely_relevant\",\n    \"extraction_status\": \"completed\",\n    \"records_extracted\": 2,\n    \"timestamp\": \"2024-03-24T11:47:19Z\"\n  },\n  {\n    \"query_index\": 5,\n    \"query_text\": \"Asian lady beetle cytogenetics\",\n    \"doi\": \"10.1186/s12915-024-01834-5\",\n    \"title\": \"Cytogenetic mapping and chromosomal evolution in the genus Harmonia\",\n    \"authors\": \"Patel, R., Kumar, S., Yamamoto, T.\",\n    \"journal\": \"BMC Biology\",\n    \"year\": 2024,\n    \"triage_result\": \"likely_relevant\",\n    \"extraction_status\": \"completed\",\n    \"records_extracted\": 5,\n    \"timestamp\": \"2024-03-24T14:32:15Z\"\n  }\n]\n"
+    },
+    {
+      "name": "pending_queries.json",
+      "content": "[\n  {\n    \"query_index\": 6,\n    \"query_text\": \"Chrysomela populi chromosome\",\n    \"status\": \"ready\",\n    \"papers_identified\": 4,\n    \"papers_triaged\": 0\n  },\n  {\n    \"query_index\": 7,\n    \"query_text\": \"ground beetle karyotype\",\n    \"status\": \"ready\",\n    \"papers_identified\": 3,\n    \"papers_triaged\": 0\n  },\n  {\n    \"query_index\": 8,\n    \"query_text\": \"weevil sex determination\",\n    \"status\": \"queued\",\n    \"papers_identified\": 0,\n    \"papers_triaged\": 0\n  }\n]\n"
+    }
+  ],
+  "expected_behavior": [
+    "Reads session_state.json and correctly reports: 5 queries completed, 3 papers processed, 8 records extracted",
+    "Confirms that papers with DOI 10.1007/s10577-023-09445-5, 10.1016/j.ygeno.2023.110512, and 10.1186/s12915-024-01834-5 have been processed",
+    "Skips these 3 papers and does not re-extract their data",
+    "Identifies that query 6 (Chrysomela populi chromosome) is the next pending query with 4 papers identified but not triaged",
+    "States clearly: 'Resuming from query 6 of 8. Current progress: 5/8 queries complete, 3 papers processed, 8 records extracted.'",
+    "Begins triage and extraction process for the 4 papers in query 6",
+    "Does not attempt to re-process queries 1-5 or their associated papers",
+    "Maintains accurate counts as new papers are processed in query 6",
+    "Updates session_state.json to reflect renewed activity with new timestamp",
+    "Correctly handles the distinction between 'papers_found' (23), 'papers_processed' (3), 'papers_skipped' (14), and 'papers_pending' (6)"
+  ]
+}

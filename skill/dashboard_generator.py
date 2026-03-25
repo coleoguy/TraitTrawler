@@ -123,26 +123,31 @@ def read_config(project_root):
 
 
 def count_search_queries(config_py_path):
-    """Count total search queries defined in config.py by executing it."""
+    """Count total search queries defined in config.py.
+
+    Tries to safely evaluate the file to count SEARCH_TERMS.
+    Falls back to counting quoted strings if evaluation fails.
+    """
     if not os.path.exists(config_py_path):
         return 0
     try:
-        # Try to actually import and count SEARCH_TERMS
-        ns = {}
         with open(config_py_path, "r", encoding="utf-8") as f:
-            exec(f.read(), ns)
+            content = f.read()
+    except Exception:
+        return 0
+    # Safe approach: execute in restricted namespace to count SEARCH_TERMS
+    try:
+        ns = {"__builtins__": {"list": list, "dict": dict, "len": len, "set": set,
+                               "range": range, "str": str, "int": int, "float": float,
+                               "print": lambda *a, **k: None}}
+        exec(content, ns)
         terms = ns.get("SEARCH_TERMS", [])
         if isinstance(terms, list):
             return len(terms)
     except Exception:
         pass
-    # Fallback: count quoted strings
-    try:
-        with open(config_py_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        return len(re.findall(r'["\']([^"\']{3,})["\']', content))
-    except Exception:
-        return 0
+    # Fallback: count quoted strings ≥3 chars
+    return len(re.findall(r'["\']([^"\']{3,})["\']', content))
 
 
 def classify_field(values):
