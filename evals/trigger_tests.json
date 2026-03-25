@@ -1,0 +1,78 @@
+{
+  "category": "triggering",
+  "skill": "trait-trawler",
+  "tests": [
+    {
+      "id": "trigger-positive-1",
+      "type": "should_trigger",
+      "query": "Let's collect some data on beetle body sizes. I want to focus on Coleoptera.",
+      "rationale": "Explicit data collection request with taxon mention."
+    },
+    {
+      "id": "trigger-positive-2",
+      "type": "should_trigger",
+      "query": "Run a session and continue collecting karyotype data.",
+      "rationale": "Uses 'run a session' and 'continue collecting' — both explicit triggers."
+    },
+    {
+      "id": "trigger-positive-3",
+      "type": "should_trigger",
+      "query": "How many species do we have so far? Can we run QC on the data?",
+      "rationale": "Asks about species count and QC — both trait-trawler operations."
+    },
+    {
+      "id": "trigger-positive-4",
+      "type": "should_trigger",
+      "query": "I dropped some PDFs in the pdfs/ folder. Can you extract the morphometric data from them?",
+      "rationale": "PDF-first mode: local PDF extraction is a core trait-trawler pathway."
+    },
+    {
+      "id": "trigger-positive-5",
+      "type": "should_trigger",
+      "query": "Trawl for data on avian body mass from the literature.",
+      "rationale": "Uses 'trawl for data' and specifies trait and taxon."
+    },
+    {
+      "id": "trigger-positive-6",
+      "type": "should_trigger",
+      "query": "Plan the campaign — what families still need coverage?",
+      "rationale": "Campaign planning trigger phrase."
+    },
+    {
+      "id": "trigger-positive-7",
+      "type": "should_trigger",
+      "query": "Audit the database and re-check the low-confidence records.",
+      "rationale": "Audit mode trigger phrase."
+    },
+    {
+      "id": "trigger-negative-1",
+      "type": "should_not_trigger",
+      "query": "What's known about sex chromosome evolution in beetles?",
+      "rationale": "Literature review question — should trigger deepscholar, not trait-trawler."
+    },
+    {
+      "id": "trigger-negative-2",
+      "type": "should_not_trigger",
+      "query": "Summarize this paper for me.",
+      "rationale": "One-off paper summary, not systematic extraction."
+    },
+    {
+      "id": "trigger-negative-3",
+      "type": "should_not_trigger",
+      "query": "Collect some thoughts on this paper and give me feedback.",
+      "rationale": "Uses 'collect' but in a non-data-collection context. Should not trigger."
+    },
+    {
+      "id": "trigger-negative-4",
+      "type": "should_not_trigger",
+      "query": "Make me a chart showing the distribution of body sizes in my CSV.",
+      "rationale": "Data visualization request — should trigger data-viz, not trait-trawler."
+    },
+    {
+      "id": "trigger-negative-5",
+      "type": "should_not_trigger",
+      "query": "Help me write the methods section for my paper.",
+      "rationale": "Manuscript writing — not data collection."
+    }
+  ]
+}

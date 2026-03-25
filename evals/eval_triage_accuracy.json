@@ -1,5 +1,5 @@
 {
-  "skills": ["traittrawler"],
+  "skills": ["trait-trawler"],
   "query": "Use the attached abstracts to evaluate triage accuracy. For each abstract, classify it as likely relevant, unlikely relevant, or uncertain. Use the provided collector_config.yaml to guide your classification.",
   "files": [
     {

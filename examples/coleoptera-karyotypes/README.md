@@ -1,6 +1,6 @@
 # Example: Coleoptera Karyotypes
 
-This is the configuration used in the TraitTrawler validation study (Blackmon 2026, MEE). It collects diploid chromosome numbers, sex chromosome systems, karyotype formulas, and cytogenetic method details for beetles from the scientific literature.
+This is the configuration used in the TraitTrawler validation study (Blackmon 2026). It collects diploid chromosome numbers, sex chromosome systems, karyotype formulas, and cytogenetic method details for beetles from the scientific literature.
 
 ## Files
 

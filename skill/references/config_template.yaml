@@ -72,6 +72,10 @@ output_fields:
   - source_page
   - source_context
   - extraction_reasoning
+  # --- Taxonomy intelligence ---
+  - accepted_name
+  - gbif_key
+  - taxonomy_note
   # --- Data quality (always present) ---
   - extraction_confidence
   - flag_for_review
@@ -113,9 +117,25 @@ output_fields:
 # The agent pauses and shows you the record when any trigger fires.
 # Remove or comment out triggers you don't want.
 # pause_triggers:
-#   - confidence_below: 0.6
-#   - records_above: 20
-#   - language_not: "en"
+#   - field: extraction_confidence
+#     operator: less_than
+#     value: 0.6
+#     action: show_records
+#   - field: records_added_this_session
+#     operator: greater_than
+#     value: 100
+#     action: ask_continue
+
+# --- Taxonomy resolution (optional) ---
+# Validate species names against GBIF Backbone Taxonomy.
+# Resolves synonyms to accepted names, auto-fills higher taxonomy.
+# Original names preserved in notes field when changed.
+taxonomy_resolution: true
+# taxonomy_kingdom: "Animalia"  # GBIF kingdom filter (Animalia, Plantae, Fungi)
+
+# --- Campaign planning (optional) ---
+# campaign_planning:
+#   auto_report_interval: 5   # Sessions between automatic campaign reports
 
 # --- Validation rules (optional) ---
 # Cross-field checks run before writing each record.

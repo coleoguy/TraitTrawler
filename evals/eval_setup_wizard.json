@@ -1,5 +1,5 @@
 {
-  "skills": ["traittrawler"],
+  "skills": ["trait-trawler"],
   "query": "Let's collect some data on beetle body sizes. I want to focus on Coleoptera.",
   "files": [],
   "expected_behavior": [

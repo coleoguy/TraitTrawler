@@ -1,137 +1,82 @@
 # TraitTrawler Evaluation Suite
 
-This directory contains a comprehensive evaluation suite for TraitTrawler, an autonomous literature mining agent that searches scientific databases, retrieves PDFs, extracts structured phenotypic data, and writes results to CSV.
+This directory contains evaluations for the `trait-trawler` skill organized into the three categories recommended by Anthropic: triggering tests, functional tests, and performance comparisons.
 
-## Evaluation Tests
+## Test Categories
 
-### 1. **eval_setup_wizard.json**
-Tests the initial configuration workflow when no `collector_config.yaml` exists.
+### 1. Triggering Tests (`trigger_tests.json`)
 
-**What it tests:**
-- Detection of missing configuration files
-- Proper execution of the setup wizard
-- Prompts for target taxa, trait definition, and triage keywords
-- Prevents premature search/extraction before configuration
+Tests whether the skill activates on the right prompts and stays silent on the wrong ones.
 
-**Success criteria:** Agent detects missing config and guides user through all setup steps without attempting database operations.
+**Should trigger (7 cases):**
+- Explicit data collection requests ("collect trait data", "run a session")
+- PDF-first mode ("extract data from these PDFs")
+- Campaign planning ("plan the campaign", "coverage report")
+- Audit mode ("audit the database")
 
----
+**Should NOT trigger (5 cases):**
+- Literature review questions (deepscholar territory)
+- One-off paper summaries
+- "Collect some thoughts" (non-data use of "collect")
+- Data visualization requests
+- Manuscript writing
 
-### 2. **eval_triage_accuracy.json**
-Tests the core triage classification system with 10 realistic paper abstracts.
+### 2. Functional Tests (`functional_tests.json`)
 
-**What it tests:**
-- Accuracy of relevance classification (relevant vs. irrelevant)
-- Handling of near-miss papers (superficially relevant but not actually useful)
-- Consistent application of triage rules across a diverse abstract set
+Tests core skill behaviors with synthetic data and expected outcomes.
 
-**Test data:**
-- 4 clearly relevant karyotype papers (gold standard)
-- 3 clearly irrelevant papers (ecology, behavior, molecular phylogenetics)
-- 3 near-miss papers (mention chromosomes casually, genome assembly, population genetics)
+| Test | What it validates |
+|:-----|:-----------------|
+| Setup wizard | Config detection, interactive Q&A, file generation |
+| Triage accuracy | Keyword-based classification of 5 abstracts |
+| Table extraction | Two-pass extraction of 5-row karyotype table |
+| Session resume | State file reading, skip-already-processed, correct status |
+| Near-miss triage | Rejects plausible-but-irrelevant abstracts |
+| Model routing | Haiku for search/triage, sonnet for extraction, opus escalation |
 
-**Success criteria:** Agent correctly classifies at least 9 of 10 papers with appropriate confidence levels (likely/unlikely/uncertain).
+### 3. Performance Tests (`performance_tests.json`)
 
----
+Compares skill-equipped agent vs. bare Claude on the same tasks. These are designed for A/B evaluation — run each test with and without the skill and compare metrics.
 
-### 3. **eval_table_extraction.json**
-Tests data extraction from table-heavy papers, which often contain concentrated phenotypic data.
+| Test | Key metric |
+|:-----|:----------|
+| Extraction accuracy | Records correct, notation handling, provenance fields |
+| Triage precision | False positive rate on near-miss abstracts |
+| Session efficiency | Dedup, state tracking, schema consistency over 10 papers |
+| Taxonomy resolution | Synonym detection, GBIF integration, no phantom diversity |
 
-**What it tests:**
-- Two-pass extraction strategy (enumerate first, extract second)
-- Parsing of structured karyotype data tables
-- Accurate field mapping to output CSV columns
-- Handling of 8 species records in a single table
+### Legacy Tests (`eval_*.json`)
 
-**Success criteria:** Agent extracts all 8 species records with correct values for 2n, sex chromosome system, and locality. Uses enumeration phase to identify all rows before extraction.
-
----
-
-### 4. **eval_session_resume.json**
-Tests state management and resumption of long-running collection tasks.
-
-**What it tests:**
-- Correct reading of session state files
-- Skipping of already-processed papers
-- Resumption from correct query index
-- Accurate status reporting (queries run, papers processed)
-
-**Test scenario:**
-- 5 queries already completed
-- 3 papers already extracted
-- Expects agent to skip them and continue from query 6
-
-**Success criteria:** Agent correctly identifies processed items, reports accurate status counts, and continues without re-processing.
-
----
-
-### 5. **eval_near_miss_triage.json**
-Targeted test for the "near-miss" triage challenge—papers that appear relevant but should NOT trigger extraction.
-
-**What it tests:**
-- Review papers that cite but don't report original data
-- Phylogenetics papers mentioning chromosomal changes in non-karyotype context
-- Applied/pest management papers with genetic mentions but no phenotypic data
-- Papers on chromosomes in off-target taxa
-- Methods editorials with no species-specific data
-
-**Success criteria:** Agent classifies all 5 abstracts as unlikely or uncertain (never "likely"). Demonstrates robust understanding that data presence ≠ relevance.
-
----
-
-## Running the Evaluations
-
-Each test file is a JSON document following a standard structure:
+The original eval files remain for backward compatibility. They follow the per-test JSON format:
 
 ```json
 {
-  "skills": ["traittrawler"],
+  "skills": ["trait-trawler"],
   "query": "User request to the agent",
   "files": [{"name": "file.json", "content": "..."}],
-  "expected_behavior": [
-    "Condition 1",
-    "Condition 2"
-  ]
+  "expected_behavior": ["Condition 1", "Condition 2"]
 }
 ```
 
-### Manual Testing
-To run a test manually:
-1. Load the skill with `claude -s traittrawler`
-2. Prepare any mock files listed in the `files` array
+## Running Tests
+
+### Manual
+1. Install the skill in Cowork
+2. Prepare any mock files from the `files` array
 3. Submit the `query` to the agent
-4. Verify that all `expected_behavior` conditions are met
+4. Verify all `expected_behavior` conditions are met
 
-### Automated Testing (Recommended)
-Use Anthropic's evaluation framework:
+### Automated
 ```bash
-claude eval evals/eval_setup_wizard.json
-claude eval evals/eval_triage_accuracy.json
-claude eval evals/eval_table_extraction.json
-claude eval evals/eval_session_resume.json
-claude eval evals/eval_near_miss_triage.json
+claude eval evals/trigger_tests.json
+claude eval evals/functional_tests.json
+claude eval evals/performance_tests.json
 ```
-
----
-
-## Test Data Notes
-
-All test data is scientifically realistic:
-- Uses real journal names (Genome Biology, Chromosome Research, etc.)
-- Includes plausible DOIs with correct format
-- Species names follow binomial nomenclature
-- Karyotype notation follows standard cytogenetics conventions (2n = diploid number)
-- Sex chromosome systems use established abbreviations (XY, ZW, XO, etc.)
-
----
 
 ## Interpreting Results
 
 **Pass:** All expected behaviors observed
 **Fail:** One or more expected behaviors not observed
-**Needs Investigation:** Behaviors partially met or inconsistent
+**Needs Investigation:** Behaviors partially met or edge cases
 
-For failures, examine:
-- Error messages in agent logs
-- State file contents (if applicable)
-- Whether abstraction/generalization rules were correctly applied
+For triggering tests, the key metric is zero false triggers on should-not-trigger cases. For functional tests, check each expected_behavior line. For performance tests, the skill should match or exceed bare-model accuracy while adding provenance, confidence, and validation that the bare model omits.

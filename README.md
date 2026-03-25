@@ -70,7 +70,8 @@ flowchart LR
     A["Search\nPubMed | OpenAlex\nbioRxiv | Crossref"] --> B["Triage\nlikely | uncertain\nunlikely"]
     B --> C["Retrieve\nUnpaywall | OpenAlex\nEuropePMC | CORE | Proxy"]
     C --> D["Extract\nprose | table\ncatalogue"]
-    D --> E["Validate\ncross-field\nchecks"]
+    D --> T["Taxonomy\nGBIF synonym\nresolution"]
+    T --> E["Validate\ncross-field\nchecks"]
     E --> F["results.csv"]
     F -.->|"next session\nresumes here"| A
 
@@ -78,6 +79,7 @@ flowchart LR
     style B fill:#fef3c7,stroke:#f59e0b,color:#78350f
     style C fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     style D fill:#d1fae5,stroke:#10b981,color:#064e3b
+    style T fill:#ecfdf5,stroke:#059669,color:#064e3b
     style E fill:#d1fae5,stroke:#10b981,color:#064e3b
     style F fill:#f3e8ff,stroke:#8b5cf6,color:#4c1d95
 ```
@@ -88,8 +90,9 @@ Each session the agent:
 2. **Triages** each paper as likely, uncertain, or unlikely using rules in `collector_config.yaml` and domain knowledge from `guide.md`. Unlikely papers are skipped; likely and uncertain papers proceed to fetch.
 3. **Retrieves** full text through a cascade of sources: Unpaywall → OpenAlex → Europe PMC → Semantic Scholar → your institutional proxy (via Chrome). If none succeed, it falls back to the abstract and logs the paper in `leads.csv` for manual follow-up.
 4. **Extracts** structured records. For table-heavy papers it runs a two-pass strategy: first enumerate every species, then extract each row, then verify the count matches. Catalogue entries (one-line-per-taxon reference books) are chunked and processed the same way.
-5. **Validates** each record against cross-field consistency rules defined in `guide.md` before writing.
-6. **Appends** validated records to `results.csv` with atomic writes. Updates state files so the next session resumes exactly where this one stopped.
+5. **Resolves taxonomy** by checking each species name against the GBIF Backbone Taxonomy. Synonyms are automatically updated to accepted names (originals preserved in notes), higher taxonomy is auto-filled, and results are cached locally. This runs before deduplication so that synonyms don't create phantom diversity.
+6. **Validates** each record against cross-field consistency rules defined in `guide.md` before writing.
+7. **Appends** validated records to `results.csv` with atomic writes. Updates state files so the next session resumes exactly where this one stopped.
 
 The agent handles scanned PDFs by reading them natively through Claude's PDF vision. It handles large PDFs (100+ pages) by processing them in 50-page batches across sessions.
 
@@ -195,18 +198,27 @@ TraitTrawler/
 │   └── sample_results.csv        # Example output (5 records)
 │
 ├── skill/                        # Skill source (taxon-agnostic)
-│   ├── SKILL.md                  # Core agent specification (~490 lines)
+│   ├── SKILL.md                  # Core agent specification (~351 lines)
 │   ├── dashboard_generator.py    # Generates dashboard.html
 │   ├── verify_session.py         # Post-batch deterministic verification
 │   ├── export_dwc.py             # Darwin Core Archive export
+│   ├── scripts/
+│   │   ├── taxonomy_resolver.py  # GBIF Backbone Taxonomy API resolver
+│   │   └── statistical_qc.py    # Statistical QC pipeline (Chao1, Grubbs, accumulation)
 │   └── references/
 │       ├── csv_schema.md         # Generic field definitions and confidence guidelines
 │       ├── config_template.yaml  # Blank config template for setup wizard
-│       ├── search_and_triage.md  # §3–4: Search and triage logic
-│       ├── extraction_and_validation.md  # §5–8: Fetch, extract, validate, write
+│       ├── search_and_triage.md  # §3–4: Search, citation chaining, adaptive triage
+│       ├── extraction_and_validation.md  # §5–8: Fetch, extract, taxonomy check, validate, write
 │       ├── session_management.md # §9–13: State, reporting, dashboard, context management
+│       ├── taxonomy.md           # §16: GBIF taxonomic intelligence
+│       ├── statistical_qc.md    # §17: Statistical QC and rarefaction curves
+│       ├── campaign_planning.md  # §18: Coverage analysis and strategic recommendations
+│       ├── model_routing.md      # §2: Multi-model routing with escalation
+│       ├── knowledge_evolution.md # §14: Self-improving domain knowledge
 │       ├── calibration.md        # §0b: First-run calibration and self-research
-│       └── audit_mode.md         # §15: Self-cleaning data audit system
+│       ├── audit_mode.md         # §15: Self-cleaning data audit system
+│       └── troubleshooting.md    # Common failure modes and recovery
 │
 ├── evals/                        # Skill evaluation suite
 │   ├── eval_setup_wizard.json
@@ -219,6 +231,10 @@ TraitTrawler/
 ├── docs/
 │   └── traittrawler_logo.svg
 │
+├── tests/
+│   └── test_verify_and_export.py # Runnable tests for utility scripts
+│
+├── requirements.txt              # Python dependencies for standalone use
 ├── CHANGELOG.md
 ├── CITATION.cff
 ├── CONTRIBUTING.md
@@ -226,15 +242,21 @@ TraitTrawler/
 └── README.md
 ```
 
-Auto-created in each project folder on first run: `state/`, `pdfs/`, `results.csv`, `leads.csv`, `dashboard.html`, `state/discoveries.jsonl`, `state/session_checkpoint.json`, `extraction_examples.md` (from calibration)
+Auto-created in each project folder on first run: `state/`, `pdfs/`, `results.csv`, `leads.csv`, `dashboard.html`, `state/discoveries.jsonl`, `state/session_checkpoint.json`, `state/taxonomy_cache.json`, `extraction_examples.md` (from calibration)
 
 ## Self-improving domain knowledge
 
 TraitTrawler includes a learning system. As the agent processes papers, it logs notation variants, new taxa, ambiguity patterns, and validation gaps it encounters to `state/discoveries.jsonl`. At the end of each session, the agent reviews its discoveries and proposes specific, diff-formatted amendments to `guide.md`. The user approves or rejects each proposed change. Over multiple sessions, the domain knowledge document grows collaboratively — the agent contributes patterns it finds in the literature, the human provides judgment. All changes are logged to `state/run_log.jsonl` for full reproducibility.
 
+## Statistical QC and campaign planning
+
+At the end of each session, TraitTrawler runs a statistical QC pass that computes species accumulation curves with Chao1 richness estimates (how close are you to sampling completeness?), detects statistical outliers using Grubbs' test for continuous traits and modal frequency analysis for discrete traits, analyzes confidence distributions, and flags near-duplicate records. Results are saved as a JSON summary and a self-contained HTML report.
+
+For multi-session projects, the campaign planning system analyzes your coverage against GBIF's family-level species counts and generates strategic recommendations: which families are well-sampled, which need more queries, which leads are worth manually obtaining, and how many sessions remain at your current rate. Ask the agent for a "coverage report" or "campaign plan" at any time.
+
 ## Validation study
 
-We validated TraitTrawler against a manually curated Coleoptera karyotype database (4,959 records, 4,298 species) assembled over two years. Full details, data, and reproducible analysis scripts will be archived with the MEE manuscript submission.
+We validated TraitTrawler against a manually curated Coleoptera karyotype database (4,959 records, 4,298 species) assembled over two years. Full details, data, and reproducible analysis scripts will be archived with the manuscript submission.
 
 | Metric | Value |
 |:-------|------:|
@@ -250,9 +272,9 @@ We validated TraitTrawler against a manually curated Coleoptera karyotype databa
 
 > **Key finding:** 28% of apparent disagreements between datasets were not errors but genuine intraspecific karyotypic variation documented in different primary sources. Combining independently curated datasets recovers biological variation that either dataset alone would miss.
 
-The manuscript is in preparation for *Methods in Ecology and Evolution*:
+The manuscript is in preparation:
 
-> Blackmon, H. (2026). TraitTrawler: an autonomous AI agent for large-scale extraction of phenotypic data from the scientific literature. *Methods in Ecology and Evolution* (in prep).
+> Blackmon, H. (2026). TraitTrawler: an autonomous AI agent for large-scale extraction of phenotypic data from the scientific literature. (in prep).
 
 ## Citation
 
@@ -263,7 +285,7 @@ If you use TraitTrawler or the validation datasets, please cite:
   author  = {Blackmon, Heath},
   title   = {{TraitTrawler}: an autonomous {AI} agent for large-scale extraction
              of phenotypic data from the scientific literature},
-  journal = {Methods in Ecology and Evolution},
+  journal = {},
   year    = {2026},
   note    = {In preparation}
 }
@@ -276,7 +298,7 @@ GitHub's **"Cite this repository"** button (top right) provides formatted citati
 The `traittrawler.skill` file is a ZIP archive containing the contents of `skill/`. To rebuild it after making changes:
 
 ```bash
-cd skill && zip -r ../traittrawler.skill SKILL.md dashboard_generator.py references/ && cd ..
+cd skill && zip -r ../traittrawler.skill SKILL.md dashboard_generator.py verify_session.py export_dwc.py references/ scripts/ && cd ..
 ```
 
 Pre-built `.skill` files are attached to each [GitHub Release](https://github.com/coleoguy/TraitTrawler/releases).

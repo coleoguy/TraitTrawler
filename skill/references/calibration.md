@@ -71,8 +71,14 @@ in the title for body measurements.
 ## Step 3 — Calibration extraction
 
 Process each seed paper through the full extraction pipeline (§7), but with
-extra attention to discovery logging (§14). For each paper:
-- Extract records as normal
+extra attention to discovery logging (§14). **Use the same subagent
+architecture as normal sessions** (see model_routing.md §2) — spawn a
+sonnet subagent for each paper's extraction. This keeps PDF text out of
+the main agent's context, which is important because calibration processes
+3–5 papers in quick succession and context pressure accumulates fast.
+
+For each paper:
+- Extract records as normal (via subagent)
 - Log EVERY notation variant, terminology, and extraction pattern to
   `state/discoveries.jsonl` — be aggressive about logging during calibration,
   even for things that seem obvious. The point is to populate `guide.md`

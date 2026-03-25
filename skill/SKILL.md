@@ -1,18 +1,36 @@
 ---
-name: traittrawler
+name: trait-trawler
 model: sonnet
 effort: high
 description: >
-  Autonomous scientific literature mining agent. Searches PubMed, OpenAlex,
-  bioRxiv, and Crossref, retrieves full-text PDFs through open-access sources
-  and institutional proxies, extracts structured phenotypic data from prose,
-  tables, and catalogues, and writes validated records to CSV. Taxon- and
-  trait-agnostic: adapts to any system via project configuration files. Triggers
-  on: collect trait data, run the agent, work on the database, gather papers,
-  literature mining, build a trait database, let's collect some data, process
-  papers, fetch PDFs, add records, process these PDFs, extract from these,
-  I have some papers to process.
-compatibility: "Requires Bash, Read, Write, WebFetch, Claude in Chrome MCP, PubMed MCP, bioRxiv MCP, OpenAlex MCP, Crossref MCP"
+  Autonomous scientific literature mining agent that builds structured trait
+  databases (karyotype, morphometric, life-history, any phenotype) from the
+  primary literature. Searches PubMed, OpenAlex, bioRxiv, and Crossref;
+  retrieves full-text PDFs via open-access cascades and institutional proxies
+  (Chrome); extracts structured data from prose, tables, and catalogues;
+  resolves taxonomy against GBIF; validates and writes to CSV with full
+  provenance. Includes statistical QC (Chao1, Grubbs outlier detection),
+  bidirectional citation chaining, self-improving domain knowledge, and
+  multi-session campaign planning. Use when the user wants to: collect trait
+  data, mine the literature, run a session, trawl for data, build a trait
+  database, process papers, extract data from papers, add records, fetch PDFs,
+  run QC, plan the campaign, audit the database, or continue collecting. Do
+  NOT use for casual literature review (use deepscholar), simple data
+  exploration, or one-off paper summaries.
+allowed-tools: >
+  Bash(python3:*) Bash(pip:*) Bash(cp:*) Bash(mkdir:*) Bash(wc:*) Bash(ls:*)
+  Read Write Edit Glob Grep Agent WebFetch WebSearch
+argument-hint: "[session-target or command, e.g. '20 papers', 'run QC', 'audit']"
+compatibility: >
+  Requires Python 3.9+, pyyaml, pdfplumber, scipy (optional, for Grubbs
+  outlier detection), matplotlib (optional, for QC report plots). Network
+  access required for PubMed, OpenAlex, bioRxiv, Crossref, Unpaywall, and
+  GBIF APIs. Claude in Chrome MCP enables institutional proxy PDF retrieval;
+  without it the skill degrades gracefully to open-access papers and abstracts
+  only. PubMed and bioRxiv MCPs are optional (falls back to public APIs).
+metadata:
+  author: Heath Blackmon
+  version: 2.0.0
 ---
 
 # TraitTrawler
@@ -23,21 +41,27 @@ three project files: `collector_config.yaml` (taxa, trait, fields), `config.py`
 (search queries), and `guide.md` (domain knowledge for extraction). The skill
 itself is taxon- and trait-agnostic.
 
-Run until the user stops, `batch_size` is reached, or the search queue is
+Run until the user stops, `session_target` is reached, or the search queue is
 exhausted. Pick up exactly where the previous session ended.
 
+**Skill directory**: `${CLAUDE_SKILL_DIR}`
 **Project root**: the folder Cowork has open (the current working directory).
 
 ## Pipeline stages (detail in reference files)
 
-| Stage | Section | Reference file |
-|---|---|---|
-| Calibration (first run) | §0b | [calibration.md](references/calibration.md) |
-| Search & Triage | §3–4 | [search_and_triage.md](references/search_and_triage.md) |
-| Fetch, Extract, Validate, Write | §5–8 | [extraction_and_validation.md](references/extraction_and_validation.md) |
-| State, Reporting, Dashboard | §9–13 | [session_management.md](references/session_management.md) |
-| Self-improving knowledge | §14 | Below |
-| Audit mode | §15 | [audit_mode.md](references/audit_mode.md) |
+| Stage | Section | Reference file | When to load |
+|---|---|---|---|
+| Calibration (first run) | §0b | [calibration.md](references/calibration.md) | First run only, after setup wizard |
+| Search & Triage | §3–4 | [search_and_triage.md](references/search_and_triage.md) | Every search cycle |
+| Fetch, Extract, Validate, Write | §5–8 | [extraction_and_validation.md](references/extraction_and_validation.md) | Every extraction cycle |
+| State, Reporting, Dashboard | §9–13 | [session_management.md](references/session_management.md) | Session start and end |
+| Model routing | §2 | [model_routing.md](references/model_routing.md) | Session start (reference) |
+| Self-improving knowledge | §14 | [knowledge_evolution.md](references/knowledge_evolution.md) | Session end, if discoveries logged |
+| Taxonomic intelligence | §16 | [taxonomy.md](references/taxonomy.md) | During extraction (after records, before write) |
+| Statistical QC | §17 | [statistical_qc.md](references/statistical_qc.md) | Session end or on-demand ("run QC") |
+| Campaign planning | §18 | [campaign_planning.md](references/campaign_planning.md) | On-demand after 3+ sessions |
+| Audit mode | §15 | [audit_mode.md](references/audit_mode.md) | On-demand ("audit the database") |
+| Troubleshooting | — | [troubleshooting.md](references/troubleshooting.md) | When something goes wrong |
 
 Read the appropriate reference file when entering that pipeline stage.
 
@@ -64,20 +88,15 @@ Ask these questions one at a time (wait for each answer):
 
 For any wizard question, the user may say "you figure it out", "look it up",
 or "research it." When this happens, use OpenAlex, PubMed, and web search
-to research the answer using the taxon and trait from Q1–Q2. See
-[calibration.md](references/calibration.md) §0a for specific research
-strategies per question. Always present researched answers for user approval
-before writing config files.
+to research the answer. See [calibration.md](references/calibration.md) §0a
+for specific research strategies per question. Always present researched
+answers for user approval before writing config files.
 
 ### Create project files
 
-- Locate the skill directory:
-  ```bash
-  SKILL_DIR="$(dirname "$(find /sessions -path '*/skills/traittrawler/SKILL.md' -print -quit 2>/dev/null)")"
-  ```
 - Create `collector_config.yaml` from answers using the template in
-  `$SKILL_DIR/references/config_template.yaml`. Populate `{TRAIT_FIELDS}` with
-  trait-specific field names using these conventions:
+  `${CLAUDE_SKILL_DIR}/references/config_template.yaml`. Populate
+  `{TRAIT_FIELDS}` with trait-specific field names using these conventions:
   - snake_case, include unit when applicable (e.g. `body_mass_g_mean`)
   - Include `_mean`, `_sd`, `_min`, `_max` for continuous measurements
   - Include `sex`, `sample_size`, `age_class` when trait is per-individual
@@ -88,7 +107,7 @@ before writing config files.
 - Create `state/` folder with empty state files:
   `processed.json` (`{}`), `queue.json` (`[]`), `search_log.json` (`{}`),
   `large_pdf_progress.json` (`{}`), `run_log.jsonl` (empty),
-  `discoveries.jsonl` (empty)
+  `discoveries.jsonl` (empty), `taxonomy_cache.json` (`{}`)
 - Create `pdfs/` folder
 - Create `results.csv` with just the header row
 
@@ -108,16 +127,17 @@ What to skip, Common pitfalls, Taxonomy notes. Tell user they can edit anytime.
 ### 0b. Calibration phase
 
 After generating config files, run a calibration phase before the first
-real session. The agent processes 3–5 seed papers to learn notation, table
-formats, and terminology from real examples — then uses their citations to
-warm-start the search queue. Full details in
-[calibration.md](references/calibration.md).
+real session. Full details in [calibration.md](references/calibration.md).
 
-Summary: ask for seed DOIs (or find them automatically) → extract with
-aggressive §14 discovery logging → immediate knowledge review to update
-`guide.md` → citation-seed the queue → auto-generate `extraction_examples.md`
-from worked examples. The first real session starts with a battle-tested
-`guide.md` and a warm queue instead of cold keyword searches.
+Summary: ask for seed DOIs (or find automatically) → extract with aggressive
+discovery logging → immediate knowledge review → citation-seed the queue →
+auto-generate `extraction_examples.md`. The first real session starts with
+battle-tested domain knowledge and a warm queue.
+
+**After calibration completes**, proceed directly to §1 (Startup). Calibration
+and the first collection session happen in the same invocation — the agent
+runs §0 → §0b → §1 → §3 without stopping. §1f (session duration) still
+applies to the first real batch after calibration.
 
 **If `collector_config.yaml` exists → skip to §1.**
 
@@ -125,27 +145,25 @@ from worked examples. The first real session starts with a battle-tested
 
 ## 1. Startup
 
-### 1a. Locate the skill directory and check dependencies
-
-```bash
-SKILL_DIR="$(dirname "$(find /sessions -path '*/skills/traittrawler/SKILL.md' -print -quit 2>/dev/null)")"
-```
+### 1a. Check dependencies
 
 **Check Python dependencies** (run once per session):
 ```bash
 python3 -c "import pdfplumber" 2>/dev/null || pip install pdfplumber --break-system-packages -q
 python3 -c "import yaml" 2>/dev/null || pip install pyyaml --break-system-packages -q
+python3 -c "import scipy" 2>/dev/null || pip install scipy matplotlib --break-system-packages -q
 ```
 
-If either install fails, warn the user but continue — fall back to Read tool
-for PDFs and regex for YAML.
+If any install fails, warn but continue — fall back gracefully.
 
-**Check MCP availability** — try each, degrade gracefully:
-- PubMed MCP (`search_articles`): fallback → E-utilities API via WebFetch
-- OpenAlex MCP (`search_works`): fallback → OpenAlex REST API via WebFetch
-- bioRxiv MCP (`search_preprints`): fallback → Crossref API for preprints
-- Crossref MCP (`search_crossref`): fallback → Crossref REST API via WebFetch
-- Claude in Chrome: if unavailable, warn and skip proxy fetch (OA only)
+**Check MCP availability** — attempt one lightweight call to each; degrade
+gracefully if unavailable. MCP tool names vary by environment (e.g.,
+`mcp__<uuid>__search_articles`); match by the **suffix** after the last `__`:
+- PubMed MCP (suffix `search_articles`): fallback → E-utilities API via WebFetch
+- OpenAlex MCP (suffix `search_works`): fallback → OpenAlex REST API via WebFetch
+- bioRxiv MCP (suffix `search_preprints`): fallback → Crossref API for preprints
+- Crossref MCP (suffix `search_crossref`): fallback → Crossref REST API via WebFetch
+- Claude in Chrome (suffix `navigate`): if unavailable, warn and skip proxy fetch (OA only)
 
 Do not fail hard on any missing MCP.
 
@@ -158,9 +176,9 @@ Do not fail hard on any missing MCP.
 4. `state/processed.json`, `state/queue.json`, `state/search_log.json`
 5. `results.csv` — count existing records
 6. `leads.csv` — count for status report
-7. `state/discoveries.jsonl` — review any pending discoveries from prior sessions
+7. `state/discoveries.jsonl` — review pending discoveries from prior sessions
 
-**Skill reference files** (in `SKILL_DIR/references/`):
+**Skill reference files** (in `${CLAUDE_SKILL_DIR}/references/`):
 8. `csv_schema.md` — generic field definitions and confidence guidelines
 
 **Project-specific** (optional):
@@ -176,111 +194,62 @@ Compute MD5 hashes of `guide.md` and `config.py` for change tracking.
 If `results.csv` has records with `flag_for_review == True`, report count
 and offer to review before continuing.
 
-### 1e. Dashboard initialization
+### 1e. Copy utility scripts from skill directory if not present
 
-Copy dashboard generator from `SKILL_DIR` if not present:
 ```bash
-if [ ! -f "dashboard_generator.py" ]; then
-  cp "$SKILL_DIR/dashboard_generator.py" "dashboard_generator.py"
-fi
-```
-Then regenerate the dashboard (see [session_management.md](references/session_management.md) §13).
-
-### 1f. Copy utility scripts
-
-Copy utility scripts from `SKILL_DIR` if not present:
-```bash
-for script in verify_session.py export_dwc.py; do
-  [ ! -f "$script" ] && cp "$SKILL_DIR/$script" "$script" 2>/dev/null || true
+for script in dashboard_generator.py verify_session.py export_dwc.py; do
+  [ ! -f "$script" ] && cp "${CLAUDE_SKILL_DIR}/$script" "$script" 2>/dev/null || true
+done
+mkdir -p scripts
+for script in statistical_qc.py taxonomy_resolver.py; do
+  [ ! -f "scripts/$script" ] && cp "${CLAUDE_SKILL_DIR}/scripts/$script" "scripts/$script" 2>/dev/null || true
 done
 ```
 
-### 1g. Ask how long to run
+**Script usage** — execute all of these via Bash. Do NOT read them into context:
+
+| Script | Purpose | Invocation |
+|---|---|---|
+| `dashboard_generator.py` | Generates `dashboard.html` from project data | `python3 dashboard_generator.py --project-root .` |
+| `verify_session.py` | Post-batch CSV validation (schema, dupes, ranges) | `python3 verify_session.py --project-root .` |
+| `export_dwc.py` | Exports results.csv as Darwin Core Archive | `python3 export_dwc.py --project-root . --output-dir dwc_export` |
+| `scripts/statistical_qc.py` | Outlier detection, Chao1 estimator, QC plots | `python3 scripts/statistical_qc.py --project-root .` |
+| `scripts/taxonomy_resolver.py` | Batch GBIF taxonomy lookups with caching | `python3 scripts/taxonomy_resolver.py --csv results.csv --species-column species --cache state/taxonomy_cache.json` |
+
+Then regenerate the dashboard (see [session_management.md](references/session_management.md) §13).
+
+### 1f. Ask how long to run
 
 Ask the user how long this session should run. Accept paper counts ("do 30
-papers"), time estimates ("I have an hour" → ~15–20 papers at ~3–5 min
-each), or presets ("quick pass" = 10, "long session" = 50+, "until done" =
-unlimited). See [session_management.md](references/session_management.md)
-§9d for the full prompt and conversion rules. If the user says "just go",
-use `batch_size` from config. Set `session_target` for the rest of the run.
+papers"), time estimates ("I have an hour" → ~15–20 papers), or presets
+("quick pass" = 10, "long session" = 50+, "until done" = unlimited). See
+[session_management.md](references/session_management.md) §9d for conversion
+rules. Set `session_target` for the rest of the run.
 
-### 1h. Startup state log entry
+### 1g. Startup state log and status
 
-Append to `state/run_log.jsonl`:
+Append session_start to `state/run_log.jsonl`:
 ```json
 {"timestamp": "...", "session_id": "...", "event": "session_start", "guide_md5": "...", "config_py_md5": "...", "session_target": 20}
 ```
 
-### 1i. Print startup status
-
 Print a status block: project name, session_id, records in database, papers
 processed, leads count, flagged for review, session target, queue depth,
-queries run (n/total), next query. Use box-drawing characters for formatting.
+queries run (n/total), taxonomic coverage summary (families with records /
+known families), next query. Use box-drawing characters.
 
 ---
 
 ## 2. Model Routing
 
-TraitTrawler uses cheaper, faster models for routine tasks and reserves
-expensive models for tasks requiring deep reasoning. The Agent tool's `model`
-parameter controls this. Configure defaults in `collector_config.yaml` →
-`model_routing` (see config template), or accept these defaults:
+TraitTrawler uses cheaper models for routine tasks and reserves expensive
+models for deep reasoning. Full routing table, escalation protocol, batch
+strategies, and override rules in
+[model_routing.md](references/model_routing.md).
 
-| Task | Default model | Escalation trigger |
-|---|---|---|
-| Search (API calls, dedup) | `haiku` | — |
-| Triage (abstract classification) | `haiku` | — |
-| State updates, reporting, leads | `haiku` | — |
-| Prose extraction | `sonnet` | → opus if confidence < 0.5 on retry |
-| Table extraction (pass 1: enumerate) | `sonnet` | — |
-| Table extraction (pass 2: extract) | `sonnet` | → opus if row-count mismatch > 10% |
-| Catalogue/dense extraction | `sonnet` | → opus if > 50 taxa per page |
-| Scanned PDF (vision) | `sonnet` | → opus if OCR artifacts detected |
-| Validation & verification | `sonnet` | — |
-| Knowledge review (§14 proposals) | `sonnet` | — |
-
-### Escalation protocol
-
-When a task escalates to a more expensive model:
-1. Log the escalation to `state/run_log.jsonl`:
-   ```json
-   {"timestamp": "...", "session_id": "...", "event": "model_escalation", "doi": "...", "from": "sonnet", "to": "opus", "reason": "row_count_mismatch_23pct"}
-   ```
-2. Report to the user at the next progress update:
-   `⬆ Escalated "{title}" to opus (reason: {reason})`
-3. After the escalated task completes, return to the default model for the
-   next paper. Escalation is per-paper, never sticky.
-
-### Override
-
-The user can say "use opus for everything" or "use sonnet for triage too" at
-any time. Respect the override for the rest of the session but do not persist
-it to config. Log overrides to `run_log.jsonl`.
-
-### Implementation
-
-Use the Agent tool with the `model` parameter to dispatch subtasks:
-- Spawn a haiku subagent for search/triage batches
-- The main agent (whatever model the session runs on) handles extraction
-- Spawn an opus subagent only when escalation is triggered
-
-When the session model is already haiku or sonnet, skip spawning a subagent
-for tasks at that level — just do them directly.
-
-**Batch subagent calls to amortize overhead.** Spawning a subagent has fixed
-context-setup cost, so batch work rather than spawning per-paper:
-- **Search**: Send 5–10 queries per haiku subagent call. Include the search
-  terms, API instructions, and `processed.json` DOI list for dedup. The
-  subagent returns new papers as JSON.
-- **Triage**: Send 10–20 abstracts per haiku subagent call. Include
-  `guide.md` content and triage rules. The subagent returns classifications.
-- **Extraction**: Do NOT batch across papers — each paper needs full context.
-  Run one paper per sonnet call (or do it directly if already on sonnet).
-- **Audit queue construction**: One haiku subagent call to scan all of
-  `results.csv` and return the prioritized queue.
-
-Pass all needed context (guide.md, triage rules, config excerpts) in the
-Agent prompt — subagents do not inherit the parent's conversation history.
+**Summary**: haiku for search/triage/state, sonnet for extraction/validation,
+opus only on escalation (low confidence, row-count mismatch, OCR artifacts,
+structural guide amendments).
 
 ---
 
@@ -288,14 +257,8 @@ Agent prompt — subagents do not inherit the parent's conversation history.
 
 ### 3a. Detect operating mode
 
-At startup, after reading state files, check for unprocessed local PDFs:
-
-```bash
-# Find PDFs in pdfs/ not yet in processed.json
-```
-
-Compare the list of PDF files in `pdfs/` against DOIs/titles in
-`processed.json`. If there are unprocessed local PDFs, ask the user:
+Check for unprocessed local PDFs in `pdfs/`. Compare PDF filenames against
+`processed.json`. If unprocessed PDFs found, ask:
 
 ```
 Found {N} unprocessed PDFs in pdfs/. How should I proceed?
@@ -304,180 +267,104 @@ Found {N} unprocessed PDFs in pdfs/. How should I proceed?
   3. PDF-only mode (process local PDFs, skip search)
 ```
 
-Also enter PDF-first mode if the user says any of:
-```
-"process these PDFs", "I have some papers", "extract from these",
-"I dropped some PDFs in", "just process what's in the folder"
-```
+Also enter PDF-first mode on: "process these PDFs", "I have some papers",
+"extract from these", "I dropped some PDFs in", "just process what's in
+the folder".
 
-**PDF-first mode** skips search and triage entirely. For each unprocessed
-PDF in `pdfs/`:
-1. Extract metadata (title, authors, year, DOI) from the first page
-2. Check against `processed.json` to avoid reprocessing
-3. Go straight to extraction (§7) — the paper is assumed relevant since
-   the user supplied it
-4. Set `pdf_source: local_pdf` and `source_type: full_text`
-5. Validate and write per normal pipeline (§7f, §8)
-6. Mark processed in `processed.json` with `"triage": "user_supplied"`
-
-After all local PDFs are processed, offer to continue with search mode
-or stop.
+**PDF-first mode** skips search/triage. For each unprocessed PDF: extract
+metadata → check processed.json → extract (§7) → taxonomy check (§16) →
+validate/write (§7f, §8) → mark processed with `"triage": "user_supplied"`.
+After all local PDFs, offer to continue with search mode or stop.
 
 ### 3b. Search mode (default)
 
-Repeat until the user stops, `batch_size` is reached, or searches are exhausted:
+Repeat until user stops, session_target reached, or searches exhausted:
 
-**→ Search → Triage → Fetch → Extract → Validate → Write → Update state → Report → repeat**
+**→ Search → Triage → Fetch → Extract → Taxonomy Check → Validate → Write → Update state → Report → repeat**
 
-For each stage, read the relevant reference file and use the model specified in §2:
-- **Search & Triage** (haiku): See [search_and_triage.md](references/search_and_triage.md)
-- **Fetch, Extract, Validate, Write** (sonnet, escalate per §2): See [extraction_and_validation.md](references/extraction_and_validation.md)
-- **State updates & Reporting** (haiku): See [session_management.md](references/session_management.md)
+For each stage, read the relevant reference file and use the model per §2:
+- **Search & Triage** (haiku): [search_and_triage.md](references/search_and_triage.md)
+- **Fetch, Extract, Validate, Write** (sonnet): [extraction_and_validation.md](references/extraction_and_validation.md)
+- **Taxonomy check** (inline): [taxonomy.md](references/taxonomy.md)
+- **State & Reporting** (haiku): [session_management.md](references/session_management.md)
 
 Aim to fully process 5–10 papers per reporting cycle.
 
-**When `batch_size` is reached**, print session summary and ask:
+**When `session_target` is reached**, print session summary and ask:
 ```
-Batch complete ({N} papers). Continue with another batch? [y/n]
+Session target reached ({N} papers). Continue with another batch? [y/n]
 ```
 
 ---
 
 ## 14. Self-Improving Domain Knowledge
 
-This is the agent's learning system. As you process papers, you encounter
-patterns, edge cases, and notation variants that aren't covered in `guide.md`.
-Rather than silently adapting, capture these discoveries so the project's
-domain knowledge improves over time.
+As the agent processes papers, it captures notation variants, new taxa,
+ambiguity patterns, and validation gaps in `state/discoveries.jsonl`. At
+session end, it proposes diff-formatted amendments to `guide.md` for user
+approval. Full discovery types, review protocol, mid-session correction
+pathway, and cumulative knowledge reports in
+[knowledge_evolution.md](references/knowledge_evolution.md).
 
-### 14a. When to log a discovery
-
-After extracting records from each paper, check whether you encountered any of:
-- A notation variant not in `guide.md` or `extraction_examples.md`
-- A new taxonomic name (family, subfamily) not previously seen in results.csv
-- A field value that required interpretation not covered by existing rules
-- A recurring low-confidence pattern (same type of ambiguity across papers)
-- A journal or source type with unusual formatting worth noting
-- A validation rule that should exist but doesn't
-
-If so, append an entry to `state/discoveries.jsonl`:
-
-```json
-{
-  "session_id": "2026-03-24T14:30:00Z",
-  "timestamp": "2026-03-24T15:12:00Z",
-  "type": "notation_variant",
-  "source_doi": "10.1234/example.5678",
-  "description": "Sex chromosome system written as 'X1X2X3Y' — not in normalization table. Wrote as XXXY per existing rule but the subscript notation suggests this may be a distinct system in Cicindelidae.",
-  "proposed_rule": "Add to sex_chr_system normalization: X₁X₂X₃Y → XXXY. Add note in guide.md §Sex Chromosome Systems that numbered notation is equivalent.",
-  "affected_fields": ["sex_chr_system"],
-  "confidence": 0.85,
-  "guide_section": "Sex Chromosome Systems"
-}
-```
-
-### 14b. Discovery types
-
-| Type | When to log |
-|---|---|
-| `notation_variant` | New way of writing a known value |
-| `new_taxon` | Family/subfamily/tribe not previously encountered |
-| `ambiguity_pattern` | Same type of unclear data across 2+ papers |
-| `validation_gap` | A check that should exist but doesn't |
-| `extraction_pattern` | Recurring document structure worth noting |
-| `terminology` | Domain term with meaning not in guide.md |
-
-### 14c. Session-end knowledge review
-
-At the end of each session (after the session summary), if any discoveries
-were logged during this session:
-
-1. Read `state/discoveries.jsonl` for this session's entries.
-2. Group discoveries by `guide_section`.
-3. For each group, propose a **specific, diff-formatted amendment** to `guide.md`:
-
-```
-🔬 Domain Knowledge Review — {N} discoveries this session
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Discovery 1: New notation variant for sex chromosome systems
-  Source: Smith et al. 2003 (10.1234/example.5678)
-
-  Proposed addition to guide.md § Sex Chromosome Systems:
-  ┌──────────────────────────────────────────────────┐
-  │ + | X₁X₂X₃Y, X1X2X3Y | `XXXY` | Numbered       │
-  │ + |   notation equivalent to repeated-letter form  │
-  │ + |   Common in Cicindelidae (tiger beetles)       │
-  └──────────────────────────────────────────────────┘
-
-  Apply this change? [y/n/edit]
-```
-
-4. For each proposed change the user approves:
-   - Apply the edit to `guide.md` using the Edit tool
-   - Log the change to `state/run_log.jsonl`:
-     ```json
-     {"timestamp": "...", "session_id": "...", "event": "guide_updated", "section": "Sex Chromosome Systems", "change": "Added X₁X₂X₃Y normalization rule", "source_doi": "10.1234/example.5678"}
-     ```
-   - Mark the discovery as `"applied": true` in `discoveries.jsonl`
-
-5. For rejected changes, mark as `"applied": false, "reason": "user rejected"`.
-
-### 14d. Cumulative knowledge report
-
-Every 5 sessions (tracked via `run_log.jsonl`), print a brief summary:
-
-```
-📚 Knowledge Growth Report
-   guide.md: {N} agent-proposed amendments accepted ({M} rejected)
-   Notation variants discovered: {N}
-   New taxa encountered: {N}
-   Validation rules suggested: {N}
-```
-
-This creates a transparent record of how the domain knowledge evolves —
-essential for the MEE manuscript and for scientific reproducibility.
-
-### 14e. Never modify guide.md without approval
-
-The agent proposes; the human decides. Never silently edit `guide.md`,
-`extraction_examples.md`, or `collector_config.yaml`. The user must
-explicitly approve every change. This maintains scientific integrity
-and keeps the human as the domain authority.
+**Core principle**: The agent proposes; the human decides. Never silently
+edit `guide.md`, `extraction_examples.md`, or `collector_config.yaml`.
 
 ---
 
 ## 15. Audit Mode — Self-Cleaning Data
 
-TraitTrawler can audit its own database by re-examining records that are
-low-confidence, statistically anomalous, or extracted before domain knowledge
-was updated. Full audit logic is in [audit_mode.md](references/audit_mode.md).
+Re-examines low-confidence, statistically anomalous, and guide-drift records
+by re-extracting from cached PDFs with current domain knowledge. Full logic
+in [audit_mode.md](references/audit_mode.md).
 
-**Triggers** — the user says:
-```
-"audit the database", "check low-confidence records", "clean the data",
-"re-check flagged records", "run an audit"
-```
+**Triggers**: "audit the database", "check low-confidence records",
+"clean the data", "re-check flagged records", "run an audit".
 
-Or automatically: if `audit_config.auto_audit` is `true`, the agent offers
-an audit every N sessions (default: 5).
+**Three criteria** (priority): low confidence → guide-drift → statistical outliers.
+**Core method**: re-extract from cached PDF using `source_page` with current
+`guide.md`, without seeing original values (prevents anchoring).
 
-**Three audit criteria** (priority order):
-1. Low confidence — records below `audit_config.confidence_threshold` (0.6)
-2. Guide-drift — records extracted before a `guide.md` update (tracked via
-   `guide_md5` in `run_log.jsonl`)
-3. Statistical outliers — continuous fields use SD threshold, discrete
-   numeric fields (e.g., chromosome counts) use modal frequency to avoid
-   flagging real polyploidy, categoricals flag singletons in groups with 10+
+---
 
-**Core principle**: Re-extract from the cached PDF using `source_page`,
-with current `guide.md`, without looking at original values (prevents
-anchoring). Diff old vs. new. User approves all trait-field corrections.
+## 16. Taxonomic Intelligence
 
-**Model routing**: haiku for queue construction, sonnet for re-extraction,
-opus only when both versions disagree and both have confidence < 0.7.
+Every extracted species name is validated against the GBIF Backbone Taxonomy.
+The agent resolves synonyms to accepted names, auto-fills higher taxonomy
+when missing, and flags nomenclatural issues. When a name is updated to an
+accepted synonym, the original extracted name is preserved in the `notes`
+field (e.g., "Original name: Cicindela sylvatica, resolved to accepted name
+via GBIF"). Full integration spec in [taxonomy.md](references/taxonomy.md).
 
-Read [audit_mode.md](references/audit_mode.md) when entering audit mode.
+**Script**: `scripts/taxonomy_resolver.py` handles batch GBIF lookups with
+caching to `state/taxonomy_cache.json` to avoid redundant API calls.
+
+---
+
+## 17. Statistical QC
+
+At session end and on-demand ("run QC", "check data quality", "how's the
+data looking"), the agent runs `scripts/statistical_qc.py` to generate
+diagnostic plots and a quality report. Includes: outlier detection (Grubbs
+test for continuous data, modal-frequency for discrete), species accumulation
+curves with Chao1 estimator, confidence distribution analysis, taxonomic
+coverage vs. GBIF known diversity, and session-over-session efficiency
+trends. Full spec in [statistical_qc.md](references/statistical_qc.md).
+
+Output: `qc_report.html` (self-contained with plots) and `qc_summary.json`.
+
+---
+
+## 18. Campaign Planning
+
+After 3+ sessions, the agent can generate a strategic campaign report
+analyzing: taxonomic coverage gaps (families with known diversity but few
+or no records), search efficiency trends (records/paper by query type),
+estimated sessions to reach target coverage, and recommended search strategy
+adjustments (which queries to prioritize, when to switch to citation
+chaining). Full spec in [campaign_planning.md](references/campaign_planning.md).
+
+**Triggers**: "plan the campaign", "coverage report", "how much is left",
+"what should I focus on next", "strategic report".
 
 ---
 
@@ -485,8 +372,8 @@ Read [audit_mode.md](references/audit_mode.md) when entering audit mode.
 
 The agent stops when any of these are met:
 - User says stop
-- `batch_size` papers processed this session (collection mode)
+- `session_target` papers processed this session (collection mode)
 - `audit_config.max_records` reviewed this session (audit mode)
 - 10,000 total records in results.csv
 - 15 consecutive empty searches (no new papers found)
-- All queries in `config.py` exhausted (offer citation chaining first)
+- All queries in `config.py` exhausted (offer smart citation chaining first)

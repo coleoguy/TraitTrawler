@@ -15,8 +15,8 @@ authors:
     email: coleoguy@gmail.com
 repository-code: "https://github.com/coleoguy/TraitTrawler"
 license: MIT
-version: "1.0.0"
-date-released: "2026-03-24"
+version: "2.0.0"
+date-released: "2026-03-25"
 keywords:
   - literature mining
   - large language model
@@ -33,5 +33,5 @@ preferred-citation:
       given-names: Heath
       orcid: "https://orcid.org/0000-0002-1770-1902"
   title: "TraitTrawler: an autonomous AI agent for large-scale extraction of phenotypic data from the scientific literature"
-  journal: "Methods in Ecology and Evolution"
+  journal: ""
   year: 2026

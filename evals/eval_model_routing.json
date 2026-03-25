@@ -1,5 +1,5 @@
 {
-  "skills": ["traittrawler"],
+  "skills": ["trait-trawler"],
   "description": "Validates that model routing does not degrade accuracy. Tests three claims: (1) haiku matches opus on triage classification, (2) sonnet matches opus on structured table extraction, (3) escalation triggers fire appropriately on ambiguous cases. Run each test case on haiku, sonnet, and opus independently; compare outputs.",
   "test_cases": [
     {
@@ -64,7 +64,7 @@
     }
   ],
   "meta": {
-    "purpose": "Empirical validation of model routing. Run each test_case at multiple model tiers to measure accuracy vs. cost tradeoff. Results feed directly into the MEE manuscript's cost-efficiency analysis.",
+    "purpose": "Empirical validation of model routing. Run each test_case at multiple model tiers to measure accuracy vs. cost tradeoff. Results feed directly into the manuscript's cost-efficiency analysis.",
     "how_to_run": "For test_cases 1-2, use the Agent tool to run the existing eval files at different model levels. For test_cases 3-4, copy the file contents to the project root and run TraitTrawler in the specified mode.",
     "success_metric": "Model routing is validated if haiku matches opus on triage (>= 90% agreement), sonnet matches opus on extraction (>= 95% field agreement), escalation triggers fire on the ambiguous test case, and haiku correctly constructs the audit queue."
   }

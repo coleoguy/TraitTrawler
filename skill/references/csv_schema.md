@@ -43,6 +43,13 @@ existing rows.
 | `source_context` | string | Verbatim text passage or table row (≤200 chars) the record was extracted from |
 | `extraction_reasoning` | string | One-sentence note when ambiguity existed; blank when unambiguous |
 
+### Taxonomy intelligence (added by §16)
+| Field | Type | Notes |
+|---|---|---|
+| `accepted_name` | string | GBIF accepted name if different from `species`; empty if species is already accepted or GBIF lookup failed |
+| `gbif_key` | integer | GBIF Backbone Taxonomy usageKey for this species |
+| `taxonomy_note` | string | Details of any taxonomy resolution: synonym resolution, fuzzy match, not found in GBIF |
+
 ### Audit tracking (added by audit mode §15)
 | Field | Type | Notes |
 |---|---|---|

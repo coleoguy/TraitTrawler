@@ -1,0 +1,143 @@
+{
+  "category": "functional",
+  "skill": "trait-trawler",
+  "tests": [
+    {
+      "id": "func-setup-wizard",
+      "name": "Setup wizard activates when no config exists",
+      "query": "Let's collect some data on beetle body sizes. I want to focus on Coleoptera.",
+      "files": [],
+      "expected_behavior": [
+        "Detects that collector_config.yaml does not exist in the working directory",
+        "Initiates interactive setup wizard — asks questions one at a time",
+        "Asks user to specify target taxa (should accept 'Coleoptera' or similar)",
+        "Asks user to define the trait being collected",
+        "Asks about triage keywords that indicate relevant papers",
+        "Offers to create collector_config.yaml with provided values",
+        "Does NOT attempt to query databases before configuration is complete",
+        "Explains next steps after configuration"
+      ]
+    },
+    {
+      "id": "func-triage-accuracy",
+      "name": "Triage classifies abstracts correctly against config rules",
+      "query": "Use the attached abstracts to evaluate triage accuracy. For each abstract, classify it as likely relevant, unlikely relevant, or uncertain. Use the provided collector_config.yaml to guide your classification.",
+      "files": [
+        {
+          "name": "collector_config.yaml",
+          "content": "target_taxa: Coleoptera\ntrait_name: Karyotype (2n and sex chromosome system)\ntriage_keywords_include:\n  - karyotype\n  - chromosome number\n  - 2n =\n  - diploid\n  - sex chromosome\n  - XY system\n  - ZW system\n  - male karyotype\n  - female karyotype\n  - chromosomal\n  - cytogenetic\ntriage_keywords_exclude:\n  - phylogenetic tree\n  - phylogenomics\n  - DNA sequence\n  - genome assembly\n  - SNP\n  - molecular marker\n  - ecological\n  - behavioral\n  - population genetics\n  - biogeography\n  - morphological trait\n"
+        },
+        {
+          "name": "triage_test_abstracts.txt",
+          "content": "ABSTRACT 1: \"Karyotypic characterization of Harmonia axyridis (Coleoptera: Coccinellidae): Novel sex chromosome dimorphism. We report the first complete karyotype analysis of the Asian lady beetle, Harmonia axyridis. 2n=20 for both sexes with an XY sex determination system.\" - Journal of Insect Cytogenetics, 2023.\n\nABSTRACT 2: \"Ecological niche modeling and geographic distribution of Chrysomela populi in response to climate change. This study uses species occurrence data from 47 localities across Europe.\" - Ecological Entomology, 2022.\n\nABSTRACT 3: \"Genome assembly and annotation of the Colorado potato beetle. We present a de novo genome assembly using long-read sequencing. The final assembly spans 490 Mb.\" - Genome Biology, 2023.\n\nABSTRACT 4: \"Meiotic behavior and chromosome segregation in Tribolium castaneum. The karyotype consists of 2n=20 autosomes plus XY sex chromosomes in males.\" - Chromosome Research, 2021.\n\nABSTRACT 5: \"Molecular phylogenetics of Cerambycidae using phylogenomic data. Some clades show evidence of ancient chromosomal rearrangements based on synteny comparisons, but no karyotypic data were collected.\" - Systematic Entomology, 2023."
+        }
+      ],
+      "expected_behavior": [
+        "Classifies Abstract 1 (Harmonia karyotype) as LIKELY RELEVANT",
+        "Classifies Abstract 2 (ecological niche modeling) as UNLIKELY RELEVANT",
+        "Classifies Abstract 3 (genome assembly, no karyotype) as UNLIKELY RELEVANT",
+        "Classifies Abstract 4 (Tribolium meiosis + karyotype) as LIKELY RELEVANT",
+        "Classifies Abstract 5 (phylogenomics, no original karyotype data) as UNLIKELY RELEVANT",
+        "Provides justification for each classification",
+        "Achieves at least 4 of 5 correct classifications"
+      ]
+    },
+    {
+      "id": "func-table-extraction",
+      "name": "Extracts structured data from a table-heavy paper",
+      "query": "Extract karyotype data from this paper. Write records to results.csv.",
+      "files": [
+        {
+          "name": "collector_config.yaml",
+          "content": "target_taxa: Coleoptera\ntrait_name: Karyotype\noutput_fields:\n  - doi\n  - species\n  - family\n  - 2n\n  - sex_chromosome_system\n  - extraction_confidence\n  - flag_for_review\n  - notes\n"
+        },
+        {
+          "name": "guide.md",
+          "content": "# Karyotype extraction guide\n2n = diploid number. Record as integer.\nSex chromosome system: record as Xyp, Xyr, XY, neo-XY, XO, etc.\nIf a range is given (e.g., 2n=18-20), record the modal value and note the range.\n"
+        },
+        {
+          "name": "test_paper.txt",
+          "content": "Table 1. Karyotype data for five Chrysomelidae species.\n\nSpecies | Family | 2n | Sex chromosomes | Source\nLeptinotarsa decemlineata | Chrysomelidae | 34 | XY | This study\nChrysomela populi | Chrysomelidae | 42 | Xyp | Smith 1998\nGonioctena quinquepunctata | Chrysomelidae | 26 | XO | This study\nTimarcha tenebricosa | Chrysomelidae | 20 | neo-XY | Jones 2005\nChrysomela vigintipunctata | Chrysomelidae | 42 | Xyp | This study\n"
+        }
+      ],
+      "expected_behavior": [
+        "Extracts exactly 5 records (one per species row)",
+        "All species names match the table exactly",
+        "All 2n values are integers matching the table",
+        "All sex chromosome systems match the table notation",
+        "Each record has an extraction_confidence score between 0.0 and 1.0",
+        "Table-derived records should have high confidence (>= 0.85)",
+        "Records include family = Chrysomelidae for all rows",
+        "Does NOT hallucinate additional species not in the table"
+      ]
+    },
+    {
+      "id": "func-session-resume",
+      "name": "Resumes from prior session state without reprocessing",
+      "query": "Let's continue collecting. Pick up where we left off.",
+      "files": [
+        {
+          "name": "collector_config.yaml",
+          "content": "target_taxa: Coleoptera\ntrait_name: Karyotype\nbatch_size: 20\noutput_fields:\n  - doi\n  - species\n  - family\n  - 2n\n  - sex_chromosome_system\n  - extraction_confidence\n  - flag_for_review\n"
+        },
+        {
+          "name": "state/processed.json",
+          "content": "{\"10.1234/paper1\": {\"status\": \"done\", \"records\": 3}, \"10.1234/paper2\": {\"status\": \"done\", \"records\": 0}}"
+        },
+        {
+          "name": "state/search_log.json",
+          "content": "{\"completed_queries\": [\"Chrysomelidae karyotype\", \"Cerambycidae karyotype\"], \"total_queries\": 50}"
+        },
+        {
+          "name": "results.csv",
+          "content": "doi,species,family,2n,sex_chromosome_system,extraction_confidence,flag_for_review\n10.1234/paper1,Leptinotarsa decemlineata,Chrysomelidae,34,XY,0.95,false\n10.1234/paper1,Chrysomela populi,Chrysomelidae,42,Xyp,0.88,false\n10.1234/paper1,Gonioctena quinquepunctata,Chrysomelidae,26,XO,0.92,false\n"
+        }
+      ],
+      "expected_behavior": [
+        "Reads state/processed.json and state/search_log.json to determine prior progress",
+        "Reports current status: 3 records, 2 papers processed, 2 of 50 queries completed",
+        "Does NOT reprocess papers already in processed.json",
+        "Starts searching from the third query onward (first two completed)",
+        "Asks about session duration or begins processing new papers"
+      ]
+    },
+    {
+      "id": "func-near-miss-triage",
+      "name": "Handles ambiguous near-miss abstracts with correct nuance",
+      "query": "Triage this abstract.",
+      "files": [
+        {
+          "name": "collector_config.yaml",
+          "content": "target_taxa: Coleoptera\ntrait_name: Karyotype\ntriage_keywords_include:\n  - karyotype\n  - chromosome number\n  - 2n =\n  - cytogenetic\ntriage_keywords_exclude:\n  - phylogenomics\n  - genome assembly\n"
+        },
+        {
+          "name": "abstract.txt",
+          "content": "Integrated pest management strategies for Diabrotica virgifera virgifera: Genetic control approaches. This review summarizes genetic control methods including sterile insect technique (SIT) and CRISPR-based approaches. Genetic control via chromosomal translocations is highlighted as a promising strategy."
+        }
+      ],
+      "expected_behavior": [
+        "Classifies as UNLIKELY or UNCERTAIN — not LIKELY",
+        "Recognizes that 'chromosomal translocations' is in a genetic control context, not karyotyping",
+        "Notes that no original karyotype data would be extractable from a review of control methods",
+        "Provides clear reasoning distinguishing this from a cytogenetic study"
+      ]
+    },
+    {
+      "id": "func-model-routing",
+      "name": "Routes tasks to appropriate model tiers",
+      "query": "Process these papers and extract karyotype data.",
+      "files": [
+        {
+          "name": "collector_config.yaml",
+          "content": "target_taxa: Coleoptera\ntrait_name: Karyotype\noutput_fields:\n  - doi\n  - species\n  - family\n  - 2n\n  - sex_chromosome_system\n  - extraction_confidence\n"
+        }
+      ],
+      "expected_behavior": [
+        "Uses haiku-tier for search queries and initial triage (lightweight tasks)",
+        "Uses sonnet-tier for full-text extraction and validation (complex reasoning)",
+        "Does NOT use opus unless encountering escalation triggers (low confidence, row mismatch, OCR artifacts)",
+        "Model routing is logged or inferable from behavior"
+      ]
+    }
+  ]
+}

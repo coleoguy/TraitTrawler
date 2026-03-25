@@ -1,0 +1,54 @@
+{
+  "category": "performance",
+  "skill": "trait-trawler",
+  "description": "Compare skill-equipped vs. bare-model performance on trait extraction tasks. These tests measure whether the skill's domain knowledge, validation rules, and pipeline structure meaningfully improve extraction quality over a generic LLM prompt.",
+  "tests": [
+    {
+      "id": "perf-extraction-accuracy",
+      "name": "Extraction accuracy: skill vs. bare model",
+      "setup": "Provide the same 5-species karyotype table to (A) trait-trawler skill and (B) bare Claude with prompt 'Extract karyotype data from this table into CSV format.'",
+      "metrics": [
+        "Number of correctly extracted records (species, 2n, sex chromosome system)",
+        "Correct handling of notation variants (Xyp vs XY vs neo-XY)",
+        "Presence of confidence scores and provenance fields",
+        "Absence of hallucinated records"
+      ],
+      "expected_improvement": "Skill should match or exceed bare model on extraction accuracy while adding confidence scoring, provenance, and validation that bare model omits entirely."
+    },
+    {
+      "id": "perf-triage-precision",
+      "name": "Triage precision: skill vs. bare model",
+      "setup": "Provide 10 abstracts (6 relevant, 4 irrelevant) to (A) trait-trawler with config and (B) bare Claude with prompt 'Which of these abstracts contain karyotype data for beetles?'",
+      "metrics": [
+        "True positive rate (correctly identified relevant abstracts)",
+        "False positive rate (irrelevant abstracts incorrectly marked relevant)",
+        "Handling of near-miss abstracts (mentions chromosomes but no karyotype data)"
+      ],
+      "expected_improvement": "Skill should achieve higher precision on near-miss abstracts due to explicit exclude-keyword rules and domain knowledge in guide.md."
+    },
+    {
+      "id": "perf-session-efficiency",
+      "name": "Multi-paper session efficiency",
+      "setup": "Run a 10-paper session with both (A) trait-trawler skill and (B) bare Claude given equivalent instructions. Measure state management, deduplication, and error recovery.",
+      "metrics": [
+        "Papers processed without reprocessing (state management)",
+        "Duplicate records in output (deduplication effectiveness)",
+        "Recovery from failed PDF retrieval (graceful degradation)",
+        "Consistency of output schema across all records"
+      ],
+      "expected_improvement": "Skill should produce zero duplicates, consistent schema, and graceful fallback to abstracts. Bare model likely produces schema drift and no state tracking."
+    },
+    {
+      "id": "perf-taxonomy-resolution",
+      "name": "Taxonomy resolution catches synonyms",
+      "setup": "Provide records with known synonyms (e.g., Cicindela sylvatica / Cylindera sylvatica) to (A) trait-trawler with taxonomy enabled and (B) bare Claude.",
+      "metrics": [
+        "Synonym pairs correctly identified and merged",
+        "Original names preserved in notes field",
+        "GBIF accepted names used consistently",
+        "No phantom species diversity from synonym duplication"
+      ],
+      "expected_improvement": "Skill should resolve all known synonyms via GBIF API. Bare model will not attempt taxonomy resolution and will treat synonyms as distinct species."
+    }
+  ]
+}

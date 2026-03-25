@@ -6,6 +6,15 @@ skill iterates through. The skill reads this file at startup (§1b) and pulls
 the next unrun query each cycle.
 
 To adapt for a different project, replace the family lists and keywords.
+
+API rate-limit notes:
+  - PubMed E-utilities: 3 req/s without API key, 10/s with key.
+    The agent batches 5–10 queries per search subagent call, with automatic
+    backoff on HTTP 429. A full run of all 1,669 queries takes ~10–15 sessions
+    spread across several days. Do NOT attempt to run all queries in a single
+    session — the agent paces itself across sessions automatically.
+  - OpenAlex / Crossref: use the polite pool via contact_email in your config.
+  - See skill/references/troubleshooting.md for rate-limit recovery.
 """
 
 

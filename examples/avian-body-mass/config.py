@@ -1,6 +1,12 @@
 """
 Search queries for the Avian Body Mass Database.
 Adapt this list to your target taxon and trait.
+
+API rate-limit notes:
+  - PubMed E-utilities: 3 req/s without API key, 10/s with key.
+    The agent batches queries and backs off on HTTP 429 automatically.
+  - OpenAlex / Crossref: use the polite pool via contact_email in your config.
+  - See skill/references/troubleshooting.md for rate-limit recovery.
 """
 
 # --- Focal order × trait keyword combinations ---

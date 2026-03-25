@@ -1,5 +1,16 @@
 # Extraction and Validation
 
+## Contents
+
+- [§5. Full-Text Fetch](#5-full-text-fetch) — OA cascade, proxy, scanned PDFs, large PDFs, abstract fallback, leads
+- [§6. PDF Naming and Organization](#6-pdf-naming-and-organization) — file naming convention and subdirectories
+- [§7. Extraction](#7-extraction) — paper classification, two-pass table strategy, field definitions, domain rules, provenance
+- [§7f. Record Validation](#7f-record-validation) — universal and project-specific checks, failure actions
+- [§7g. Taxonomy Check](#7g-taxonomy-check-after-extraction-before-writing) — GBIF resolution, synonym handling
+- [§8. Write to results.csv](#8-write-to-resultscsv) — deduplication logic, post-batch verification
+
+---
+
 ## 5. Full-Text Fetch
 
 Try sources in order. Stop as soon as you have usable text.
@@ -278,44 +289,91 @@ validation_rules:
 
 ---
 
+## 7g. Taxonomy Check (after extraction, before writing)
+
+After extracting records from a paper and before writing to CSV, run the
+taxonomy check on every species in the batch. See
+[taxonomy.md](references/taxonomy.md) for full details.
+
+**Quick summary**:
+1. Collect unique species names from the extraction batch
+2. Check `state/taxonomy_cache.json` for cached results
+3. For uncached names, query GBIF Backbone Taxonomy via
+   `scripts/taxonomy_resolver.py` or direct WebFetch
+4. Apply results:
+   - **SYNONYM**: Update `species` to accepted name. Add original name to
+     `notes`: "Original name: {extracted}, resolved via GBIF"
+   - **ACCEPTED**: No change. Auto-fill empty `family`/`genus` from GBIF
+   - **FUZZY (high confidence)**: Ask user to confirm correction
+   - **FUZZY (low confidence)**: Flag for review, keep original name
+   - **NO MATCH**: Keep original, note "Not in GBIF", log as discovery
+5. Populate `accepted_name`, `gbif_key`, and `taxonomy_note` fields
+
+**Important**: Taxonomy resolution runs BEFORE deduplication. This ensures
+that "Cicindela sylvatica" (synonym) and "Cylindera sylvatica" (accepted)
+are recognized as the same species for dedup purposes.
+
+---
+
 ## 8. Write to results.csv
 
 Append extracted records to the `output_csv` path from `collector_config.yaml`.
 Use only the fields listed in `output_fields`. Add `session_id` to every record.
 
-Before appending, perform a deduplication check: search existing `results.csv`
-for any row with matching (doi, species, and all trait-specific field values).
-If a duplicate is found, skip the record and log to `state/needs_attention.csv`
-with reason `duplicate_skip`.
+### 8a. Deduplication
 
-Use Python via Bash:
+Before appending, perform a deduplication check. A record is a duplicate if
+an existing record has the **same species AND identical values for ALL
+trait-specific fields**. The dedup key does NOT include DOI — this means that
+if Paper A and Paper B both report the exact same trait values for the same
+species, only one record is kept. Different trait values for the same species
+from different papers are NOT duplicates — they represent independent
+observations (potentially real biological variation).
+
+Trait-specific fields are all fields in `output_fields` that are not in the
+core field set (paper metadata, taxonomy, data quality, provenance). The
+agent identifies them from `collector_config.yaml`.
 
 ```python
 import csv, os
 
 fieldnames = [...]  # from collector_config.yaml output_fields
-rows = [...]        # extracted records
+rows = [...]        # extracted records (after taxonomy check)
 session_id = "2026-03-24T14:30:00Z"  # from §1c
 path = "results.csv"
+
+# Core fields excluded from dedup key
+core_fields = {
+    "doi", "paper_title", "paper_authors", "first_author", "paper_year",
+    "paper_journal", "session_id", "species", "family", "subfamily", "genus",
+    "extraction_confidence", "flag_for_review", "source_type", "pdf_source",
+    "pdf_filename", "pdf_url", "notes", "processed_date", "collection_locality",
+    "country", "source_page", "source_context", "extraction_reasoning",
+    "accepted_name", "gbif_key", "taxonomy_note",
+    "audit_status", "audit_session", "audit_prior_values"
+}
+trait_fields = [f for f in fieldnames if f not in core_fields]
 
 for row in rows:
     row['session_id'] = session_id
 
+# Build dedup keys from existing records: (species, trait_value_tuple)
 existing_keys = set()
 if os.path.exists(path):
     with open(path, "r") as f:
         reader = csv.DictReader(f)
         for existing_row in reader:
-            key = (existing_row.get('doi'), existing_row.get('species'),
+            key = (existing_row.get('species', ''),
                    tuple(existing_row.get(k, '') for k in trait_fields))
             existing_keys.add(key)
 
 rows_to_write = []
 for row in rows:
-    key = (row.get('doi'), row.get('species'),
+    key = (row.get('species', ''),
            tuple(row.get(k, '') for k in trait_fields))
     if key not in existing_keys:
         rows_to_write.append(row)
+        existing_keys.add(key)  # prevent intra-batch duplicates too
 
 file_exists = os.path.exists(path)
 with open(path, "a", newline="") as f:
@@ -332,8 +390,11 @@ Use `extrasaction="ignore"` so unknown fields never crash the write.
 After writing a batch of records, run the verification script:
 
 ```bash
-python3 "$SKILL_DIR/verify_session.py" --project-root "{project_root}"
+python3 verify_session.py --project-root .
 ```
+
+(The script is copied to the project root at §1e — no need to reference
+`${CLAUDE_SKILL_DIR}` here.)
 
 Read the JSON report at `state/verification_report.json`. If errors are found,
 report them to the user and offer to review. Do not silently continue past

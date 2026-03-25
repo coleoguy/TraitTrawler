@@ -1,5 +1,5 @@
 {
-  "skills": ["traittrawler"],
+  "skills": ["trait-trawler"],
   "query": "Resume the existing collection session. Review the state files to determine progress, skip already-processed papers, and continue from the next pending query. Report current status before proceeding.",
   "files": [
     {

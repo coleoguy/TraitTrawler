@@ -34,10 +34,13 @@ from datetime import datetime
 # Fields that already have dedicated charts or are not chartable
 _CORE_FIELDS = {
     "doi", "paper_title", "paper_authors", "first_author", "paper_year",
-    "paper_journal", "species", "family", "subfamily", "genus",
+    "paper_journal", "session_id", "species", "family", "subfamily", "genus",
     "extraction_confidence", "flag_for_review", "source_type",
     "pdf_source", "pdf_filename", "pdf_url", "notes", "processed_date",
     "collection_locality", "country", "voucher_info",
+    "source_page", "source_context", "extraction_reasoning",
+    "accepted_name", "gbif_key", "taxonomy_note",
+    "audit_status", "audit_session", "audit_prior_values",
 }
 
 # Fields that are inherently free-text and should never be charted
@@ -252,9 +255,9 @@ def generate_dashboard(project_root):
                 pass
 
     # Cumulative records over time
-    date_counts = Counter(r.get("processed_date", "unknown") for r in results)
+    date_counts = Counter(r.get("processed_date") or "unknown" for r in results)
     sorted_dates = sorted(
-        ((d, c) for d, c in date_counts.items() if d != "unknown"),
+        ((d, c) for d, c in date_counts.items() if d and d != "unknown"),
         key=lambda x: x[0]
     )
     cumulative = []
@@ -296,6 +299,49 @@ def generate_dashboard(project_root):
         if classification != "skip" and data:
             trait_charts.append((field, classification, data))
 
+    # --- Recent records feed (last 25) ---
+    # Pick up to 3 trait-specific fields to display
+    display_trait_fields = [f for f in output_fields
+                            if f not in _CORE_FIELDS and f not in _SKIP_FIELDS][:3]
+    recent_records = []
+    for r in results[-25:]:  # last 25 rows (most recent at bottom of CSV)
+        conf_val = r.get("extraction_confidence", "")
+        try:
+            conf_float = float(conf_val)
+            conf_display = f"{conf_float:.2f}"
+        except (ValueError, TypeError):
+            conf_float = 0.0
+            conf_display = conf_val or "—"
+        # Confidence color class
+        if conf_float >= 0.85:
+            conf_class = "conf-high"
+        elif conf_float >= 0.65:
+            conf_class = "conf-mid"
+        else:
+            conf_class = "conf-low"
+
+        trait_vals = []
+        for tf in display_trait_fields:
+            v = r.get(tf, "")
+            trait_vals.append(v if v else "—")
+
+        first_author = r.get("first_author", "")
+        year = r.get("paper_year", "")
+        cite = f"{first_author} {year}".strip() if first_author else (r.get("paper_title", "")[:30] or "—")
+
+        recent_records.append({
+            "species": r.get("species", "—"),
+            "family": r.get("family", "—"),
+            "trait_vals": trait_vals,
+            "confidence": conf_display,
+            "conf_class": conf_class,
+            "source": r.get("pdf_source", "—"),
+            "cite": cite,
+            "flagged": str(r.get("flag_for_review", "")).lower() in ("true", "1", "yes"),
+        })
+    # Reverse so most recent is at the top
+    recent_records = list(reversed(recent_records))
+
     # --- Generate timestamp ---
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -322,6 +368,8 @@ def generate_dashboard(project_root):
         top_countries=top_countries,
         sorted_years=sorted_years,
         trait_charts=trait_charts,
+        recent_records=recent_records,
+        display_trait_fields=display_trait_fields,
     )
 
     out_path = os.path.join(project_root, "dashboard.html")
@@ -477,6 +525,50 @@ def _build_html(**d):
         round(100 * d["n_queries_run"] / d["total_queries"], 1)
         if d["total_queries"] > 0 else 0
     )
+
+    # Build recent records feed
+    recent_records_rows = ""
+    for rec in d.get("recent_records", []):
+        flag_marker = ' <span class="flagged">&#9873;</span>' if rec["flagged"] else ""
+        trait_cells = "".join(f"<td>{v}</td>" for v in rec["trait_vals"])
+        recent_records_rows += f"""      <tr>
+        <td class="species">{rec['species']}{flag_marker}</td>
+        <td>{rec['family']}</td>
+        {trait_cells}
+        <td class="{rec['conf_class']}">{rec['confidence']}</td>
+        <td>{rec['source']}</td>
+        <td>{rec['cite']}</td>
+      </tr>\n"""
+
+    trait_headers = "".join(
+        f"<th>{field_display_name(f)}</th>"
+        for f in d.get("display_trait_fields", [])
+    )
+    n_recent = len(d.get("recent_records", []))
+    recent_section = ""
+    if n_recent > 0:
+        recent_section = f"""
+<!-- Recent Records Feed -->
+<div class="section-header">Recent Records (last {n_recent})</div>
+<div class="record-feed">
+  <div class="feed-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Species</th>
+          <th>Family</th>
+          {trait_headers}
+          <th>Confidence</th>
+          <th>Source</th>
+          <th>Paper</th>
+        </tr>
+      </thead>
+      <tbody>
+{recent_records_rows}      </tbody>
+    </table>
+  </div>
+</div>
+"""
 
     # Build trait-specific chart sections
     trait_html_blocks = []
@@ -647,6 +739,51 @@ def _build_html(**d):
   .chart-card.wide {{
     grid-column: 1 / -1;
   }}
+  .record-feed {{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0;
+    margin-bottom: 28px;
+    overflow: hidden;
+  }}
+  .record-feed table {{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }}
+  .record-feed th {{
+    background: #0f172a;
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 10px 12px;
+    text-align: left;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }}
+  .record-feed td {{
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+  }}
+  .record-feed tr:hover td {{
+    background: rgba(56, 189, 248, 0.05);
+  }}
+  .record-feed .species {{ font-style: italic; color: var(--text); }}
+  .record-feed .conf-high {{ color: var(--green); font-weight: 600; }}
+  .record-feed .conf-mid {{ color: var(--amber); font-weight: 600; }}
+  .record-feed .conf-low {{ color: var(--red); font-weight: 600; }}
+  .record-feed .flagged {{ color: var(--red); }}
+  .record-feed .feed-scroll {{
+    max-height: 420px;
+    overflow-y: auto;
+  }}
   @media (max-width: 900px) {{
     .chart-grid {{ grid-template-columns: 1fr; }}
   }}
@@ -699,6 +836,8 @@ def _build_html(**d):
     <div class="fill" style="width: {queries_pct}%">{queries_pct}%</div>
   </div>
 </div>
+
+{recent_section}
 
 <!-- Core Charts -->
 <div class="section-header">Collection Progress</div>

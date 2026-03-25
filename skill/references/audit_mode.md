@@ -136,7 +136,7 @@ After the audit pass completes, print:
 ```
 
 This summary quantifies how much the self-auditing system improves data
-quality over time — essential for the MEE manuscript and for scientific
+quality over time — essential for the manuscript and for scientific
 reproducibility.
 
 ---

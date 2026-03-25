@@ -1,5 +1,5 @@
 {
-  "skills": ["traittrawler"],
+  "skills": ["trait-trawler"],
   "query": "These five abstracts are 'near misses'—papers that appear superficially relevant but should NOT trigger data extraction for our Coleoptera karyotype collection. Classify each as unlikely relevant or uncertain, and explain why extraction should not occur despite apparent topic overlap.",
   "files": [
     {

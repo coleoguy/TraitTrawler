@@ -1,5 +1,16 @@
 # Session Management
 
+## Contents
+
+- [§9. State Management](#9-state-management) — file schemas, update procedure, context management, session duration, pause triggers
+- [§10. Progress Reporting](#10-progress-reporting) — rolling update format, zero-record papers, large PDF progress
+- [§10b. Usage Tracking](#10b-usage-tracking) — token estimation, per-tier tracking, efficiency metrics
+- [§11. Session End](#11-session-end) — summary format, verification, QC, knowledge review, dashboard
+- [§12. Error Handling](#12-error-handling) — rate limits, timeouts, malformed state, write failures
+- [§13. Dashboard](#13-dashboard) — when/how to regenerate, what it shows
+
+---
+
 ## 9. State Management
 
 ### 9a. State file schemas
@@ -190,6 +201,138 @@ Large PDF progress:
 
 ---
 
+## 10b. Usage Tracking
+
+Track model usage per session to enable cost estimation and cross-study
+comparisons. **Tokens** are the universal unit of LLM compute — all
+major providers (Anthropic, OpenAI, Google) use byte-pair encoding where
+1 token ≈ 4 characters ≈ 0.75 English words. Token counts are comparable
+(within ~5%) across providers even though dollar-per-token prices differ
+by provider, model tier, and subscription type.
+
+TraitTrawler tracks **token volumes by model tier** — the numbers that
+are stable and comparable — rather than dollar amounts, which change
+frequently. Users apply their own provider's published rates to estimate
+cost.
+
+### What to track
+
+Maintain a running tally for the current session:
+
+```python
+usage = {
+    "haiku_calls": 0,           # subagent calls at haiku tier
+    "sonnet_calls": 0,          # subagent calls or direct work at sonnet tier
+    "opus_calls": 0,            # escalation calls at opus tier
+    "pages_processed": 0,       # total PDF pages read
+    "records_written": 0,       # records added to results.csv
+    "est_input_tokens": 0,      # estimated total input tokens (all tiers)
+    "est_output_tokens": 0,     # estimated total output tokens (all tiers)
+    "est_input_tokens_by_tier": {   # breakdown for cost estimation
+        "haiku": 0,
+        "sonnet": 0,
+        "opus": 0
+    },
+    "est_output_tokens_by_tier": {
+        "haiku": 0,
+        "sonnet": 0,
+        "opus": 0
+    }
+}
+```
+
+### Estimating tokens per call
+
+The agent cannot measure exact token usage, but can estimate reliably
+from document size. Use these conversion factors:
+
+| Input type | Tokens per unit | How to measure |
+|---|---|---|
+| PDF page (text) | ~800 tokens/page | `pages_processed` from pdfplumber |
+| PDF page (vision/scanned) | ~1,600 tokens/page | Higher due to image encoding |
+| Abstract (text) | ~300 tokens | Fixed estimate |
+| Search query batch | ~200 tokens | Fixed estimate |
+| Guide.md + config context | ~2,000 tokens | Injected per extraction call |
+| Agent output (triage) | ~100 tokens/paper | Classification + reasoning |
+| Agent output (extraction) | ~500 tokens/paper | Records as structured data |
+
+**After each call, estimate and accumulate tokens:**
+
+- **Haiku search batch** (5–10 queries): ~200 input + ~3,000 output
+- **Haiku triage batch** (15 abstracts): ~(300 × 15 + 2,000) = ~6,500
+  input + ~1,500 output
+- **Sonnet extraction** (1 paper): ~(800 × pages + 2,000) input +
+  ~(500 × records_from_paper) output
+- **Opus escalation** (1 paper): same formula as sonnet, different tier
+
+### Session summary line
+
+Add a usage block to the session summary (§11):
+
+```
+── Usage ──────────────────────────
+ Model calls   : haiku ×{N}  sonnet ×{N}  opus ×{N}
+ Pages read    : {N}
+ Est. tokens   : {est_input_tokens:,} in / {est_output_tokens:,} out
+ Records/call  : {records_written / (sonnet_calls + opus_calls):.1f}
+ Tokens/record : {(est_input_tokens + est_output_tokens) / records_written:,.0f}
+```
+
+**Key efficiency metrics:**
+- `Records/call` — how many validated records per extraction-tier call.
+  Higher is better (table-heavy papers score high).
+- `Tokens/record` — total tokens per validated record. Lower is better.
+  This is the number most comparable across studies and providers.
+
+### Logging
+
+Append usage to the session-end entry in `state/run_log.jsonl`:
+
+```json
+{
+  "event": "session_end",
+  "usage": {
+    "haiku_calls": 14,
+    "sonnet_calls": 23,
+    "opus_calls": 2,
+    "pages_processed": 487,
+    "records_written": 89,
+    "est_input_tokens": 892000,
+    "est_output_tokens": 156000,
+    "est_input_tokens_by_tier": {"haiku": 112000, "sonnet": 740000, "opus": 40000},
+    "est_output_tokens_by_tier": {"haiku": 36000, "sonnet": 108000, "opus": 12000}
+  }
+}
+```
+
+### Cumulative usage report
+
+The dashboard generator reads `run_log.jsonl` session-end entries and
+shows cumulative usage across all sessions:
+
+```
+── Cumulative Usage (all sessions) ──
+ Total tokens  : {N:,} in / {N:,} out
+   haiku       : {N:,} in / {N:,} out
+   sonnet      : {N:,} in / {N:,} out
+   opus        : {N:,} in / {N:,} out
+ Total records : {N}
+ Tokens/record : {N:,} (lifetime average)
+```
+
+### Why tokens, not dollars
+
+Token counts are the stable, provider-neutral measure of compute. Dollar
+costs change frequently (trending downward), vary across providers,
+and depend on whether you are on API pricing (pay-per-token) or a
+subscription plan (flat monthly fee, marginal cost ≈ $0). By logging
+tokens, TraitTrawler's efficiency numbers remain valid and comparable
+regardless of when, where, or how the agent is run. Anyone can multiply
+tokens × their provider's current $/million-token rate to get a cost
+estimate.
+
+---
+
 ## 11. Session End
 
 Print a summary when the user stops, `batch_size` is reached, or searches are exhausted.
@@ -218,21 +361,35 @@ Session summary format:
  Queue remaining               : 4
  Queries remaining             : 608 / 730
  Discoveries this session      : {N} (see state/discoveries.jsonl)
+── Usage ──────────────────────────
+ Model calls                   : haiku ×{N}  sonnet ×{N}  opus ×{N}
+ Pages read                    : {N}
+ Est. tokens                   : {N} in / {N} out
+ Records / extraction call     : {N}
+ Tokens / record               : {N}
 ══════════════════════════════════════
 ```
 
 At session end, also:
 1. Run `verify_session.py` and report any issues found.
-2. Run the domain knowledge review (§14) if discoveries were logged.
-3. Regenerate the dashboard.
-4. Check whether an audit is due: if `audit_config.auto_audit` is `true` and
+2. Run `scripts/statistical_qc.py --project-root .` and print the QC summary
+   (species sampled / Chao1 estimate, mean confidence, outliers, accumulation
+   slope). See [statistical_qc.md](references/statistical_qc.md) §17e.
+3. Run the domain knowledge review (§14) if discoveries were logged.
+   See [knowledge_evolution.md](references/knowledge_evolution.md).
+4. Regenerate the dashboard.
+5. Check whether an audit is due: if `audit_config.auto_audit` is `true` and
    the session count (from `run_log.jsonl`) is a multiple of
    `audit_config.auto_audit_interval` (default: 5), offer:
    `🔍 Audit due — {N} records are candidates for re-examination. Run audit? [y/n]`
+6. Check whether a campaign report is due: if session count is a multiple of
+   `campaign_planning.auto_report_interval` (default: 5) and >= 3 sessions,
+   offer: `📊 Campaign report available. Generate? [y/n]`
+   See [campaign_planning.md](references/campaign_planning.md).
 
 Append session-end entry to `state/run_log.jsonl`:
 ```json
-{"timestamp": "2026-03-24T14:45:30Z", "session_id": "2026-03-24T14:30:00Z", "event": "session_end", "papers_processed": 23, "records_added": 89, "flagged_for_review": 2, "discoveries": 3}
+{"timestamp": "2026-03-24T14:45:30Z", "session_id": "2026-03-24T14:30:00Z", "event": "session_end", "papers_processed": 23, "records_added": 89, "flagged_for_review": 2, "discoveries": 3, "usage": {"haiku_calls": 14, "sonnet_calls": 23, "opus_calls": 2, "pages_processed": 487, "records_written": 89, "est_input_tokens": 892000, "est_output_tokens": 156000, "est_input_tokens_by_tier": {"haiku": 112000, "sonnet": 740000, "opus": 40000}, "est_output_tokens_by_tier": {"haiku": 36000, "sonnet": 108000, "opus": 12000}}}
 ```
 
 ---

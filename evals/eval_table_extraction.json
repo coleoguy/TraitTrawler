@@ -1,5 +1,5 @@
 {
-  "skills": ["traittrawler"],
+  "skills": ["trait-trawler"],
   "query": "Extract all karyotype data from the provided paper. Use a two-pass strategy: first enumerate all species in tables, then extract structured data. Generate a CSV with columns: Species, 2n, Sex Chromosome System, Locality.",
   "files": [
     {
