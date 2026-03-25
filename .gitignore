@@ -9,11 +9,7 @@ results.csv
 leads.csv
 dashboard.html
 
-# Packaged skill (built artifact)
-# Download pre-built .skill from GitHub Releases, or build from skill/ with:
-#   cd skill && zip -r ../traittrawler.skill SKILL.md dashboard_generator.py references/ && cd ..
-*.skill
-*.skill.bak
+
 
 # Python cache
 __pycache__/
