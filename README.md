@@ -271,7 +271,7 @@ TraitTrawler/
 │   └── sample_results.csv        # Example output (5 records)
 │
 ├── skill/                        # Skill source (taxon-agnostic)
-│   ├── SKILL.md                  # Core agent specification
+│   ├── SKILL.md                  # Core agent specification (499 lines)
 │   ├── dashboard_generator.py    # Generates dashboard.html
 │   ├── verify_session.py         # Post-batch deterministic verification
 │   ├── export_dwc.py             # Darwin Core Archive export
