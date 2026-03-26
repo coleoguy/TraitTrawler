@@ -6,22 +6,16 @@ description: >
   Autonomous scientific literature mining agent that builds structured trait
   databases (karyotype, morphometric, life-history, any phenotype) from the
   primary literature. Searches PubMed, OpenAlex, bioRxiv, and Crossref;
-  retrieves full-text PDFs via open-access cascades and institutional proxies
-  (Chrome); extracts structured data from prose, tables, and catalogues;
-  resolves taxonomy against GBIF; validates and writes to CSV with full
-  provenance. Includes statistical QC (Chao1, Grubbs outlier detection),
-  bidirectional citation chaining, self-improving domain knowledge,
-  multi-session campaign planning, confidence calibration (isotonic
-  regression with ECE metrics), extraction benchmarking (precision/recall/F1
-  per field), multi-agent consensus extraction, chain-of-thought traces,
-  active learning for triage, adaptive tool selection, cross-project
-  transfer learning, knowledge graph provenance export (JSON-LD), and
-  formal reproducibility verification. Use when the user wants to: collect trait
-  data, mine the literature, run a session, trawl for data, build a trait
-  database, process papers, extract data from papers, add records, fetch PDFs,
-  run QC, plan the campaign, audit the database, or continue collecting. Do
-  NOT use for casual literature review (use deepscholar), simple data
-  exploration, or one-off paper summaries.
+  retrieves full-text PDFs via open-access cascades and institutional proxies;
+  extracts structured data from prose, tables, and catalogues; resolves
+  taxonomy against GBIF; validates and writes to CSV with full provenance.
+  Includes statistical QC (Chao1, Grubbs), citation chaining, self-improving
+  domain knowledge, confidence calibration, multi-agent consensus extraction,
+  and formal reproducibility. Use when the user wants to: collect trait data,
+  mine the literature, run a session, build a trait database, process papers,
+  extract data, run QC, audit the database, or continue collecting. Do NOT use
+  for casual literature review (use deepscholar), simple data exploration, or
+  one-off paper summaries.
 allowed-tools: >
   Bash(python3:*) Bash(pip:*) Bash(cp:*) Bash(mkdir:*) Bash(wc:*) Bash(ls:*)
   Bash(open:*) Bash(pkill:*) Bash(sleep:*)
@@ -159,11 +153,8 @@ auto-generate `extraction_examples.md`. The first real session starts with
 battle-tested domain knowledge and a warm queue.
 
 **After calibration completes**, write a checkpoint flag to
-`state/calibration_complete.json`:
-```json
-{"completed": true, "date": "2026-03-25", "seed_papers": 4, "records": 45}
-```
-Then tell the user:
+`state/calibration_complete.json` (keys: `completed`, `date`, `seed_papers`,
+`records`). Then tell the user:
 
 ```
 Calibration complete — config files, guide.md, and extraction examples are
@@ -246,7 +237,7 @@ for script in dashboard_generator.py verify_session.py export_dwc.py; do
   [ ! -f "$script" ] && cp "${CLAUDE_SKILL_DIR}/$script" "$script" 2>/dev/null || true
 done
 mkdir -p scripts
-for script in statistical_qc.py taxonomy_resolver.py calibration.py benchmark.py knowledge_graph_export.py reproduce.py dashboard_server.py; do
+for script in statistical_qc.py taxonomy_resolver.py calibration.py benchmark.py knowledge_graph_export.py reproduce.py dashboard_server.py csv_writer.py api_utils.py state_utils.py; do
   [ ! -f "scripts/$script" ] && cp "${CLAUDE_SKILL_DIR}/scripts/$script" "scripts/$script" 2>/dev/null || true
 done
 mkdir -p state/extraction_traces state/snapshots
@@ -266,6 +257,9 @@ mkdir -p state/extraction_traces state/snapshots
 | `scripts/knowledge_graph_export.py` | JSON-LD provenance export, cross-paper conflict detection | `python3 scripts/knowledge_graph_export.py --project-root . --format both` |
 | `scripts/reproduce.py` | Reproducibility verification and session drift analysis | `python3 scripts/reproduce.py --project-root . --summary` |
 | `scripts/dashboard_server.py` | Live dashboard with SSE updates and command input | `python3 scripts/dashboard_server.py --project-root . &` then `open http://localhost:8347` |
+| `scripts/csv_writer.py` | Schema-enforced CSV writes with atomic operations | Used as library; standalone: `python3 scripts/csv_writer.py --project-root .` |
+| `scripts/api_utils.py` | Retry/backoff and rate limiting for all APIs | Used as library; info: `python3 scripts/api_utils.py --rate-limits` |
+| `scripts/state_utils.py` | Atomic state file reads/writes with backup recovery | Standalone: `python3 scripts/state_utils.py --project-root . --check` |
 
 Then regenerate the dashboard and start the live dashboard server:
 
@@ -344,7 +338,7 @@ After all local PDFs, offer to continue with search mode or stop.
 
 Repeat until user stops, session_target reached, or searches exhausted:
 
-**→ Search → Triage → Fetch → Extract → Taxonomy Check → Validate → Write → Update state → Report → repeat**
+**→ Search → Triage → Parallel Extract → Update state → Report → repeat**
 
 For each stage, read the relevant reference file and use the model per §2:
 - **Search & Triage** (haiku): [search_and_triage.md](references/search_and_triage.md)
@@ -352,10 +346,15 @@ For each stage, read the relevant reference file and use the model per §2:
 - **Taxonomy check** (inline): [taxonomy.md](references/taxonomy.md)
 - **State & Reporting** (haiku): [session_management.md](references/session_management.md)
 
-Aim to fully process 5–10 papers per reporting cycle.
+### 3c. Parallel paper processing
 
-**Every 10 papers processed**, regenerate the dashboard so the browser
-auto-refresh picks up new data:
+After triage, dispatch **up to 3 papers concurrently** to parallel sonnet
+subagents. Each runs the full pipeline (fetch → extract → taxonomy → validate
+→ write) independently for ~3x throughput. Full coordinator pattern, subagent
+prompt template, and fallback rules in
+[extraction_and_validation.md](references/extraction_and_validation.md) §3c.
+
+**Every 10 papers processed**, regenerate the dashboard:
 ```bash
 python3 dashboard_generator.py --project-root .
 ```
@@ -440,19 +439,13 @@ chaining). Full spec in [campaign_planning.md](references/campaign_planning.md).
 
 ## 19. Confidence Calibration
 
-Raw extraction confidence scores are heuristic-based (0.9 for full-text
-explicit values, 0.4 for abstracts). This module transforms them into
-calibrated probabilities using post-hoc isotonic regression on benchmark
-data. When the system reports 0.85 calibrated confidence, records are
-actually correct ~85% of the time.
-
-**Script**: `scripts/calibration.py` computes ECE (Expected Calibration
-Error), fits per-field calibration models, and generates reliability
-diagrams. Full spec in
+Transforms heuristic confidence scores into calibrated probabilities via
+isotonic regression. `scripts/calibration.py` computes ECE, fits per-field
+models, generates reliability diagrams. Full spec in
 [confidence_calibration.md](references/confidence_calibration.md).
 
 **Triggers**: automatic at session end if calibration data exists;
-on-demand via "calibrate", "check calibration", "reliability diagram".
+"calibrate", "check calibration", "reliability diagram".
 
 ---
 
@@ -475,28 +468,23 @@ paper", "run benchmark", "check accuracy".
 
 ## 21. Multi-Agent Consensus Extraction
 
-When a standard extraction produces low-confidence results (mean
-confidence < 0.7), run 2 additional independent extraction passes with
-different prompting strategies: (1) enumeration-first, (2) adversarial
-verification. Resolve by field-level voting — if 2/3 passes agree,
-accept with boosted confidence; if all disagree, flag for human review.
-
-**Cost control**: Consensus triples extraction cost per triggered paper.
-Configurable trigger threshold and per-session cap. Full spec in
+When mean confidence < 0.7, run 2 additional independent passes
+(enumeration-first, adversarial) and resolve by field-level 2/3 vote; ties
+flagged for human review. Triples cost per triggered paper — configurable
+threshold and per-session cap. Full spec in
 [consensus_extraction.md](references/consensus_extraction.md).
 
-**Triggers**: automatic when mean confidence < threshold; user-triggered
-via "run consensus", "verify extraction", "double-check this paper".
+**Triggers**: automatic on low confidence; "run consensus", "verify extraction",
+"double-check this paper".
 
 ---
 
 ## 22–28. Advanced Features
 
-Chain-of-thought traces (§22), active learning for triage (§23),
-adaptive tool selection (§24), cross-project transfer learning (§25),
-knowledge graph provenance export (§26), streaming progress &
-interruptible execution (§27), and formal reproducibility (§28). Full
-spec in [advanced_features.md](references/advanced_features.md).
+Chain-of-thought traces, active learning for triage, adaptive tool selection,
+cross-project transfer learning, knowledge graph provenance export, streaming
+progress, and formal reproducibility. Full spec in
+[advanced_features.md](references/advanced_features.md).
 
 ---
 

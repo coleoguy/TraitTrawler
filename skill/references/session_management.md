@@ -81,7 +81,47 @@ After every paper (success or failure):
 - Append event to `state/run_log.jsonl`
 - Write all files immediately — session can end anytime without data loss
 
-Use atomic writes (write to `.tmp` then `os.rename`) to avoid corruption.
+**Use `scripts/state_utils.py` for ALL state file operations.** This module
+provides atomic writes (write-to-temp + rename), JSON validation on read,
+and automatic backup/recovery:
+
+```python
+import sys
+sys.path.insert(0, "scripts")
+from state_utils import (
+    update_processed, remove_from_queue, log_event,
+    safe_read_json, safe_write_json, append_jsonl
+)
+
+# After processing a paper:
+update_processed("state", doi, {
+    "title": paper_title,
+    "triage": "likely",
+    "outcome": "extracted",
+    "records": 3,
+    "date": "2026-03-24"
+})
+remove_from_queue("state", doi)
+log_event("state", {
+    "session_id": session_id,
+    "event": "paper_processed",
+    "doi": doi,
+    "records": 3
+})
+```
+
+Every write creates a `.bak` backup before overwriting. If a state file is
+corrupt on read, the utility automatically falls back to the backup. If both
+are corrupt, it returns a safe default and warns the user.
+
+**At session start**, run an integrity check:
+```python
+from state_utils import check_state_integrity
+result = check_state_integrity(".")
+if not result["ok"]:
+    for issue in result["issues"]:
+        print(f"  ⚠ {issue}")
+```
 
 ### 9b-2. Context management (critical for long sessions)
 
@@ -462,12 +502,52 @@ Append session-end entry to `state/run_log.jsonl`:
 
 ## 12. Error Handling
 
-- **Rate limits (429)**: back off 30s, retry once; if still failing, skip source.
-- **PDF download timeout**: skip after 60s; note URL for retry next session.
-- **Malformed state file JSON**: warn user, show raw content, do not overwrite.
-- **results.csv write failure**: stop immediately — never silently drop records.
-- **Chrome navigation fails**: mark `pdf_source: browser_failed`, fall through to abstract.
-- **Proxy returns wrong content-type**: don't save as PDF; log and continue.
+**Use `scripts/api_utils.py` for ALL external API calls.** The module
+provides automatic retry with exponential backoff and per-API rate limiting:
+
+```python
+import sys
+sys.path.insert(0, "scripts")
+from api_utils import resilient_fetch, fetch_unpaywall, fetch_openalex_work, APIError
+
+# Automatic retry (3 attempts, exponential backoff 1s→2s→4s)
+try:
+    data = resilient_fetch(
+        f"https://api.openalex.org/works/doi:{doi}?mailto={email}",
+        api_name="openalex",
+        log_file="state/run_log.jsonl"
+    )
+except APIError as e:
+    print(f"API failed after {e.attempts} attempts: {e}")
+    # Fall through to next source
+
+# Convenience wrappers with built-in rate limiting:
+data = fetch_unpaywall(doi, email, log_file="state/run_log.jsonl")
+data = fetch_openalex_work(doi, email, log_file="state/run_log.jsonl")
+```
+
+**Rate limits enforced per API** (see `api_utils.py` → `RATE_LIMITS`):
+
+| API | Requests/sec | Notes |
+|-----|-------------|-------|
+| PubMed (with key) | 3/s | NCBI E-utilities policy |
+| PubMed (no key) | 1/s | Throttled without api_key |
+| OpenAlex (polite) | 10/s | With mailto parameter |
+| Crossref (polite) | 50/s | With mailto parameter |
+| GBIF | 3/s | Empirically safe |
+| Unpaywall | 1/s | Rate-limited by email param |
+| Europe PMC | 3/s | Conservative estimate |
+| Semantic Scholar | 1/s | Without API key |
+| CORE | 1/s | Conservative estimate |
+
+**Error handling rules:**
+- **Rate limits (429)**: automatic retry with exponential backoff + Retry-After header
+- **Server errors (500-504)**: automatic retry up to 3 attempts
+- **PDF download timeout**: skip after 60s; note URL for retry next session
+- **Malformed state file JSON**: `state_utils.py` auto-recovers from `.bak` backup
+- **results.csv write failure**: `csv_writer.py` raises RuntimeError — stop immediately
+- **Chrome navigation fails**: mark `pdf_source: browser_failed`, fall through to abstract
+- **Proxy returns wrong content-type**: don't save as PDF; log and continue
 
 ---
 

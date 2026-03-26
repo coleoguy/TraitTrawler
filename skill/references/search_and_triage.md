@@ -8,6 +8,22 @@ Run each query against multiple sources to maximize coverage. Different database
 index different journals — PubMed is biomedical-biased, OpenAlex covers the long
 tail of taxonomy and ecology journals, Crossref catches regional publications.
 
+**Rate limiting**: All API calls are rate-limited by `scripts/api_utils.py`.
+When using MCP tools, the tools handle their own rate limiting. When falling
+back to direct API calls via WebFetch or Python, use the `resilient_fetch()`
+function which enforces per-API rate limits automatically:
+
+| API | Requests/sec | Pool access |
+|-----|-------------|-------------|
+| PubMed | 3/s (with key) / 1/s (without) | Add `api_key` to E-utilities URL |
+| OpenAlex | 10/s (polite) / 1/s (default) | Add `mailto={contact_email}` |
+| Crossref | 50/s (polite) / 1/s (default) | Add `mailto:{contact_email}` header |
+| bioRxiv | via MCP or Crossref API | N/A |
+
+**Always use the `contact_email` from `collector_config.yaml`** in API calls
+to access polite/priority pools. This is the difference between 1 req/s and
+10+ req/s on most APIs.
+
 **PubMed** (primary): Use the PubMed MCP `search_articles`. For each result,
 call `get_article_metadata` to get DOI, abstract, journal.
 

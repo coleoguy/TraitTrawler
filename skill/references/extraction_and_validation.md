@@ -2,6 +2,7 @@
 
 ## Contents
 
+- [§3c. Parallel Paper Processing](#3c-parallel-paper-processing) — coordinator pattern, subagent prompt, fallback
 - [§5. Full-Text Fetch](#5-full-text-fetch) — OA cascade, proxy, scanned PDFs, large PDFs, abstract fallback, leads
 - [§6. PDF Naming and Organization](#6-pdf-naming-and-organization) — file naming convention and subdirectories
 - [§7. Extraction](#7-extraction) — paper classification, two-pass table strategy, field definitions, domain rules, provenance
@@ -170,6 +171,44 @@ Create subdirectories as needed: `mkdir -p pdfs/{Subfolder}`.
 ---
 
 ## 7. Extraction
+
+### 7-pre. Structured output for extraction
+
+When extracting records from a paper, use **structured output** (tool_use or
+JSON mode) to guarantee valid, schema-conforming results. This eliminates
+parsing errors and enforces field types at generation time.
+
+**Schema generation**: At project setup (§0), generate a JSON schema from
+`collector_config.yaml` → `output_fields` and save it to
+`state/extraction_schema.json`. The schema defines:
+- Required fields (species, extraction_confidence)
+- Field types (string, number, boolean)
+- Enum constraints (source_type, pdf_source, sex values)
+- Numeric ranges (from validation_rules)
+
+**Extraction prompt pattern**: When spawning extraction subagents, include:
+
+```
+Extract all records from this paper as a JSON array. Each record must
+conform to this schema:
+
+{schema_json}
+
+Return ONLY valid JSON — an array of objects. Each object represents one
+record (one species × trait observation). Include all fields; use empty
+string "" for missing values, not null.
+
+Example record:
+{example_from_extraction_examples_md}
+```
+
+The calling code then parses the JSON array, validates each record using
+`scripts/csv_writer.py` → `validate_record()`, and writes accepted records
+atomically.
+
+**Fallback**: If the extraction subagent returns malformed JSON (e.g., due
+to very long tables), split the text into chunks of ~50 rows and re-extract
+each chunk. Log the fallback to `run_log.jsonl`.
 
 ### 7a. Classify the paper
 
@@ -377,89 +416,44 @@ the filename `results.csv`** — the dashboard, verification script, state sync,
 campaign planner, and taxonomy resolver all depend on this name.
 Use only the fields listed in `output_fields`. Add `session_id` to every record.
 
-### 8a. Deduplication
+### 8-pre. Schema-enforced writing via csv_writer.py
 
-Before appending, perform a deduplication check. A record is a duplicate if
-an existing record has the **same species AND identical values for ALL
-trait-specific fields**. The dedup key does NOT include DOI — this means that
-if Paper A and Paper B both report the exact same trait values for the same
-species, only one record is kept. Different trait values for the same species
-from different papers are NOT duplicates — they represent independent
-observations (potentially real biological variation).
-
-Trait-specific fields are all fields in `output_fields` that are not in the
-core field set (paper metadata, taxonomy, data quality, provenance). The
-agent identifies them from `collector_config.yaml`.
+**Always use `scripts/csv_writer.py`** for all CSV writes. This module:
+- Validates every record against the project schema before writing
+- Rejects records missing required fields (species, extraction_confidence)
+- Flags records with out-of-range values, type errors, or consistency issues
+- Deduplicates by (species + trait fields) — same logic as before
+- Uses atomic writes (temp file + rename) to prevent corruption on crash
 
 ```python
-import csv, os
+import sys
+sys.path.insert(0, "scripts")
+from csv_writer import SchemaEnforcedWriter
 
 rows = [...]        # extracted records (after taxonomy check)
 session_id = "2026-03-24T14:30:00Z"  # from §1c
-path = "results.csv"
 
-# CRITICAL: Read fieldnames from the EXISTING CSV header, not from config.
-# This prevents column order drift if config parsing varies between writes.
-if os.path.exists(path):
-    with open(path, "r") as f:
-        reader = csv.DictReader(f)
-        fieldnames = list(reader.fieldnames)
-else:
-    fieldnames = [...]  # from collector_config.yaml output_fields (first write only)
+writer = SchemaEnforcedWriter(project_root=".")
+report = writer.append_records(rows, session_id=session_id)
 
-# Core fields excluded from dedup key
-core_fields = {
-    "doi", "paper_title", "paper_authors", "first_author", "paper_year",
-    "paper_journal", "session_id", "species", "family", "subfamily", "genus",
-    "extraction_confidence", "flag_for_review", "source_type", "pdf_source",
-    "pdf_filename", "pdf_url", "notes", "processed_date", "collection_locality",
-    "country", "source_page", "source_context", "extraction_reasoning",
-    "accepted_name", "gbif_key", "taxonomy_note",
-    "audit_status", "audit_session", "audit_prior_values"
-}
-trait_fields = [f for f in fieldnames if f not in core_fields]
-
-for row in rows:
-    row['session_id'] = session_id
-
-# Build dedup keys from existing records: (species, trait_value_tuple)
-existing_keys = set()
-if os.path.exists(path):
-    with open(path, "r") as f:
-        reader = csv.DictReader(f)
-        for existing_row in reader:
-            key = (existing_row.get('species', ''),
-                   tuple(existing_row.get(k, '') for k in trait_fields))
-            existing_keys.add(key)
-
-rows_to_write = []
-for row in rows:
-    key = (row.get('species', ''),
-           tuple(row.get(k, '') for k in trait_fields))
-    if key not in existing_keys:
-        rows_to_write.append(row)
-        existing_keys.add(key)  # prevent intra-batch duplicates too
-
-file_exists = os.path.exists(path)
-with open(path, "a", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-    if not file_exists:
-        writer.writeheader()
-    writer.writerows(rows_to_write)
+print(f"CSV write: {report.summary()}")
+if report.rejected:
+    print(f"WARNING: {report.rejected} record(s) rejected by schema validation")
+    for idx, error in report.errors:
+        if error.action == "drop":
+            print(f"  Record {idx}: {error}")
 ```
 
-Use `extrasaction="ignore"` so unknown fields never crash the write.
-**Always use `csv.DictWriter`** — never write CSV by string concatenation
-or manual comma-joining. DictWriter handles quoting of values that contain
-commas, newlines, or quotes.
+The writer handles deduplication, validation, flagging, and atomic writes
+in a single call. **Do not bypass it** — all record writes must go through
+`SchemaEnforcedWriter.append_records()`.
 
 **Code generation guardrails** — when writing batch scripts:
 - Never set the same dict key twice in a Python literal or loop. Build each
   record dict once; use a single assignment for `flag_for_review`, `session_id`,
   and `processed_date` — not a base dict plus a per-record override.
-- Always use the template above as the starting point. If adapting it for a
-  large batch (>10 records), still use the same structure: build `rows` list
-  first, dedup, then single `writer.writerows()` call.
+- Always use the `SchemaEnforcedWriter` — never write CSV by string concatenation,
+  manual comma-joining, or raw `csv.DictWriter`.
 
 ### 8b. State sync verification
 
@@ -519,3 +513,53 @@ python3 verify_session.py --project-root .
 Read the JSON report at `state/verification_report.json`. If errors are found,
 report them to the user and offer to review. Do not silently continue past
 verification failures.
+
+---
+
+## 3c. Parallel Paper Processing
+
+After triage produces a batch of likely/uncertain papers, dispatch **up to 3
+papers concurrently** to parallel subagents. Each paper is independent after
+triage — parallel dispatch provides ~3x throughput with no data-dependency
+risk.
+
+**Coordinator pattern**:
+1. Pull the next 3 papers from `queue.json`
+2. Spawn 3 Agent subagents (model: sonnet), each with:
+   - The paper metadata (doi, title, abstract)
+   - The project's `guide.md` content
+   - The `collector_config.yaml` output_fields and validation_rules
+   - Instructions to use `csv_writer.py`, `state_utils.py`, `api_utils.py`
+3. Wait for all 3 to complete
+4. Each subagent returns a JSON summary `{records_added, flags, errors, doi, pdf_source}`; merge into rolling progress report
+
+**Subagent prompt template**:
+```
+You are a TraitTrawler extraction worker. Process this single paper:
+  DOI: {doi}
+  Title: {title}
+
+Project config:
+  Output fields: {output_fields}
+  Validation rules: {validation_rules}
+
+Domain knowledge:
+{guide_md_content}
+
+Pipeline: Fetch PDF (§5) → Extract records (§7) → Taxonomy check (§16) →
+Validate (§7f) → Write via scripts/csv_writer.py (§8)
+
+Use scripts/api_utils.py for all API calls (retry + rate limiting).
+Use scripts/state_utils.py for state file updates (atomic writes).
+Use scripts/csv_writer.py for CSV writes (schema enforcement).
+
+Return a JSON summary: {records_added, flags, errors, doi, pdf_source}
+```
+
+**Fallback**: If parallel dispatch fails (context limits, MCP unavailability),
+fall back to serial processing — one paper at a time with the same pipeline.
+
+**Every 10 papers processed**, regenerate the dashboard:
+```bash
+python3 dashboard_generator.py --project-root .
+```

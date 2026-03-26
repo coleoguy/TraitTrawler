@@ -1,0 +1,178 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint with ruff
+        run: |
+          ruff check skill/scripts/ tests/ \
+            --select E,F,W \
+            --ignore E501,W503 \
+            --exit-zero
+
+      - name: Check for syntax errors
+        run: |
+          ruff check skill/scripts/ tests/ \
+            --select E9,F63,F7,F82
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install pyyaml
+          pip install pdfplumber || true
+          pip install scipy matplotlib || true
+
+      - name: Run unit tests
+        run: python tests/test_verify_and_export.py
+
+      - name: Validate csv_writer imports
+        run: python -c "import sys; sys.path.insert(0, 'skill/scripts'); from csv_writer import SchemaEnforcedWriter; print('csv_writer OK')"
+
+      - name: Validate api_utils imports
+        run: python -c "import sys; sys.path.insert(0, 'skill/scripts'); from api_utils import resilient_fetch, RateLimiter; print('api_utils OK')"
+
+      - name: Validate state_utils imports
+        run: python -c "import sys; sys.path.insert(0, 'skill/scripts'); from state_utils import safe_read_json, safe_write_json; print('state_utils OK')"
+
+  validate-configs:
+    name: Validate Configs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pyyaml
+        run: pip install pyyaml
+
+      - name: Validate example YAML configs
+        run: |
+          python -c "
+          import yaml, sys
+          configs = [
+              'examples/coleoptera-karyotypes/collector_config.yaml',
+              'examples/avian-body-mass/collector_config.yaml',
+              'skill/references/config_template.yaml',
+          ]
+          for path in configs:
+              try:
+                  with open(path) as f:
+                      yaml.safe_load(f)
+                  print(f'  OK: {path}')
+              except Exception as e:
+                  print(f'  FAIL: {path}: {e}')
+                  sys.exit(1)
+          print('All YAML configs valid.')
+          "
+
+      - name: Validate example config.py files
+        run: |
+          python -c "
+          import sys
+          configs = [
+              'examples/coleoptera-karyotypes/config.py',
+              'examples/avian-body-mass/config.py',
+          ]
+          for path in configs:
+              try:
+                  ns = {}
+                  with open(path) as f:
+                      exec(f.read(), ns)
+                  terms = ns.get('SEARCH_TERMS', [])
+                  print(f'  OK: {path} ({len(terms)} search terms)')
+              except Exception as e:
+                  print(f'  FAIL: {path}: {e}')
+                  sys.exit(1)
+          print('All config.py files valid.')
+          "
+
+      - name: Validate SKILL.md frontmatter
+        run: |
+          python -c "
+          import yaml, sys
+          with open('skill/SKILL.md') as f:
+              content = f.read()
+          if not content.startswith('---'):
+              print('FAIL: SKILL.md missing frontmatter')
+              sys.exit(1)
+          end = content.index('---', 3)
+          frontmatter = yaml.safe_load(content[3:end])
+          required = ['name', 'model', 'description', 'allowed-tools', 'metadata']
+          for key in required:
+              if key not in frontmatter:
+                  print(f'FAIL: SKILL.md missing frontmatter key: {key}')
+                  sys.exit(1)
+          print(f'SKILL.md frontmatter valid (v{frontmatter[\"metadata\"][\"version\"]})')
+          "
+
+  validate-sample-csv:
+    name: Validate Sample CSV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Validate sample_results.csv against karyotype schema
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'skill/scripts')
+          from csv_writer import SchemaEnforcedWriter, validate_record, load_output_fields
+          import csv
+
+          fields = load_output_fields('examples/coleoptera-karyotypes')
+          from csv_writer import load_validation_rules
+          rules = load_validation_rules('examples/coleoptera-karyotypes')
+
+          with open('examples/sample_results.csv') as f:
+              reader = csv.DictReader(f)
+              errors = 0
+              for i, row in enumerate(reader):
+                  errs = validate_record(dict(row), fields, rules)
+                  drop_errs = [e for e in errs if e.action == 'drop']
+                  if drop_errs:
+                      for e in drop_errs:
+                          print(f'  Row {i+2}: {e}')
+                      errors += 1
+          if errors:
+              print(f'{errors} record(s) would be rejected')
+              sys.exit(1)
+          print('sample_results.csv passes schema validation')
+          "
