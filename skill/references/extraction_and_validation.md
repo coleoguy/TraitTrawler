@@ -239,6 +239,61 @@ For every extracted record, populate these provenance fields:
   "2n=20 stated in Table 2 row 3; sex system inferred from formula 9+Xyp").
   Leave blank when extraction was unambiguous.
 
+### 7e-2. Chain-of-thought extraction traces (§22)
+
+For every extracted record, also generate a full reasoning trace. This goes
+beyond the one-sentence `extraction_reasoning` — it captures the complete
+step-by-step logic, alternatives considered, and confidence rationale.
+
+When spawning extraction subagents, include in the prompt:
+
+```
+For each record you extract, also return a reasoning trace:
+{
+  "trace_id": "tr_{random_8_chars}",
+  "source_passage": "<verbatim text/table row, max 300 chars>",
+  "reasoning_chain": ["step 1: ...", "step 2: ...", ...],
+  "alternatives_considered": ["alternative 1...", ...],
+  "confidence_rationale": "<one sentence explaining the confidence score>"
+}
+```
+
+Store traces in `state/extraction_traces/{doi_hash}_{first_author}_{year}.json`.
+Link each CSV record to its trace via the `extraction_trace_id` field.
+
+See [advanced_features.md](references/advanced_features.md) §22 for the full
+trace format and verification interface.
+
+### 7e-3. Consensus extraction trigger (§21)
+
+After standard extraction completes for a paper, check whether consensus
+extraction should be triggered:
+
+1. Compute mean confidence across all records from this paper
+2. If mean confidence < `consensus_config.trigger_threshold` (default: 0.7)
+   AND full text is available AND 20+ papers have been processed:
+   - Run two additional extraction passes (enumeration-first + adversarial)
+   - Resolve by field-level voting
+   - Update records with consensus results
+
+See [consensus_extraction.md](references/consensus_extraction.md) §21 for
+the full three-pass protocol and resolution rules.
+
+### 7e-4. Confidence calibration application (§19)
+
+After extraction and before writing to CSV, apply the calibration model
+to transform raw confidence into calibrated probability:
+
+1. Check if `state/calibration_model.json` exists and has status "calibrated"
+2. If yes: look up the raw `extraction_confidence` in the calibration model
+   - Use per-field model if available for the specific trait field
+   - Otherwise use global model
+   - Write the result to `calibrated_confidence` field
+3. If no calibration model: leave `calibrated_confidence` empty
+
+See [confidence_calibration.md](references/confidence_calibration.md) §19
+for the calibration method and data sources.
+
 ---
 
 ## 7f. Record Validation

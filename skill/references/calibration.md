@@ -74,6 +74,26 @@ in the title for body measurements.
 
 ---
 
+## Step 2b — Benchmark holdout (§20)
+
+Before processing seed papers, designate 2-3 papers as **benchmark
+holdout papers**. These are processed through the normal extraction
+pipeline BUT the results are presented to the user for field-by-field
+verification, creating gold-standard data for accuracy measurement.
+
+```
+🎯 I'll use {N} of your seed papers for benchmarking — I'll extract
+   data and then ask you to verify each field. This creates a gold
+   standard for measuring extraction accuracy over time.
+```
+
+Process benchmark papers through extraction (§7), then present each
+record for verification per [benchmarking.md](references/benchmarking.md)
+§20b. Record results to `state/benchmark_gold.jsonl` and
+`state/calibration_data.jsonl`.
+
+The remaining seed papers are used for guide.md learning (Step 3 below).
+
 ## Step 3 — Calibration extraction
 
 Process each seed paper through the full extraction pipeline (§7), but with

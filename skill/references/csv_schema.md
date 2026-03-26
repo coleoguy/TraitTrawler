@@ -57,6 +57,21 @@ existing rows.
 | `audit_session` | string | Session ID of the audit that reviewed this record |
 | `audit_prior_values` | string | JSON of original values before correction; empty if confirmed/unaudited |
 
+### Calibrated confidence (added by §19)
+| Field | Type | Notes |
+|---|---|---|
+| `calibrated_confidence` | float | Post-hoc calibrated probability (0.0–1.0) using isotonic regression on benchmark data. Empty when calibration model not yet available (<10 observations). Unlike `extraction_confidence` (heuristic), this is empirically validated: a value of 0.85 means records at this level are correct ~85% of the time. |
+
+### Consensus extraction (added by §21)
+| Field | Type | Notes |
+|---|---|---|
+| `consensus_agreement` | string | Result of multi-agent consensus extraction: `full` (all passes agree), `partial` (some fields differ, resolved by voting), `disputed` (major disagreement, flagged for review), `pass2_only` (record found only by enumeration pass). Empty if consensus not triggered. |
+
+### Chain-of-thought trace (added by §22)
+| Field | Type | Notes |
+|---|---|---|
+| `extraction_trace_id` | string | Links to full reasoning trace in `state/extraction_traces/{doi_hash}_{author}_{year}.json`. Contains step-by-step reasoning chain, source passage, alternatives considered, and confidence rationale for every extracted value. |
+
 ## Trait-specific fields
 
 Defined per project in `collector_config.yaml` → `output_fields`.

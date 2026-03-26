@@ -106,6 +106,41 @@ The agent proposes; the human decides. Never silently edit `guide.md`,
 explicitly approve every change. This maintains scientific integrity
 and keeps the human as the domain authority.
 
+## 14g. Cross-project transfer learning (§25)
+
+At session end, during the knowledge review, check if any discoveries
+have cross-project value — patterns that would help a DIFFERENT
+TraitTrawler project extracting a different trait.
+
+**Transferable discovery types**:
+- `extraction_pattern`: journal-specific document structure (e.g.,
+  "Comparative Cytogenetics always puts data in Table 1")
+- `terminology`: domain terms with meanings not specific to this trait
+- Notation variants that are NOT trait-specific (e.g., "±" means SD)
+
+**Where to store**: `~/.claude/traittrawler_shared/` (configurable via
+`transfer_learning.shared_dir` in config). Write transferable discoveries
+with provenance:
+
+```json
+{
+  "source_project": "coleoptera-karyotypes",
+  "discovery_type": "extraction_pattern",
+  "journal": "Comparative Cytogenetics",
+  "pattern": "Data in Table 1 or 2; methods in section 2.1",
+  "confidence": 0.9,
+  "n_papers_observed": 15,
+  "date": "2026-03-24"
+}
+```
+
+**When to read**: During setup wizard (§0) or calibration (§0b), if the
+shared knowledge directory exists, load relevant entries and present to
+user for approval before incorporating into guide.md.
+
+See [advanced_features.md](references/advanced_features.md) §25 for
+the full transfer learning protocol.
+
 ## 14f. Mid-session correction
 
 When the user identifies a systematic error during an active session

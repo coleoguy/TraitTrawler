@@ -140,3 +140,32 @@ Report these at the session end:
 
 If the false positive rate exceeds 20%, suggest tightening triage_keywords.
 If uncertain→records rate exceeds 50%, suggest loosening triage rules.
+
+### 4c. Active learning for triage (§23)
+
+After 100+ papers processed, shift from static keyword matching to
+learned triage with uncertainty sampling. See
+[advanced_features.md](references/advanced_features.md) §23 for details.
+
+**Summary**:
+- Record triage→outcome pairs in `state/triage_outcomes.jsonl` (after
+  each paper: triage classification, records found, abstract keywords)
+- After 100+ pairs: compute word-level precision (which abstract words
+  predict yield) and suggest keyword additions/removals
+- Reorder queue by expected information value: prioritize papers where
+  triage confidence is lowest (most informative for learning)
+- Track triage precision/recall over time as a learning curve
+
+### 4d. Adaptive source ordering (§24)
+
+Track search source effectiveness in `state/source_stats.json`. After
+20+ queries per source, route queries to the most productive API:
+
+- If OpenAlex yields 2x more papers than PubMed for this project's taxa,
+  query OpenAlex first
+- If bioRxiv yields <1 paper per 10 queries, reduce search frequency
+- Dynamically reorder the OA cascade (§5b) by observed PDF retrieval
+  success rate (except proxy, which always goes last)
+
+See [advanced_features.md](references/advanced_features.md) §24 for
+the full adaptive tool selection protocol.

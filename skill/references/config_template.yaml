@@ -87,6 +87,10 @@ output_fields:
   - pdf_url
   - notes
   - processed_date
+  # --- Calibration & consensus (§19, §21, §22) ---
+  - calibrated_confidence
+  - consensus_agreement
+  - extraction_trace_id
 
 # --- Model routing (optional) ---
 # Controls which model handles each pipeline stage. Cheaper models save cost;
@@ -148,3 +152,34 @@ taxonomy_resolution: true
 #     min: 0.001
 #     max: 200000
 #     on_fail: flag
+
+# --- Consensus extraction (optional, §21) ---
+# Multi-agent consensus for low-confidence extractions.
+# When triggered, runs 2 additional extraction passes with different
+# prompting strategies and resolves by field-level voting.
+# consensus_config:
+#   enabled: true
+#   trigger_threshold: 0.7       # Mean confidence below this triggers consensus
+#   min_papers_before_active: 20 # Don't run consensus until guide.md is stable
+#   max_consensus_per_session: 5 # Cap to control token spend
+
+# --- Confidence calibration (optional, §19) ---
+# Post-hoc calibration transforms raw confidence heuristics into
+# empirically validated probabilities using isotonic regression.
+# Requires benchmark data from calibration holdouts, audits, or corrections.
+# calibration_config:
+#   enabled: true
+#   min_observations: 10  # Minimum calibration data points before fitting
+#   recalibrate_every: 20 # Re-fit model after N new observations
+
+# --- Benchmarking (optional, §20) ---
+# Built-in accuracy benchmarking against gold-standard data.
+# benchmarking_config:
+#   holdout_papers: 2     # Papers reserved for blind evaluation during calibration
+#   auto_benchmark: true  # Automatically benchmark at session end if new data exists
+
+# --- Cross-project transfer learning (optional, §25) ---
+# Share learned extraction patterns across TraitTrawler projects.
+# transfer_learning:
+#   enabled: true
+#   shared_dir: "~/.claude/traittrawler_shared"  # Cross-project knowledge directory

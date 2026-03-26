@@ -95,6 +95,31 @@ Line chart of records/paper and tokens/record across sessions (from
 `run_log.jsonl`). Shows whether the agent is getting more efficient as
 guide.md improves.
 
+### 8. Confidence calibration reliability diagram (§19)
+
+When generating the full QC report (`--full`), include the reliability
+diagram from the calibration module. This plots predicted confidence
+(X-axis) against observed accuracy (Y-axis) — perfect calibration is
+the diagonal line.
+
+Run `scripts/calibration.py --project-root . --full` to generate the
+reliability plot. If calibration data exists (>10 observations from
+benchmarks, audits, and corrections), the plot shows:
+- Bar chart of observed accuracy per confidence bin
+- Diagonal line for perfect calibration reference
+- ECE annotation
+
+If calibration data is insufficient, skip this plot and note:
+"Calibration reliability diagram requires >10 benchmark observations."
+
+### 9. Cross-paper conflict summary (§26)
+
+Include a summary of cross-paper conflicts detected by
+`scripts/knowledge_graph_export.py`:
+- Total species with data from multiple papers
+- Number of concordant vs. conflicted observations
+- Top conflicts with confidence-weighted resolution
+
 ### 7. Duplicate and near-duplicate detection
 
 Scan for records with the same species and very similar (but not identical)
@@ -131,7 +156,9 @@ variation or data entry inconsistency — flag for user attention.
 ── QC Summary ─────────────────────
  Species sampled    : 892 / ~1,450 est. (Chao1: 61.5%)
  Mean confidence    : 0.82
+ Calibrated ECE     : 0.042 (well-calibrated)
  Outliers detected  : 7 (3 likely errors, 4 possible variation)
+ Cross-paper conflicts: 3 species with conflicting values
  Accumulation slope : 12.3 new spp/paper (still climbing)
  Recommendation     : Continue collecting — curve not yet saturating
 ────────────────────────────────────

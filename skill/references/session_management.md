@@ -158,6 +158,48 @@ For long sessions (>20 papers), use the checkpoint strategy from §9b-2:
 checkpoint every 10 papers, ask to continue every 20. This prevents both
 context exhaustion and runaway cost.
 
+### 9e. Streaming progress & interruptible execution (§27)
+
+Reduce dashboard regeneration interval from every 10 papers to every
+5 papers. After each paper, append a line to `state/live_progress.jsonl`:
+```json
+{"timestamp": "...", "paper": "Smith et al. 2003", "records": 3, "total_records": 1339, "queue_remaining": 22}
+```
+
+Between each paper in the main loop, check for user input signals:
+- "skip" or "next" → skip current paper, mark `"outcome": "user_skipped"`
+- "redo" or "redo last" → re-extract previous paper
+- "pause" → stop after current paper without ending session
+- "show trace" → display chain-of-thought trace for last record (§22)
+- "consensus on last" → trigger consensus extraction for last paper (§21)
+
+After each paper, print a one-line confidence trend:
+```
+📊 Confidence: 0.87 avg (↑ from 0.84) | 3 records | total: 1,339
+```
+
+See [advanced_features.md](references/advanced_features.md) §27.
+
+### 9f. Adaptive tool statistics (§24)
+
+After each PDF fetch attempt and each search query, update
+`state/source_stats.json` with success/failure counts per source. At
+session end, generate a tool effectiveness analysis showing best/worst
+PDF sources and search sources with success rates.
+
+See [advanced_features.md](references/advanced_features.md) §24.
+
+### 9g. Reproducibility snapshots (§28)
+
+At session start, save a reproducibility snapshot to
+`state/snapshots/{session_id}.json` containing: guide.md hash, config
+hashes, model ID, skill version, Python version, and dependency versions.
+
+This enables `scripts/reproduce.py` to identify exactly what configuration
+was used for each session and measure extraction drift over time.
+
+See [advanced_features.md](references/advanced_features.md) §28.
+
 ### 9c. Pause triggers
 
 After extracting each paper, check `pause_triggers` from `collector_config.yaml`
@@ -386,17 +428,30 @@ At session end, also:
 2. Run `scripts/statistical_qc.py --project-root .` and print the QC summary
    (species sampled / Chao1 estimate, mean confidence, outliers, accumulation
    slope). See [statistical_qc.md](references/statistical_qc.md) §17e.
-3. Run the domain knowledge review (§14) if discoveries were logged.
+3. Run `scripts/calibration.py --project-root .` if calibration data exists.
+   Print calibration summary (ECE, worst field). See
+   [confidence_calibration.md](references/confidence_calibration.md) §19j.
+4. Run `scripts/benchmark.py --project-root .` if benchmark data exists.
+   Print benchmark summary (per-field F1, record-level precision/recall).
+   See [benchmarking.md](references/benchmarking.md) §20e.
+5. Run the domain knowledge review (§14) if discoveries were logged.
    See [knowledge_evolution.md](references/knowledge_evolution.md).
-4. Regenerate the dashboard.
-5. Check whether an audit is due: if `audit_config.auto_audit` is `true` and
-   the session count (from `run_log.jsonl`) is a multiple of
-   `audit_config.auto_audit_interval` (default: 5), offer:
-   `🔍 Audit due — {N} records are candidates for re-examination. Run audit? [y/n]`
-6. Check whether a campaign report is due: if session count is a multiple of
-   `campaign_planning.auto_report_interval` (default: 5) and >= 3 sessions,
-   offer: `📊 Campaign report available. Generate? [y/n]`
-   See [campaign_planning.md](references/campaign_planning.md).
+6. Print consensus extraction summary if consensus was triggered this session.
+   See [consensus_extraction.md](references/consensus_extraction.md) §21d.
+7. Print tool effectiveness analysis from source_stats.json.
+   See [advanced_features.md](references/advanced_features.md) §24d.
+8. Run cross-paper conflict detection:
+   `python3 scripts/knowledge_graph_export.py --project-root . --format conflicts`
+   See [advanced_features.md](references/advanced_features.md) §26a.
+9. Regenerate the dashboard.
+10. Check whether an audit is due: if `audit_config.auto_audit` is `true` and
+    the session count (from `run_log.jsonl`) is a multiple of
+    `audit_config.auto_audit_interval` (default: 5), offer:
+    `🔍 Audit due — {N} records are candidates for re-examination. Run audit? [y/n]`
+11. Check whether a campaign report is due: if session count is a multiple of
+    `campaign_planning.auto_report_interval` (default: 5) and >= 3 sessions,
+    offer: `📊 Campaign report available. Generate? [y/n]`
+    See [campaign_planning.md](references/campaign_planning.md).
 
 Append session-end entry to `state/run_log.jsonl`:
 ```json
@@ -421,29 +476,74 @@ Append session-end entry to `state/run_log.jsonl`:
 The skill includes a self-contained HTML dashboard that visualizes collection
 progress and summary statistics. It lives at `{project_root}/dashboard.html`.
 
-### When to update
+### Two dashboards
 
-Regenerate the dashboard at these points:
-1. **Session start** (§1e) — after reading state files, before the first batch
+TraitTrawler has two dashboards:
+
+1. **Static dashboard** (`dashboard.html`): Full Chart.js dashboard with all
+   charts, regenerated periodically by `dashboard_generator.py`. Best for
+   detailed analysis and printing.
+
+2. **Live dashboard** (`http://localhost:8347`): Lightweight server that
+   auto-updates every 3 seconds when data files change. Shows KPIs, recent
+   extractions, and a command input. Best for monitoring during sessions.
+
+### When to update the static dashboard
+
+Regenerate at these points:
+1. **Session start** (§1e) — after reading state files
 2. **Every 10 papers processed** — alongside the rolling progress update (§10)
 3. **Session end** (§11) — as part of the session summary
-
-### How to update
-
-The dashboard generator is copied to the project root at session start (§1e).
-Regenerate the dashboard anytime with:
 
 ```bash
 python3 "{project_root}/dashboard_generator.py" --project-root "{project_root}"
 ```
 
-**Only re-copy if missing** — do not overwrite on every session start.
+### Starting the live dashboard
 
-The script reads `results.csv`, `leads.csv`, `state/processed.json`,
-`state/search_log.json`, and `config.py` and writes a single
-self-contained `dashboard.html` with Chart.js visualizations.
+At session start (§1e), after copying scripts, start the live server and
+open it in the browser:
 
-### What the dashboard shows
+```bash
+python3 scripts/dashboard_server.py --project-root . --port 8347 &
+sleep 1
+open "http://localhost:8347"
+```
+
+The live dashboard opens automatically — the user does not need to find or
+open any file. It updates in real time via Server-Sent Events whenever
+`results.csv` or state files are modified.
+
+**If port 8347 is in use** (from a previous session), the server will fail.
+Kill the old one first:
+```bash
+pkill -f "dashboard_server.py" 2>/dev/null; sleep 1
+python3 scripts/dashboard_server.py --project-root . --port 8347 &
+```
+
+### Command input (live dashboard only)
+
+The live dashboard has a command input at the bottom. When the user types
+a command and hits Send, it writes to `state/user_commands.txt`. The agent
+checks this file between papers (see §9e):
+
+```python
+import os
+cmd_path = os.path.join(project_root, "state", "user_commands.txt")
+if os.path.exists(cmd_path):
+    with open(cmd_path) as f:
+        lines = f.readlines()
+    if lines:
+        last_cmd = lines[-1].strip().split(" ", 1)[-1]  # strip timestamp
+        # Process command: skip, pause, redo, show trace, run QC, stop, etc.
+        # After processing, truncate the file:
+        open(cmd_path, "w").close()
+```
+
+Supported commands: `skip`, `pause`, `redo last`, `show trace`,
+`run QC`, `consensus on last`, `stop`.
+
+### What the static dashboard shows
 
 **KPI cards** (top row): Total records, unique species, papers processed,
 leads (need full text), flagged for review.
@@ -456,13 +556,12 @@ full-text source breakdown, extraction confidence distribution, records by
 country (top 15), lead failure reasons, lead status breakdown, and
 additional trait-specific charts if recognized fields are present.
 
-### Dashboard output location
+### Stopping the live server
 
-The dashboard is always written to `{project_root}/dashboard.html`.
-After generation at session start and session end, mention it to the user:
-
-```
-📊 Dashboard updated → dashboard.html
+At session end, stop the server:
+```bash
+pkill -f "dashboard_server.py" 2>/dev/null
 ```
 
-Do NOT open it in Chrome or ask the user to view it — just note that it exists.
+Or leave it running — it's lightweight and the user can keep monitoring
+between sessions.

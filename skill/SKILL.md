@@ -10,8 +10,13 @@ description: >
   (Chrome); extracts structured data from prose, tables, and catalogues;
   resolves taxonomy against GBIF; validates and writes to CSV with full
   provenance. Includes statistical QC (Chao1, Grubbs outlier detection),
-  bidirectional citation chaining, self-improving domain knowledge, and
-  multi-session campaign planning. Use when the user wants to: collect trait
+  bidirectional citation chaining, self-improving domain knowledge,
+  multi-session campaign planning, confidence calibration (isotonic
+  regression with ECE metrics), extraction benchmarking (precision/recall/F1
+  per field), multi-agent consensus extraction, chain-of-thought traces,
+  active learning for triage, adaptive tool selection, cross-project
+  transfer learning, knowledge graph provenance export (JSON-LD), and
+  formal reproducibility verification. Use when the user wants to: collect trait
   data, mine the literature, run a session, trawl for data, build a trait
   database, process papers, extract data from papers, add records, fetch PDFs,
   run QC, plan the campaign, audit the database, or continue collecting. Do
@@ -19,18 +24,21 @@ description: >
   exploration, or one-off paper summaries.
 allowed-tools: >
   Bash(python3:*) Bash(pip:*) Bash(cp:*) Bash(mkdir:*) Bash(wc:*) Bash(ls:*)
+  Bash(open:*) Bash(pkill:*) Bash(sleep:*)
   Read Write Edit Glob Grep Agent WebFetch WebSearch
 argument-hint: "[session-target or command, e.g. '20 papers', 'run QC', 'audit']"
 compatibility: >
   Requires Python 3.9+, pyyaml, pdfplumber, scipy (optional, for Grubbs
-  outlier detection), matplotlib (optional, for QC report plots). Network
+  outlier detection), matplotlib (optional, for QC report plots),
+  scikit-learn (optional, for isotonic regression confidence calibration).
+  Network
   access required for PubMed, OpenAlex, bioRxiv, Crossref, Unpaywall, and
   GBIF APIs. Claude in Chrome MCP enables institutional proxy PDF retrieval;
   without it the skill degrades gracefully to open-access papers and abstracts
   only. PubMed and bioRxiv MCPs are optional (falls back to public APIs).
 metadata:
   author: Heath Blackmon
-  version: 2.0.0
+  version: 3.0.0
 ---
 
 # TraitTrawler
@@ -61,6 +69,10 @@ exhausted. Pick up exactly where the previous session ended.
 | Statistical QC | §17 | [statistical_qc.md](references/statistical_qc.md) | Session end or on-demand ("run QC") |
 | Campaign planning | §18 | [campaign_planning.md](references/campaign_planning.md) | On-demand after 3+ sessions |
 | Audit mode | §15 | [audit_mode.md](references/audit_mode.md) | On-demand ("audit the database") |
+| Confidence calibration | §19 | [confidence_calibration.md](references/confidence_calibration.md) | Session end, if calibration data exists |
+| Extraction benchmarking | §20 | [benchmarking.md](references/benchmarking.md) | During calibration + on-demand |
+| Consensus extraction | §21 | [consensus_extraction.md](references/consensus_extraction.md) | Auto on low-confidence papers |
+| Advanced features | §22–28 | [advanced_features.md](references/advanced_features.md) | Traces, active learning, adaptive tools, transfer, KG export, streaming, reproducibility |
 | Troubleshooting | — | [troubleshooting.md](references/troubleshooting.md) | When something goes wrong |
 
 Read the appropriate reference file when entering that pipeline stage.
@@ -115,7 +127,11 @@ strategy per question — include these instructions in the subagent prompt.
 - Create `state/` folder with empty state files:
   `processed.json` (`{}`), `queue.json` (`[]`), `search_log.json` (`{}`),
   `large_pdf_progress.json` (`{}`), `run_log.jsonl` (empty),
-  `discoveries.jsonl` (empty), `taxonomy_cache.json` (`{}`)
+  `discoveries.jsonl` (empty), `taxonomy_cache.json` (`{}`),
+  `calibration_data.jsonl` (empty), `benchmark_gold.jsonl` (empty),
+  `triage_outcomes.jsonl` (empty), `source_stats.json` (`{}`),
+  `consensus_stats.json` (`{}`)
+- Create `state/extraction_traces/` and `state/snapshots/` directories
 - Create `pdfs/` folder
 - Create `results.csv` with just the header row
 
@@ -180,6 +196,7 @@ Then proceed normally with §1a–§1f.
 python3 -c "import pdfplumber" 2>/dev/null || pip install pdfplumber --break-system-packages -q
 python3 -c "import yaml" 2>/dev/null || pip install pyyaml --break-system-packages -q
 python3 -c "import scipy" 2>/dev/null || pip install scipy matplotlib --break-system-packages -q
+python3 -c "import sklearn" 2>/dev/null || pip install scikit-learn --break-system-packages -q
 ```
 
 If any install fails, warn but continue — fall back gracefully.
@@ -229,9 +246,10 @@ for script in dashboard_generator.py verify_session.py export_dwc.py; do
   [ ! -f "$script" ] && cp "${CLAUDE_SKILL_DIR}/$script" "$script" 2>/dev/null || true
 done
 mkdir -p scripts
-for script in statistical_qc.py taxonomy_resolver.py; do
+for script in statistical_qc.py taxonomy_resolver.py calibration.py benchmark.py knowledge_graph_export.py reproduce.py dashboard_server.py; do
   [ ! -f "scripts/$script" ] && cp "${CLAUDE_SKILL_DIR}/scripts/$script" "scripts/$script" 2>/dev/null || true
 done
+mkdir -p state/extraction_traces state/snapshots
 ```
 
 **Script usage** — execute all of these via Bash. Do NOT read them into context:
@@ -243,8 +261,26 @@ done
 | `export_dwc.py` | Exports results.csv as Darwin Core Archive | `python3 export_dwc.py --project-root . --output-dir dwc_export` |
 | `scripts/statistical_qc.py` | Outlier detection, Chao1 estimator, QC plots | `python3 scripts/statistical_qc.py --project-root .` |
 | `scripts/taxonomy_resolver.py` | Batch GBIF taxonomy lookups with caching | `python3 scripts/taxonomy_resolver.py --csv results.csv --species-column species --cache state/taxonomy_cache.json` |
+| `scripts/calibration.py` | Confidence calibration, ECE, reliability diagrams | `python3 scripts/calibration.py --project-root .` |
+| `scripts/benchmark.py` | Gold-standard accuracy metrics (precision/recall/F1) | `python3 scripts/benchmark.py --project-root .` |
+| `scripts/knowledge_graph_export.py` | JSON-LD provenance export, cross-paper conflict detection | `python3 scripts/knowledge_graph_export.py --project-root . --format both` |
+| `scripts/reproduce.py` | Reproducibility verification and session drift analysis | `python3 scripts/reproduce.py --project-root . --summary` |
+| `scripts/dashboard_server.py` | Live dashboard with SSE updates and command input | `python3 scripts/dashboard_server.py --project-root . &` then `open http://localhost:8347` |
 
-Then regenerate the dashboard (see [session_management.md](references/session_management.md) §13).
+Then regenerate the dashboard and start the live dashboard server:
+
+```bash
+python3 dashboard_generator.py --project-root .
+python3 scripts/dashboard_server.py --project-root . --port 8347 &
+sleep 1
+open "http://localhost:8347"
+```
+
+The live dashboard opens automatically in the default browser. It updates
+every 3 seconds when data files change — no manual refresh needed. The
+command input at the bottom lets the user send commands (skip, pause, redo,
+etc.) that the agent picks up between papers. See §13 in
+[session_management.md](references/session_management.md) for details.
 
 ### 1f. Ask how long to run
 
@@ -399,6 +435,68 @@ chaining). Full spec in [campaign_planning.md](references/campaign_planning.md).
 
 **Triggers**: "plan the campaign", "coverage report", "how much is left",
 "what should I focus on next", "strategic report".
+
+---
+
+## 19. Confidence Calibration
+
+Raw extraction confidence scores are heuristic-based (0.9 for full-text
+explicit values, 0.4 for abstracts). This module transforms them into
+calibrated probabilities using post-hoc isotonic regression on benchmark
+data. When the system reports 0.85 calibrated confidence, records are
+actually correct ~85% of the time.
+
+**Script**: `scripts/calibration.py` computes ECE (Expected Calibration
+Error), fits per-field calibration models, and generates reliability
+diagrams. Full spec in
+[confidence_calibration.md](references/confidence_calibration.md).
+
+**Triggers**: automatic at session end if calibration data exists;
+on-demand via "calibrate", "check calibration", "reliability diagram".
+
+---
+
+## 20. Extraction Benchmarking
+
+Built-in accuracy measurement against gold-standard data. During
+calibration (§0b), 2-3 seed papers are held out as benchmark papers —
+the user verifies every extracted field, creating ground truth for
+precision/recall/F1 per field. Benchmark data also accumulates from
+audit outcomes (§15) and user corrections (§14f).
+
+**Script**: `scripts/benchmark.py` computes per-field and record-level
+metrics, Brier score, and tracks accuracy trends over sessions. Full spec
+in [benchmarking.md](references/benchmarking.md).
+
+**Triggers**: automatic during calibration; on-demand via "benchmark this
+paper", "run benchmark", "check accuracy".
+
+---
+
+## 21. Multi-Agent Consensus Extraction
+
+When a standard extraction produces low-confidence results (mean
+confidence < 0.7), run 2 additional independent extraction passes with
+different prompting strategies: (1) enumeration-first, (2) adversarial
+verification. Resolve by field-level voting — if 2/3 passes agree,
+accept with boosted confidence; if all disagree, flag for human review.
+
+**Cost control**: Consensus triples extraction cost per triggered paper.
+Configurable trigger threshold and per-session cap. Full spec in
+[consensus_extraction.md](references/consensus_extraction.md).
+
+**Triggers**: automatic when mean confidence < threshold; user-triggered
+via "run consensus", "verify extraction", "double-check this paper".
+
+---
+
+## 22–28. Advanced Features
+
+Chain-of-thought traces (§22), active learning for triage (§23),
+adaptive tool selection (§24), cross-project transfer learning (§25),
+knowledge graph provenance export (§26), streaming progress &
+interruptible execution (§27), and formal reproducibility (§28). Full
+spec in [advanced_features.md](references/advanced_features.md).
 
 ---
 

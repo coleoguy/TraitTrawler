@@ -82,6 +82,39 @@ Citation chaining yield:
   Citation chaining is {2.3x / 0.8x} more efficient than keyword search
 ```
 
+### Data quality estimates (calibrated)
+
+If calibration data exists (§19), include quality metrics:
+
+```
+📈 Data Quality (Calibrated)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Mean calibrated confidence : 0.84 (ECE: 0.042)
+Records above 0.9 calibrated : 672 (50.3%)
+Records below 0.6 calibrated : 89 (6.7%)
+Estimated error rate (overall): ~8%
+Per-field accuracy (from benchmark):
+  chromosome_number_2n       : 96.2%
+  sex_chr_system             : 89.4%
+  karyotype_formula          : 78.3%
+Recommendation: Focus guide.md improvement on karyotype_formula
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Cross-paper concordance summary
+
+If cross-paper conflict data exists (§26), include:
+
+```
+📊 Cross-Paper Concordance
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Species with multi-paper data : 156
+Concordant observations       : 142 (91.0%)
+Conflicted observations       : 14 (9.0%)
+Top conflicts: [list species with disagreeing values]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
 ### Leads pipeline
 
 ```
