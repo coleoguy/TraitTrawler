@@ -22,14 +22,13 @@ allowed-tools: >
   Read Write Edit Glob Grep Agent WebFetch WebSearch
 argument-hint: "[session-target or command, e.g. '20 papers', 'run QC', 'audit']"
 compatibility: >
-  Requires Python 3.9+, pyyaml, pdfplumber, scipy (optional, for Grubbs
-  outlier detection), matplotlib (optional, for QC report plots),
-  scikit-learn (optional, for isotonic regression confidence calibration).
-  Network
-  access required for PubMed, OpenAlex, bioRxiv, Crossref, Unpaywall, and
-  GBIF APIs. Claude in Chrome MCP enables institutional proxy PDF retrieval;
-  without it the skill degrades gracefully to open-access papers and abstracts
-  only. PubMed and bioRxiv MCPs are optional (falls back to public APIs).
+  Requires Python 3.9+, pyyaml, pdfplumber, scipy (optional, QC plots),
+  matplotlib (optional, QC plots), scikit-learn (optional, calibration).
+  Network access required for PubMed, OpenAlex, bioRxiv, Crossref,
+  Unpaywall, and GBIF APIs. Claude in Chrome MCP enables institutional
+  proxy PDF retrieval; without it degrades gracefully to open-access papers
+  and abstracts only. PubMed and bioRxiv MCPs are optional (falls back to
+  public APIs).
 metadata:
   author: Heath Blackmon
   version: 3.0.0
@@ -237,7 +236,7 @@ for script in dashboard_generator.py verify_session.py export_dwc.py; do
   [ ! -f "$script" ] && cp "${CLAUDE_SKILL_DIR}/$script" "$script" 2>/dev/null || true
 done
 mkdir -p scripts
-for script in statistical_qc.py taxonomy_resolver.py calibration.py benchmark.py knowledge_graph_export.py reproduce.py dashboard_server.py csv_writer.py api_utils.py state_utils.py; do
+for script in statistical_qc.py taxonomy_resolver.py calibration.py benchmark.py knowledge_graph_export.py reproduce.py dashboard_server.py csv_writer.py api_utils.py state_utils.py pdf_utils.py test_harness.py; do
   [ ! -f "scripts/$script" ] && cp "${CLAUDE_SKILL_DIR}/scripts/$script" "scripts/$script" 2>/dev/null || true
 done
 mkdir -p state/extraction_traces state/snapshots
@@ -256,25 +255,25 @@ mkdir -p state/extraction_traces state/snapshots
 | `scripts/benchmark.py` | Gold-standard accuracy metrics (precision/recall/F1) | `python3 scripts/benchmark.py --project-root .` |
 | `scripts/knowledge_graph_export.py` | JSON-LD provenance export, cross-paper conflict detection | `python3 scripts/knowledge_graph_export.py --project-root . --format both` |
 | `scripts/reproduce.py` | Reproducibility verification and session drift analysis | `python3 scripts/reproduce.py --project-root . --summary` |
-| `scripts/dashboard_server.py` | Live dashboard with SSE updates and command input | `python3 scripts/dashboard_server.py --project-root . &` then `open http://localhost:8347` |
+| `scripts/dashboard_server.py` | *(Optional)* Live dashboard with SSE updates | `python3 scripts/dashboard_server.py --project-root . &` — only if user requests live server |
 | `scripts/csv_writer.py` | Schema-enforced CSV writes with atomic operations | Used as library; standalone: `python3 scripts/csv_writer.py --project-root .` |
 | `scripts/api_utils.py` | Retry/backoff and rate limiting for all APIs | Used as library; info: `python3 scripts/api_utils.py --rate-limits` |
 | `scripts/state_utils.py` | Atomic state file reads/writes with backup recovery | Standalone: `python3 scripts/state_utils.py --project-root . --check` |
+| `scripts/pdf_utils.py` | PDF path construction, misplaced-PDF detection and fix | `python3 scripts/pdf_utils.py --project-root . --check` (or `--fix`) |
+| `scripts/test_harness.py` | Generate synthetic project data for testing | `python3 scripts/test_harness.py --output-dir /tmp/test --records 200` |
 
-Then regenerate the dashboard and start the live dashboard server:
+Then regenerate the dashboard:
 
 ```bash
 python3 dashboard_generator.py --project-root .
-python3 scripts/dashboard_server.py --project-root . --port 8347 &
-sleep 1
-open "http://localhost:8347"
 ```
 
-The live dashboard opens automatically in the default browser. It updates
-every 3 seconds when data files change — no manual refresh needed. The
-command input at the bottom lets the user send commands (skip, pause, redo,
-etc.) that the agent picks up between papers. See §13 in
-[session_management.md](references/session_management.md) for details.
+Tell the user: **"Dashboard updated — open dashboard.html in your browser
+(double-click the file) to see progress. It auto-refreshes every 60 seconds."**
+
+The dashboard is a self-contained HTML file with no external dependencies.
+It works via `file://` protocol (double-click). Regenerate it every 2 papers
+during collection so the auto-refresh picks up near-real-time data.
 
 ### 1f. Ask how long to run
 
@@ -354,12 +353,21 @@ subagents. Each runs the full pipeline (fetch → extract → taxonomy → valid
 prompt template, and fallback rules in
 [extraction_and_validation.md](references/extraction_and_validation.md) §3c.
 
-**Every 10 papers processed**, regenerate the dashboard:
+**Every 2 papers processed**, regenerate the dashboard:
 ```bash
 python3 dashboard_generator.py --project-root .
 ```
 
-**When `session_target` is reached**, print session summary and ask:
+**When `session_target` is reached**, run post-session checks and print summary:
+```bash
+python3 scripts/pdf_utils.py --project-root . --check
+python3 dashboard_generator.py --project-root .
+```
+
+If `pdf_utils.py --check` finds misplaced PDFs, report them to the user and
+offer to run `--fix` to move them to the correct `pdfs/{Family}/` locations.
+
+Then ask:
 ```
 Session target reached ({N} papers). Continue with another batch? [y/n]
 ```

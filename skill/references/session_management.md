@@ -142,7 +142,7 @@ they grow large. Instead:
 - Check if a DOI is processed: `grep -c "doi_string" state/processed.json`
 - Get queue depth: `python3 -c "import json; print(len(json.load(open('state/queue.json'))))"`
 
-**3. Checkpoint every 10 papers.** After every 10 papers processed, write
+**3. Checkpoint every 2 papers.** After every 2 papers processed, write
 a brief status checkpoint to `state/session_checkpoint.json`:
 ```json
 {
@@ -195,13 +195,13 @@ using ~3–5 minutes per full-text paper, ~1 minute per abstract-only:
 - "let it run all day" → unlimited, checkpoint every 20
 
 For long sessions (>20 papers), use the checkpoint strategy from §9b-2:
-checkpoint every 10 papers, ask to continue every 20. This prevents both
+checkpoint every 2 papers, ask to continue every 20. This prevents both
 context exhaustion and runaway cost.
 
 ### 9e. Streaming progress & interruptible execution (§27)
 
-Reduce dashboard regeneration interval from every 10 papers to every
-5 papers. After each paper, append a line to `state/live_progress.jsonl`:
+Regenerate the dashboard every 2 papers. After each paper, append a line
+to `state/live_progress.jsonl`:
 ```json
 {"timestamp": "...", "paper": "Smith et al. 2003", "records": 3, "total_records": 1339, "queue_remaining": 22}
 ```
@@ -286,7 +286,7 @@ Large PDF progress:
    → 142 records this batch | resuming next session from page 101
 ```
 
-**Dashboard update:** Every 10 papers processed, regenerate the dashboard
+**Dashboard update:** Every 2 papers processed, regenerate the dashboard
 so that the browser auto-refresh picks up new data (see §13):
 ```bash
 python3 "{project_root}/dashboard_generator.py" --project-root "{project_root}"
@@ -484,7 +484,9 @@ At session end, also:
    `python3 scripts/knowledge_graph_export.py --project-root . --format conflicts`
    See [advanced_features.md](references/advanced_features.md) §26a.
 9. Regenerate the dashboard.
-10. Check whether an audit is due: if `audit_config.auto_audit` is `true` and
+10. Check for misplaced PDFs: `python3 scripts/pdf_utils.py --project-root . --check`.
+    If any found, report to user and offer to run `--fix`.
+11. Check whether an audit is due: if `audit_config.auto_audit` is `true` and
     the session count (from `run_log.jsonl`) is a multiple of
     `audit_config.auto_audit_interval` (default: 5), offer:
     `🔍 Audit due — {N} records are candidates for re-examination. Run audit? [y/n]`
@@ -556,48 +558,38 @@ data = fetch_openalex_work(doi, email, log_file="state/run_log.jsonl")
 The skill includes a self-contained HTML dashboard that visualizes collection
 progress and summary statistics. It lives at `{project_root}/dashboard.html`.
 
-### Two dashboards
+### Dashboard
 
-TraitTrawler has two dashboards:
+The dashboard is a **self-contained HTML file** (`dashboard.html`) with pure
+CSS/SVG charts. No CDN, no external dependencies. Users open it by
+double-clicking the file — works on `file://` protocol. It auto-refreshes
+every 60 seconds.
 
-1. **Static dashboard** (`dashboard.html`): Full Chart.js dashboard with all
-   charts, regenerated periodically by `dashboard_generator.py`. Best for
-   detailed analysis and printing.
+Features:
+- KPI cards (records, species, families, papers, leads, mean confidence, flagged)
+- Activity panel (last 5 papers processed, queue remaining)
+- Charts: cumulative timeline, family breakdown, confidence distribution, source type
+- Auto-detected trait-specific charts
+- Interactive column picker (persists selections via localStorage)
+- Sortable data table (last 200 records)
 
-2. **Live dashboard** (`http://localhost:8347`): Lightweight server that
-   auto-updates every 3 seconds when data files change. Shows KPIs, recent
-   extractions, and a command input. Best for monitoring during sessions.
+### When to regenerate
 
-### When to update the static dashboard
-
-Regenerate at these points:
 1. **Session start** (§1e) — after reading state files
-2. **Every 10 papers processed** — alongside the rolling progress update (§10)
+2. **Every 2 papers processed** — alongside the rolling progress update (§10)
 3. **Session end** (§11) — as part of the session summary
 
 ```bash
-python3 "{project_root}/dashboard_generator.py" --project-root "{project_root}"
+python3 dashboard_generator.py --project-root .
 ```
 
-### Starting the live dashboard
+Tell the user: **"Dashboard updated — refresh dashboard.html."**
 
-At session start (§1e), after copying scripts, start the live server and
-open it in the browser:
+### Live dashboard server (optional)
 
+The `scripts/dashboard_server.py` SSE server is available but **not started
+by default**. Only start it if the user explicitly requests a live server:
 ```bash
-python3 scripts/dashboard_server.py --project-root . --port 8347 &
-sleep 1
-open "http://localhost:8347"
-```
-
-The live dashboard opens automatically — the user does not need to find or
-open any file. It updates in real time via Server-Sent Events whenever
-`results.csv` or state files are modified.
-
-**If port 8347 is in use** (from a previous session), the server will fail.
-Kill the old one first:
-```bash
-pkill -f "dashboard_server.py" 2>/dev/null; sleep 1
 python3 scripts/dashboard_server.py --project-root . --port 8347 &
 ```
 

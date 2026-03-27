@@ -110,24 +110,9 @@ We validated TraitTrawler against a manually curated Coleoptera karyotype databa
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A["Search\nPubMed | OpenAlex\nbioRxiv | Crossref"] --> B["Triage\nlikely | uncertain\nunlikely"]
-    B --> C["Retrieve\nUnpaywall | OpenAlex\nEuropePMC | CORE | Proxy"]
-    C --> D["Extract\nprose | table\ncatalogue"]
-    D --> T["Taxonomy\nGBIF synonym\nresolution"]
-    T --> E["Validate\ncross-field\nchecks"]
-    E --> F["results.csv"]
-    F -.->|"next session\nresumes here"| A
-
-    style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    style B fill:#fef3c7,stroke:#f59e0b,color:#78350f
-    style C fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    style D fill:#d1fae5,stroke:#10b981,color:#064e3b
-    style T fill:#ecfdf5,stroke:#059669,color:#064e3b
-    style E fill:#d1fae5,stroke:#10b981,color:#064e3b
-    style F fill:#f3e8ff,stroke:#8b5cf6,color:#4c1d95
-```
+<p align="center">
+  <img src="docs/traittrawler_pipeline.png" alt="TraitTrawler pipeline" width="900">
+</p>
 
 Each session the agent:
 
@@ -183,12 +168,7 @@ When you start a session, the agent reads all project files, checks dependencies
 
 Stop anytime by telling the agent to stop. All state is saved after every paper — nothing is lost. You can also set `batch_size` in `collector_config.yaml` (default: 20) to have the agent pause automatically after processing that many papers.
 
-**The dashboard.** The agent generates `dashboard.html`, updated at session start, every 10 papers, and session end. Open it in any browser — it auto-refreshes every 60 seconds. The dashboard auto-detects your project's fields and generates appropriate charts (doughnut for categorical data, histograms for numeric) alongside standard collection-progress charts. A live server with command input is also available:
-
-```bash
-python3 scripts/dashboard_server.py --project-root . &
-open http://localhost:8347
-```
+**The dashboard.** The agent generates `dashboard.html`, updated at session start, every 2 papers, and session end. Double-click it to open in any browser — it auto-refreshes every 60 seconds. The dashboard is fully self-contained (no CDN, no server) with an interactive column picker, sortable data table, and auto-detected trait-specific charts. It includes an activity panel showing what the agent is currently processing.
 
 **Session length.** At the start of each session, the agent asks how long to run. You can give a paper count ("do 30 papers"), a time estimate ("I have an hour"), or a preset ("quick pass" for ~10, "long session" for 50+, "until done" for unlimited).
 
@@ -271,7 +251,7 @@ TraitTrawler/
 │   └── sample_results.csv        # Example output (5 records)
 │
 ├── skill/                        # Skill source (taxon-agnostic)
-│   ├── SKILL.md                  # Core agent specification (499 lines)
+│   ├── SKILL.md                  # Core agent specification
 │   ├── dashboard_generator.py    # Generates dashboard.html
 │   ├── verify_session.py         # Post-batch deterministic verification
 │   ├── export_dwc.py             # Darwin Core Archive export
@@ -285,7 +265,9 @@ TraitTrawler/
 │   │   ├── benchmark.py          # Precision/recall/F1 per field
 │   │   ├── knowledge_graph_export.py  # JSON-LD provenance export
 │   │   ├── reproduce.py          # Reproducibility verification
-│   │   └── dashboard_server.py   # Live dashboard with SSE updates
+│   │   ├── pdf_utils.py          # PDF path construction + misplaced-PDF detection
+│   │   ├── test_harness.py       # Synthetic data generator for testing
+│   │   └── dashboard_server.py   # Optional live dashboard with SSE updates
 │   └── references/               # 16 reference files loaded on-demand
 │       ├── search_and_triage.md
 │       ├── extraction_and_validation.md

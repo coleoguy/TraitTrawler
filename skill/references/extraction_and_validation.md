@@ -151,22 +151,42 @@ Write leads the same way as results.csv (Python csv.DictWriter, append mode,
 
 ## 6. PDF Naming and Organization
 
-Save PDFs as:
+**Use the `pdf_utils.py` utility** to construct paths. Never build PDF paths
+inline — the utility handles sanitization, directory creation, and consistent
+naming:
+
+```python
+import sys; sys.path.insert(0, "scripts")
+from pdf_utils import build_pdf_path
+
+full_path, rel_path = build_pdf_path(
+    project_root=".",
+    first_author=first_author,
+    year=year,
+    journal=journal,
+    doi=doi,
+    subfolder_value=family,  # or whatever the grouping field is
+)
+# Then download: urllib.request.urlretrieve(pdf_url, full_path)
+```
+
+The function produces paths like:
 ```
 pdfs/{Subfolder}/{FirstAuthor}_{Year}_{JournalAbbrev}_{ShortDOI}.pdf
 ```
 
 - **Subfolder**: the primary grouping field from `collector_config.yaml` →
-  `pdf_subfolder_field` (default: `family`). Use `unknown/` if not yet known;
-  rename after extraction if identified.
-- **FirstAuthor**: last name of first author, ASCII only, no spaces.
+  `pdf_subfolder_field` (default: `family`). Uses `unknown/` if not yet known.
+- **FirstAuthor**: last name of first author, ASCII only, no spaces, ≤20 chars.
 - **Year**: 4-digit publication year.
 - **JournalAbbrev**: first meaningful word of journal name, ≤12 chars.
 - **ShortDOI**: last segment of DOI after final `/` or `.`, ≤10 chars.
 
 Example: `pdfs/Carabidae/Smith_2003_CompCytogen_9504.pdf`
 
-Create subdirectories as needed: `mkdir -p pdfs/{Subfolder}`.
+**IMPORTANT**: Never save PDFs directly to the project root. The session-end
+check (`python3 scripts/pdf_utils.py --project-root . --check`) catches
+misplaced PDFs and offers to move them.
 
 ---
 

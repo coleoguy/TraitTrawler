@@ -84,8 +84,11 @@ def load_validation_rules(project_root: str) -> list:
 # Field type inference and validation
 # ---------------------------------------------------------------------------
 
-# Fields that must never be empty
+# Fields that must never be empty (drop record if missing)
 REQUIRED_FIELDS = {"species", "extraction_confidence"}
+
+# Fields that should not be empty (flag record if missing)
+SOFT_REQUIRED_FIELDS = {"paper_title", "paper_authors"}
 
 # Fields with known types
 FLOAT_FIELDS = {"extraction_confidence", "calibrated_confidence"}
@@ -121,7 +124,7 @@ def validate_record(record: dict, output_fields: list,
     """
     errors = []
 
-    # 1. Required fields present
+    # 1. Required fields present (drop if missing)
     for field in REQUIRED_FIELDS:
         if field in output_fields:
             val = record.get(field, "")
@@ -130,6 +133,17 @@ def validate_record(record: dict, output_fields: list,
                     field, val, "required",
                     f"Required field '{field}' is empty",
                     action="drop"
+                ))
+
+    # 1b. Soft required fields (flag if missing — paper metadata should always be present)
+    for field in SOFT_REQUIRED_FIELDS:
+        if field in output_fields:
+            val = record.get(field, "")
+            if val is None or str(val).strip() == "":
+                errors.append(ValidationError(
+                    field, val, "soft_required",
+                    f"Field '{field}' is empty — extract from paper header",
+                    action="flag"
                 ))
 
     # 2. Must have doi or paper_title
@@ -442,7 +456,15 @@ class SchemaEnforcedWriter:
                 continue
 
             dedup_keys.add(key)
-            rows_to_write.append(record)
+            # Sanitize: replace embedded newlines/carriage returns with spaces
+            # This prevents column-offset corruption from verbatim text fields
+            sanitized = {}
+            for k, v in record.items():
+                if isinstance(v, str):
+                    sanitized[k] = v.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+                else:
+                    sanitized[k] = v
+            rows_to_write.append(sanitized)
             report.accepted += 1
 
         if dry_run or not rows_to_write:
