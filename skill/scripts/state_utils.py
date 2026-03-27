@@ -97,9 +97,10 @@ def safe_write_json(path: str, data: Any, indent: int = 2,
     Write JSON data atomically using write-to-temp-then-rename.
 
     Steps:
-    1. If backup=True and file exists, copy current file to {path}.bak
-    2. Write data to a temp file in the same directory
-    3. Rename temp file to target path (atomic on POSIX)
+    1. Shrink detection: refuse to overwrite a dict/list with fewer entries
+    2. If backup=True and file exists, copy current file to {path}.bak
+    3. Write data to a temp file in the same directory
+    4. Rename temp file to target path (atomic on POSIX)
 
     This ensures that a crash at any point leaves either the old file
     or the new file intact — never a partial write.
@@ -109,9 +110,38 @@ def safe_write_json(path: str, data: Any, indent: int = 2,
         data: JSON-serializable data.
         indent: JSON indentation (default: 2).
         backup: If True, create .bak before overwriting.
+
+    Raises:
+        ValueError: If the new data is significantly smaller than existing,
+            indicating a possible accidental overwrite.
     """
     parent_dir = os.path.dirname(path) or "."
     os.makedirs(parent_dir, exist_ok=True)
+
+    # Step 0: Shrink detection — prevent accidental overwrites
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            # Check if new data is dramatically smaller than existing
+            if isinstance(existing, dict) and isinstance(data, dict):
+                if len(existing) > 10 and len(data) < len(existing) * 0.5:
+                    raise ValueError(
+                        f"SHRINK DETECTED: {path} has {len(existing)} entries "
+                        f"but new data has only {len(data)}. Refusing to overwrite. "
+                        f"If intentional, delete the file first."
+                    )
+            elif isinstance(existing, list) and isinstance(data, list):
+                if len(existing) > 10 and len(data) < len(existing) * 0.5:
+                    raise ValueError(
+                        f"SHRINK DETECTED: {path} has {len(existing)} entries "
+                        f"but new data has only {len(data)}. Refusing to overwrite. "
+                        f"If intentional, delete the file first."
+                    )
+        except (json.JSONDecodeError, ValueError) as e:
+            if "SHRINK DETECTED" in str(e):
+                raise  # re-raise shrink detection
+            pass  # ignore other read errors — proceed with write
 
     # Step 1: Create backup of current file
     if backup and os.path.exists(path):

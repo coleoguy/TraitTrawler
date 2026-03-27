@@ -242,6 +242,22 @@ done
 mkdir -p state/extraction_traces state/snapshots
 ```
 
+**Pre-session backup** — run BEFORE any extraction work:
+```bash
+mkdir -p state/snapshots
+BACKUP_TS=$(date +%Y%m%dT%H%M%S)
+[ -f results.csv ] && cp results.csv "state/snapshots/results_${BACKUP_TS}.csv"
+[ -f state/processed.json ] && cp state/processed.json "state/snapshots/processed_${BACKUP_TS}.json"
+[ -f state/search_log.json ] && cp state/search_log.json "state/snapshots/search_log_${BACKUP_TS}.json"
+echo "Backup created: state/snapshots/*_${BACKUP_TS}.*"
+```
+
+**Run verification** before dispatching any extraction subagents:
+```bash
+python3 verify_session.py --project-root .
+```
+If verification finds errors, report them to the user before continuing.
+
 **Script usage** — execute all of these via Bash. Do NOT read them into context:
 
 | Script | Purpose | Invocation |
@@ -337,11 +353,20 @@ After all local PDFs, offer to continue with search mode or stop.
 
 Repeat until user stops, session_target reached, or searches exhausted:
 
-**→ Search → Triage → Parallel Extract → Update state → Report → repeat**
+**→ Search → Triage → Queue → Extract → Update state → Report → repeat**
+
+**Hard separation of search and extraction**: Search agents ONLY populate
+`state/queue.json`. They must NEVER attempt extraction. Extraction agents
+ONLY process papers already in the queue. Never combine search + extraction
+in a single subagent.
 
 For each stage, read the relevant reference file and use the model per §2:
 - **Search & Triage** (haiku): [search_and_triage.md](references/search_and_triage.md)
+  - Search agents write ONLY to: `state/queue.json`, `state/search_log.json`,
+    `state/triage_outcomes.jsonl`. No other file writes permitted.
 - **Fetch, Extract, Validate, Write** (sonnet): [extraction_and_validation.md](references/extraction_and_validation.md)
+  - Extraction agents write ONLY to: `results.csv` (via SchemaEnforcedWriter),
+    `state/processed.json`, `leads.csv`, `state/run_log.jsonl`.
 - **Taxonomy check** (inline): [taxonomy.md](references/taxonomy.md)
 - **State & Reporting** (haiku): [session_management.md](references/session_management.md)
 
@@ -350,8 +375,18 @@ For each stage, read the relevant reference file and use the model per §2:
 After triage, dispatch **up to 3 papers concurrently** to parallel sonnet
 subagents. Each runs the full pipeline (fetch → extract → taxonomy → validate
 → write) independently for ~3x throughput. Full coordinator pattern, subagent
-prompt template, and fallback rules in
+prompt template, error handling, and fallback rules in
 [extraction_and_validation.md](references/extraction_and_validation.md) §3c.
+
+**Critical rules for subagents:**
+- **Back up results.csv** before dispatching any batch.
+- Subagents must use `scripts/csv_writer.py` for all writes — never raw
+  `csv.DictWriter` or `open("results.csv", "w")`.
+- **No abstract-only extraction** — if full text unavailable, route to
+  leads.csv and return immediately.
+- **Verify record count** after each batch. If it decreased, restore backup.
+- If any subagent fails, fall back to serial processing for the rest of
+  the session.
 
 **Every 2 papers processed**, regenerate the dashboard:
 ```bash

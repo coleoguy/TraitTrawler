@@ -463,6 +463,12 @@ Session summary format:
 ══════════════════════════════════════
 ```
 
+**After every parallel batch** (before the next batch), the coordinator must:
+1. Run dedup check: `python3 verify_session.py --project-root .` (catches
+   duplicates from parallel agents writing simultaneously)
+2. Run taxonomy resolver: `python3 scripts/taxonomy_resolver.py --csv results.csv --species-column species --cache state/taxonomy_cache.json`
+   (fills missing family fields, resolves synonyms)
+
 At session end, also:
 1. Run `verify_session.py` and report any issues found.
 2. Run `scripts/statistical_qc.py --project-root .` and print the QC summary

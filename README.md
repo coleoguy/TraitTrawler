@@ -184,7 +184,7 @@ One row per species per paper. Fields are defined by your `collector_config.yaml
 
 ### leads.csv
 
-Papers identified as relevant but without obtainable full text. Each row includes DOI, title, failure reason, and whether abstract extraction succeeded. Resolve by dropping the PDF into `pdfs/` and running again.
+Papers identified as relevant but without obtainable full text. The agent no longer extracts from abstracts — papers without full text go directly to leads.csv with a `needs_fulltext` reason. Resolve by dropping the PDF into `pdfs/` and running again.
 
 ### state/
 
@@ -303,6 +303,30 @@ TraitTrawler/
 ```
 
 GitHub's **"Cite this repository"** button (top right) uses [`CITATION.cff`](CITATION.cff).
+
+## Upgrading an existing project
+
+If you have an existing project folder with results and want to use a newer version of the skill:
+
+1. **Rebuild and reinstall the skill** (see below). This updates SKILL.md, all scripts, and reference docs.
+2. **Your project data is safe.** The skill never modifies your `collector_config.yaml`, `config.py`, `guide.md`, `results.csv`, or state files during installation — only during collection sessions.
+3. **Update the scripts in your project folder.** The easiest way: delete the `scripts/` folder and `dashboard_generator.py`/`verify_session.py`/`export_dwc.py` from your project, then start a new session. The agent copies fresh scripts from the skill at startup (§1e).
+
+```bash
+# In your project folder:
+rm -rf scripts/ dashboard_generator.py verify_session.py export_dwc.py
+# Then start a new session — the agent will copy fresh scripts automatically
+```
+
+Alternatively, copy them manually from the repository:
+```bash
+cp /path/to/TraitTrawler/skill/dashboard_generator.py .
+cp /path/to/TraitTrawler/skill/verify_session.py .
+cp /path/to/TraitTrawler/skill/export_dwc.py .
+cp -r /path/to/TraitTrawler/skill/scripts/ scripts/
+```
+
+---
 
 ## Building the skill from source
 

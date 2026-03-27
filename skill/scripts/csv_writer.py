@@ -99,6 +99,22 @@ INT_FIELDS = {"paper_year"}
 CONFIDENCE_MIN = 0.0
 CONFIDENCE_MAX = 1.0
 
+# Sex chromosome notation normalization (common errors → correct values)
+_SEX_CHROM_NORMALIZE = {
+    "XYp": "Xyp", "Xyr": "Xyp", "xyp": "Xyp",
+    "XO": "X0", "xo": "X0", "Xo": "X0",
+    "neo-XY": "NeoXY", "neo-xy": "NeoXY", "neoXY": "NeoXY", "Neo-XY": "NeoXY",
+    "neo-X0": "NeoX0", "neo-XO": "NeoX0", "neoX0": "NeoX0", "Neo-X0": "NeoX0",
+}
+
+# Allowed values for sex_chromosome_system (anything else gets flagged)
+_SEX_CHROM_ALLOWED = {
+    "XY", "X0", "Xyp", "NeoXY", "NeoX0",
+    "X1X2Y", "X1X2X3Y", "X1X2X3X4Y",
+    "X1X2Y1Y2", "X1X2X3Y1Y2Y3",
+    "XYY", "ZW", "ZZ/ZW", "Parthenogenetic", "unknown", "",
+}
+
 
 class ValidationError:
     """A single validation failure."""
@@ -174,19 +190,15 @@ def validate_record(record: dict, output_fields: list,
                 action="flag"
             ))
 
-    # 4. Confidence vs source_type consistency
+    # 4. Reject abstract-only records entirely
+    # Abstract-only papers should be routed to leads.csv, not extracted.
     source_type = str(record.get("source_type", "")).strip()
-    if source_type == "abstract_only" and conf_str:
-        try:
-            conf = float(conf_str)
-            if conf > 0.55:
-                errors.append(ValidationError(
-                    "extraction_confidence", conf, "source_type_consistency",
-                    f"Abstract-only source but confidence={conf} > 0.55 ceiling",
-                    action="flag"
-                ))
-        except (ValueError, TypeError):
-            pass
+    if source_type == "abstract_only":
+        errors.append(ValidationError(
+            "source_type", source_type, "source_type_policy",
+            "Abstract-only records are not allowed — paper should be in leads.csv",
+            action="drop"
+        ))
 
     # 5. Boolean fields
     for field in BOOL_FIELDS:
@@ -228,7 +240,26 @@ def validate_record(record: dict, output_fields: list,
         except (ValueError, TypeError):
             pass
 
-    # 8. Project-specific validation rules
+    # 8. Sex chromosome system: allowed values check
+    sex_val = str(record.get("sex_chromosome_system", "")).strip()
+    if sex_val and sex_val not in _SEX_CHROM_ALLOWED:
+        errors.append(ValidationError(
+            "sex_chromosome_system", sex_val, "allowed_values",
+            f"Non-standard sex chromosome value '{sex_val}'. "
+            f"Permitted: {', '.join(sorted(v for v in _SEX_CHROM_ALLOWED if v))}",
+            action="flag"
+        ))
+
+    # 9. Mandatory family field
+    family_val = str(record.get("family", "")).strip()
+    if not family_val:
+        errors.append(ValidationError(
+            "family", "", "required",
+            "Family field is empty — look up genus in GBIF before writing",
+            action="flag"
+        ))
+
+    # 10. Project-specific validation rules
     for rule in validation_rules:
         field = rule.get("field", "")
         val = record.get(field, "")
@@ -456,6 +487,19 @@ class SchemaEnforcedWriter:
                 continue
 
             dedup_keys.add(key)
+            # Auto-normalize sex chromosome notation before writing
+            sex_val = record.get("sex_chromosome_system", "")
+            if sex_val and sex_val in _SEX_CHROM_NORMALIZE:
+                record["sex_chromosome_system"] = _SEX_CHROM_NORMALIZE[sex_val]
+
+            # Normalize extraction_confidence: convert strings to float
+            ec = record.get("extraction_confidence", "")
+            if isinstance(ec, str) and ec.strip():
+                ec_lower = ec.strip().lower()
+                conf_word_map = {"high": "0.85", "medium": "0.65", "low": "0.4"}
+                if ec_lower in conf_word_map:
+                    record["extraction_confidence"] = conf_word_map[ec_lower]
+
             # Sanitize: replace embedded newlines/carriage returns with spaces
             # This prevents column-offset corruption from verbatim text fields
             sanitized = {}
@@ -470,8 +514,14 @@ class SchemaEnforcedWriter:
         if dry_run or not rows_to_write:
             return report
 
+        # Pre-write safety: count existing records for post-write verification
+        pre_count = 0
+        if file_exists:
+            with open(self.csv_path, "r", encoding="utf-8") as f:
+                pre_count = sum(1 for _ in f) - 1  # subtract header
+
         # Atomic write: append to temp file, then replace
-        # Strategy: copy existing file + new rows → temp → rename
+        # Strategy: write new rows to temp, then append to main file
         # This is safer than direct append for crash protection
         try:
             if file_exists:
@@ -528,6 +578,27 @@ class SchemaEnforcedWriter:
                 f"CSV write failed after validating {report.accepted} records. "
                 f"Error: {e}. Records NOT written — retry or investigate."
             ) from e
+
+        # Post-write verification: ensure record count increased correctly
+        if os.path.exists(self.csv_path):
+            with open(self.csv_path, "r", encoding="utf-8") as f:
+                post_count = sum(1 for _ in f) - 1  # subtract header
+            expected = pre_count + len(rows_to_write)
+            if post_count < pre_count:
+                report.errors.append((
+                    -1,
+                    ValidationError(
+                        "results.csv", post_count, "record_count",
+                        f"CRITICAL: Record count DECREASED from {pre_count} to "
+                        f"{post_count} after write. Data may have been overwritten.",
+                        action="drop"
+                    )
+                ))
+                print(f"CRITICAL: results.csv record count decreased from "
+                      f"{pre_count} to {post_count}!", file=sys.stderr)
+            elif post_count != expected:
+                print(f"WARNING: Expected {expected} records after write, "
+                      f"got {post_count}", file=sys.stderr)
 
         return report
 

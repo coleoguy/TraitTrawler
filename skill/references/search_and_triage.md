@@ -136,6 +136,29 @@ from `collector_config.yaml` → classify as "likely".
 Move likely/uncertain to fetch. Mark unlikely as processed immediately
 (`processed.json` with `"triage": "unlikely"`).
 
+**Domain verification**: Before queueing, verify the paper actually studies
+the target taxon. For example, in a Coleoptera project, confirm that
+"Coleoptera" or "beetle" appears in the abstract or title. Papers about
+other orders (Hemiptera, Diptera, Lepidoptera, etc.) that happen to discuss
+chromosomes should be triaged as `unlikely`. This catches cross-order false
+positives from generic keyword searches.
+
+**Journal yield guidance**: Some journals consistently yield primary trait
+data; others are analytical and rarely contain raw measurements.
+
+High-yield journals for karyotype data (promote to `likely`):
+- Comparative Cytogenetics, Caryologia, Cytologia, Hereditas, Genetica,
+  European Journal of Entomology, Genetika, Folia Biologica, Chromosome
+  Research, Cytogenetic and Genome Research
+
+Low-yield journals (demote to `uncertain` unless abstract is very specific):
+- Genome Biology and Evolution, PLoS Genetics, Molecular Biology and
+  Evolution, Systematic Biology, eLife, Cell, Nature Genetics, BMC Genomics
+
+Papers from low-yield journals that discuss "genome assemblies", "synteny
+analysis", or "phylogenomics" without mentioning specific chromosome counts
+should be triaged as `unlikely`.
+
 ### 4b. Adaptive triage learning
 
 After every 50 papers processed, compute triage accuracy metrics:

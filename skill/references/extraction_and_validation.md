@@ -109,19 +109,28 @@ When a PDF exceeds 100 pages or 10 MB:
 4. When a large PDF is fully processed, remove its entry from
    `large_pdf_progress.json`.
 
-### 5f. Abstract fallback
+### 5f. No abstract-only extraction — route to leads instead
 
-If everything else fails, use the abstract. Set `source_type: abstract_only`
-and `extraction_confidence ≤ 0.5`. Still extract — abstracts often contain
-key data values even without full methodology.
+**Do NOT extract records from abstracts.** Abstract-only data lacks the
+methodological context needed for reliable extraction (sample sizes, exact
+notation, measurement methods). Instead, route these papers directly to
+`leads.csv` so the user can obtain the full text.
+
+When the full-text fetch cascade (§5a–§5e) fails and only the abstract is
+available:
+1. **Do NOT extract any records.** Skip extraction entirely.
+2. Append the paper to `leads.csv` with `reason: "needs_fulltext"`.
+3. Mark the paper in `processed.json` with `"outcome": "lead_needs_fulltext"`.
+4. Print: `📋 No full text — added to leads.csv: "{title}"`
+5. Continue to the next paper.
 
 ### 5g. Leads tracking
 
 After attempting all fetch sources for a paper, if the paper triaged as
-**likely** or **uncertain** and full text could NOT be obtained (i.e., the
-paper fell through to abstract-only or was skipped entirely), append a row
+**likely** or **uncertain** and full text could NOT be obtained, append a row
 to `leads.csv` in the project root. This gives the user an actionable list
-of papers worth manually obtaining.
+of papers worth manually obtaining. The user can drop the PDF into `pdfs/`
+and the agent will process it on the next session.
 
 **leads.csv fields:**
 
@@ -133,9 +142,7 @@ of papers worth manually obtaining.
 | `paper_year` | integer | Publication year |
 | `paper_journal` | string | Journal name |
 | `triage` | string | `likely` or `uncertain` |
-| `reason` | string | Why full text failed — one of: `paywall_no_proxy_auth`, `pdf_download_failed`, `pdf_timeout`, `scanned_skipped`, `browser_failed`, `no_oa_source` |
-| `abstract_extracted` | boolean | `true` if abstract-only extraction was done |
-| `records_from_abstract` | integer | Number of records extracted from abstract (0 if none) |
+| `reason` | string | Why full text failed — one of: `needs_fulltext`, `paywall_no_proxy_auth`, `pdf_download_failed`, `pdf_timeout`, `scanned_skipped`, `browser_failed`, `no_oa_source` |
 | `date_added` | string | ISO date the lead was logged |
 | `status` | string | `new` on creation. User can manually mark `obtained` or `skip` |
 
@@ -365,8 +372,9 @@ against project-specific rules.
 1. **Required fields present**: either `doi` or `paper_title` must be non-empty.
 2. **Species non-empty**: `species` field must contain a value (not null/empty).
 3. **Confidence in valid range**: `extraction_confidence` must be a float 0.0–1.0.
-4. **Confidence vs. source_type**: if `source_type == "abstract_only"`, then
-   `extraction_confidence ≤ 0.55`. (Abstracts give less data, so lower ceiling.)
+4. **No abstract-only records**: if `source_type == "abstract_only"`, **drop
+   the record**. Abstract-only papers should be routed to leads.csv (§5f),
+   not extracted. If an abstract-only record somehow reaches validation, reject it.
 5. **No exact duplicates**: check against existing rows in `results.csv` for
    matching (doi, species, and all trait-specific field values). Skip duplicate
    and log to `state/needs_attention.csv` with reason `duplicate_record`.
@@ -545,16 +553,61 @@ risk.
 
 **Coordinator pattern**:
 1. Pull the next 3 papers from `queue.json`
-2. Spawn 3 Agent subagents (model: sonnet), each with:
+2. **Before dispatching**: back up results.csv:
+   ```bash
+   cp results.csv "state/snapshots/results_pre_batch_$(date +%Y%m%d_%H%M%S).csv"
+   ```
+3. Spawn up to 3 Agent subagents (model: sonnet), each with:
    - The paper metadata (doi, title, abstract)
    - The project's `guide.md` content
    - The `collector_config.yaml` output_fields and validation_rules
-   - Instructions to use `csv_writer.py`, `state_utils.py`, `api_utils.py`
-3. Wait for all 3 to complete
-4. Each subagent returns a JSON summary `{records_added, flags, errors, doi, pdf_source}`; merge into rolling progress report
+   - The current record count (`wc -l results.csv`) for post-write verification
+   - Instructions to use `csv_writer.py` (NEVER raw csv.DictWriter)
+4. Wait for all to complete
+5. **Verify each subagent result** (see error handling below)
+6. Merge valid results into rolling progress report
 
 **Subagent prompt template**:
+
 ```
+=== SAFETY RULES — READ FIRST ===
+1. NEVER open results.csv with open(..., 'w') or any write mode.
+   NEVER use csv.writer or csv.DictWriter directly on results.csv.
+   ALWAYS use SchemaEnforcedWriter.append_records() from scripts/csv_writer.py.
+2. NEVER overwrite state/processed.json. Always json.load() first, update,
+   then json.dump(). Use scripts/state_utils.py safe_write_json().
+3. BEFORE writing: verify you have the correct number of columns. If the
+   CSV fieldnames look wrong (too few/too many), STOP and report the error.
+4. ONLY write to these files:
+   - results.csv (via SchemaEnforcedWriter ONLY)
+   - state/processed.json (via state_utils.safe_write_json ONLY)
+   - state/run_log.jsonl (via state_utils.append_jsonl ONLY)
+   - leads.csv (via csv.DictWriter in append mode ONLY)
+   - state/live_progress.jsonl (via state_utils.append_jsonl)
+5. Create NO other files. Write no .txt, .md, .html, .json files anywhere.
+   Do not create extraction reports, summaries, or analysis documents.
+6. Write records FIRST. All summaries come in the return JSON, not in files.
+=== END SAFETY RULES ===
+
+=== NOTATION RULES (STRICT) ===
+sex_chromosome_system permitted values ONLY:
+  XY, X0, Xyp, NeoXY, NeoX0, X1X2Y, X1X2X3Y, X1X2X3X4Y,
+  X1X2Y1Y2, XYY, ZW, ZZ/ZW, Parthenogenetic, unknown
+
+Common corrections (paper notation → database value):
+  "XYp" → "Xyp"   (lowercase y)
+  "XO"  → "X0"    (digit zero, not letter O)
+  "neo-XY" → "NeoXY"
+  "Xyr" → "Xyp"
+  Anything else → put in karyotype_notes, set sex_chromosome_system to
+  closest standard value, set flag_for_review=True
+
+extraction_confidence: ALWAYS a float 0.0–1.0 (e.g., 0.9). Never a string.
+diploid_2n_female: leave BLANK unless paper explicitly states a female count.
+  Exception: X0 systems where females are XX → 2n_female = 2n_male + 1
+  (note this in extraction_reasoning).
+=== END NOTATION RULES ===
+
 You are a TraitTrawler extraction worker. Process this single paper:
   DOI: {doi}
   Title: {title}
@@ -566,20 +619,52 @@ Project config:
 Domain knowledge:
 {guide_md_content}
 
+EXTRACTION RULES:
+1. Do NOT extract from abstracts. If full text cannot be obtained, add to
+   leads.csv and return: {"records_added": 0, "doi": "{doi}", "outcome": "lead_needs_fulltext"}
+2. For table-heavy papers: COUNT all data rows first, state the count,
+   then extract. Verify extracted count matches before writing.
+3. For papers > 20 pages: read in chunks, aggregate all records, write once.
+4. After writing, verify the record count increased by the expected amount.
+5. Every record MUST have a non-empty family field. If not in the paper,
+   look up the genus via GBIF (or state/taxonomy_cache.json).
+
 Pipeline: Fetch PDF (§5) → Extract records (§7) → Taxonomy check (§16) →
 Validate (§7f) → Write via scripts/csv_writer.py (§8)
 
-Use scripts/api_utils.py for all API calls (retry + rate limiting).
-Use scripts/state_utils.py for state file updates (atomic writes).
-Use scripts/csv_writer.py for CSV writes (schema enforcement).
-
-Return a JSON summary: {records_added, flags, errors, doi, pdf_source}
+Return a JSON summary: {"records_added": N, "flags": N, "errors": [...],
+  "doi": "...", "pdf_source": "...", "outcome": "extracted|lead_needs_fulltext|failed"}
 ```
 
-**Fallback**: If parallel dispatch fails (context limits, MCP unavailability),
-fall back to serial processing — one paper at a time with the same pipeline.
+**Subagent error handling**:
 
-**Every 10 papers processed**, regenerate the dashboard:
+After each subagent completes, the coordinator MUST verify:
+
+1. **Check subagent returned valid JSON.** If malformed or empty:
+   - Log: `⚠ Subagent failed for {doi}: no valid response`
+   - Mark paper as `"outcome": "subagent_failed"` in processed.json
+   - Add to retry queue (max 1 retry, then mark as lead)
+   - Do NOT re-extract — the subagent may have partially written records
+
+2. **Check results.csv was not corrupted.** After all subagents complete:
+   ```bash
+   python3 -c "import csv; rows=list(csv.DictReader(open('results.csv'))); print(f'{len(rows)} records, {len(rows[0]) if rows else 0} fields')"
+   ```
+   - If the row count *decreased* from pre-batch: **RESTORE FROM BACKUP**:
+     ```bash
+     cp "state/snapshots/results_pre_batch_*.csv" results.csv
+     ```
+     Then re-process the batch serially (one paper at a time).
+   - If the row count is reasonable: continue normally.
+
+3. **Check for state desync.** Run the §8b state sync check after each batch.
+
+**Fallback to serial processing**: If ANY subagent in a batch fails or
+produces unexpected results, fall back to serial processing for the rest
+of the session — one paper at a time with the same pipeline. Serial mode
+is slower but more reliable.
+
+**Every 2 papers processed**, regenerate the dashboard:
 ```bash
 python3 dashboard_generator.py --project-root .
 ```
