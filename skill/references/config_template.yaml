@@ -150,22 +150,25 @@ output_fields:
 # For among-species projects, the wizard adds "species" here.
 # For within-species projects (population-level data for a single species),
 # species is NOT required — the key field might be locality, population, etc.
-# required_fields:
-#   - species
+# The setup wizard sets this based on among/within-species choice.
+# Among-species default:
+required_fields:
+  - species
+# Within-species: replace "species" with your key field (population, locality, etc.)
 
 # --- Deduplication key ---
 # Fields that together define a unique record. Records matching ALL dedup_key
 # fields against an existing row in results.csv are skipped as duplicates.
 # Records matching all fields EXCEPT doi are kept (independent observations).
-# The setup wizard generates this. If not set, falls back to doi + all trait fields.
+# The setup wizard generates this based on your schema.
+# If not set, falls back to doi + all trait fields (may not deduplicate as expected).
 #
-# Among-species example:
-# dedup_key:
-#   - species
-#   - doi
-#   - body_mass_g_mean
-#
-# Within-species example (population-level data):
+# Among-species default (wizard replaces trait fields with your actual fields):
+dedup_key:
+  - species
+  - doi
+  {TRAIT_FIELDS_FOR_DEDUP}
+# Within-species example:
 # dedup_key:
 #   - population
 #   - doi

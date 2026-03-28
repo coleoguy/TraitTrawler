@@ -335,7 +335,7 @@ stopping. Never leave half-extracted records.
    - User approves/rejects each change individually
    - Archive to `state/discoveries.jsonl` with `applied: true/false`
    For detail on the review protocol, see
-   `${CLAUDE_SKILL_DIR}/references/knowledge_evolution.md`.
+   `${CLAUDE_SKILL_DIR}/references/knowledge_and_transfer.md`.
 5. **Confidence calibration**: `python3 scripts/calibration.py --project-root .`
 6. **Benchmark**: `python3 scripts/benchmark.py --project-root .` (if data exists)
 7. **Tool effectiveness**: Report source stats from `state/source_stats.json`

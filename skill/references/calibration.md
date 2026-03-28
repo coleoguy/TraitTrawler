@@ -1,175 +1,110 @@
-# Calibration and Self-Research
+# Calibration Phase
 
-## 0a. Researching wizard answers
-
-When the user delegates a setup wizard question ("you figure it out",
-"research it", "I don't know"), **spawn a haiku subagent** to do the
-research. Pass the subagent the taxon, trait, question, and the specific
-research strategy below. The subagent returns a concise answer (not the
-raw search results). Present findings for user approval.
-
-This is critical for context management — delegated research can involve
-dozens of API calls and abstract reads that would bloat the main context.
-The subagent's internal work is discarded after it returns.
-
-**Q3 (keywords)**: Search OpenAlex for 10–20 recent papers matching the
-taxon + trait. Extract the most common title words that co-occur with the
-trait. Propose a keyword list.
-
-**Q5 (proxy URL)**: Search the web for "{institution name} library proxy
-URL" or "{institution name} ezproxy". Common patterns:
-`http://proxy.library.{domain}/login?url=` or
-`https://ezproxy.{domain}/login?url=`. Propose and confirm.
-
-**Q7 (taxonomic groups)**: Search OpenAlex for the higher taxonomy of the
-target taxon. For an order, list families; for a family, list subfamilies.
-Use OpenAlex `search_works` with facets or GBIF taxonomy to identify the
-most-studied groups for this trait. Propose a list.
-
-**Q8 (journals/authors)**: Search OpenAlex for the top 10 journals and
-top 10 authors publishing on {taxon} + {trait} in the last 20 years.
-Propose the lists.
-
-**Q9 (how trait is reported)**: Search for 3–5 open-access papers on the
-trait, read the Methods and Results sections, and draft `guide.md` sections
-based on what you find. This merges directly into the calibration phase
-below — if the user delegates Q9, use the papers you find as seed papers
-for calibration and skip straight to Step 3.
+Run after the setup wizard generates config files, before the first real
+collection session. The goal is to learn from real papers so the agent starts
+its first session with domain knowledge extracted from actual literature, not
+just the user's initial description.
 
 ---
 
-# Calibration Phase (§0b)
+## Seed Papers
 
-Run this phase after the setup wizard generates config files, before the
-first real collection session. The goal is to learn from real papers so the
-agent starts its first session with domain knowledge extracted from actual
-literature, not just the user's initial description.
+You need 2-5 seed papers. These may come from:
 
----
+- **Papers the user mentioned during the setup conversation** — always
+  offer to use these first
+- **DOIs or titles the user provides** when you ask
+- **Papers you find yourself** — if the user says "find some yourself",
+  spawn a Sonnet-Searcher with the top 3 highest-specificity queries from
+  `config.py`, pick 3-5 papers with the best abstracts. Prefer papers
+  from journals known for the target trait.
 
-## Step 1 — Ask for seed papers
+## Benchmark Holdouts
 
-```
-Before I start searching, can you give me 2–5 DOIs or titles of papers
-that are good examples of what I should be finding? These will help me
-learn the notation, table formats, and terminology for your trait before
-I process hundreds of papers on my own.
+Before processing, designate 2-3 seed papers as **benchmark holdouts**.
+These go through the normal extraction pipeline, but afterward you present
+the results to the user for field-by-field verification — creating
+gold-standard data for accuracy measurement.
 
-(If you don't have any handy, I'll find some myself using your keywords.)
-```
+Let the user know what you're doing and why: these verified records let you
+measure and improve extraction accuracy over time. Record results to
+`state/benchmark_gold.jsonl` and `state/calibration_data.jsonl`.
 
----
-
-## Step 2 — Acquire seed papers
-
-**If the user provides DOIs**: fetch via the OA cascade (§5b) or locate in
-`pdfs/` if user-supplied.
-
-**If the user says "find some yourself"**: run the top 3 highest-specificity
-queries from `config.py` (queries with the most keywords), fetch the top 2
-results from each, and pick the 3–5 with the most relevant-looking
-abstracts. Prefer papers from journals known for the target trait — e.g.,
-Comparative Cytogenetics for karyotypes, or journals with "morphometrics"
-in the title for body measurements.
+The remaining seed papers are used for guide.md learning below.
 
 ---
 
-## Step 2b — Benchmark holdout (§20)
+## Calibration Extraction
 
-Before processing seed papers, designate 2-3 papers as **benchmark
-holdout papers**. These are processed through the normal extraction
-pipeline BUT the results are presented to the user for field-by-field
-verification, creating gold-standard data for accuracy measurement.
+Process each seed paper through the full v4 pipeline:
+1. Spawn **Sonnet-Fetcher** to acquire the PDF
+2. Spawn **Sonnet-Dealer** to coordinate extraction (use whatever
+   `extraction_mode` the user chose — consensus or fast)
+3. Spawn **Sonnet-Writer** to validate and write to results.csv
 
-```
-🎯 I'll use {N} of your seed papers for benchmarking — I'll extract
-   data and then ask you to verify each field. This creates a gold
-   standard for measuring extraction accuracy over time.
-```
-
-Process benchmark papers through extraction (§7), then present each
-record for verification per [benchmarking.md](references/benchmarking.md)
-§20b. Record results to `state/benchmark_gold.jsonl` and
-`state/calibration_data.jsonl`.
-
-The remaining seed papers are used for guide.md learning (Step 3 below).
-
-## Step 3 — Calibration extraction
-
-Process each seed paper through the full extraction pipeline (§7), but with
-extra attention to discovery logging (§14). **Use the same subagent
-architecture as normal sessions** (see model_routing.md §2) — spawn a
-sonnet subagent for each paper's extraction. This keeps PDF text out of
-the main agent's context, which is important because calibration processes
-3–5 papers in quick succession and context pressure accumulates fast.
-
-For each paper:
-- Extract records as normal (via subagent)
-- Log EVERY notation variant, terminology, and extraction pattern to
-  `state/discoveries.jsonl` — be aggressive about logging during calibration,
-  even for things that seem obvious. The point is to populate `guide.md`
-  with real examples before the agent flies solo.
-- Note the document structure: Where is trait data typically found? Tables?
-  Results section? Appendices? Comparative tables in Introduction?
+During calibration, instruct the Dealer to be aggressive about discovery
+logging:
+- Log **every** notation variant, terminology, and extraction pattern to
+  `learning/` — even things that seem obvious
+- Note document structure: Where does trait data typically appear? Tables?
+  Results section? Appendices? Comparative tables?
+- The whole point is to populate `guide.md` with real examples before
+  collecting at scale
 
 ---
 
-## Step 4 — Immediate knowledge review
+## Knowledge Review
 
-Run the §14 session-end knowledge review immediately (don't wait for session
-end). Present all discoveries to the user and apply approved amendments to
-`guide.md`.
+Run the knowledge review immediately after calibration extraction (don't
+wait for session end). Read `learning/` files, classify each discovery as
+routine or structural (see `knowledge_and_transfer.md`), present all
+discoveries to the user, and apply approved amendments to `guide.md`.
 
-This is the key payoff: the very first real search session benefits from
-domain knowledge extracted from real papers, not just the user's description
-of how the trait is reported.
-
----
-
-## Step 5 — Citation seeding
-
-For each seed paper, use OpenAlex `get_work_references` and
-`get_work_cited_by` to pull references and citing papers. Triage the titles
-and abstracts using the standard triage rules (§4). Add likely/uncertain
-papers to `queue.json`.
-
-This seeds the search queue with papers connected to known-good sources —
-often more relevant than cold keyword searches, especially for niche taxa
-or older literature that uses different terminology.
-
-Report:
-```
-📚 Calibration complete
-   Seed papers processed   : {N}
-   Records extracted        : {N}
-   guide.md amendments      : {N} approved
-   Citations found          : {N}
-   Added to search queue    : {N}
-   guide.md is now {lines} lines with {sections} sections
-
-Start a new conversation and say "continue collecting" to begin the first
-collection session with a fresh context window.
-```
-
-Write `state/calibration_complete.json` with the stats above. **Do NOT
-proceed to §1 in this invocation** — the wizard + calibration has consumed
-most of the context budget. A fresh session ensures full context for
-collection.
+This is the key payoff: the first real collection session benefits from
+domain knowledge extracted from real papers, not just the user's description.
 
 ---
 
-## Step 6 — Generate extraction_examples.md
+## Citation Seeding
 
-Using the seed papers as source material, auto-generate
-`extraction_examples.md` with 2–3 worked examples showing:
+For each seed paper, spawn a **Sonnet-Searcher** with
+`mode: "citation_chain"` to pull references and citing papers via OpenAlex.
+Triage titles and abstracts using the standard triage rules. Add
+likely/uncertain papers to `state/queue.json`.
+
+Citation seeding often finds papers more relevant than cold keyword searches,
+especially for niche taxa or older literature that uses different terminology.
+
+---
+
+## Extraction Examples
+
+Using the seed papers, auto-generate `extraction_examples.md` with 2-3
+worked examples showing:
 - The raw text or table row from the paper (verbatim, short excerpt)
 - The extracted record (all fields with values)
-- Notes on any notation choices or ambiguity resolution
+- Notes on notation choices or ambiguity resolution
 
-Ask the user to review and approve. This gives the agent (and future
-sessions) concrete worked examples, not just abstract rules. The examples
-serve as few-shot prompts during extraction — particularly valuable for
-complex notation systems where a rule description alone is insufficient.
+Ask the user to review. These examples serve as few-shot prompts during
+extraction — particularly valuable for complex notation systems.
+
+---
+
+## Wrapping Up
+
+Report what you accomplished: how many papers processed, records extracted,
+guide.md amendments approved, citations found and queued.
+
+Write `state/calibration_complete.json`:
+```json
+{"completed": true, "date": "...", "seed_papers": N, "records": N,
+ "benchmark_holdouts": N}
+```
+
+Tell the user to start a new conversation for the first collection session.
+**Do NOT proceed to section 1 in this invocation** — wizard + calibration
+consumes most of the context budget. A fresh session ensures full context
+for collection.
 
 ---
 
@@ -177,8 +112,8 @@ complex notation systems where a rule description alone is insufficient.
 
 - Calibration records are written to `results.csv` normally, with
   `session_id` reflecting the calibration session.
-- If the user skips calibration ("just start searching"), proceed to §1.
-  Calibration is strongly recommended but not required.
-- The entire calibration phase should take 10–20 minutes for 3–5 papers.
-  It's an investment that pays for itself within the first batch by
-  reducing low-confidence extractions and notation errors.
+- If the user wants to skip calibration ("just start searching"), that's
+  fine. It's strongly recommended but not required.
+- The entire calibration phase typically takes 10-20 minutes for 3-5 papers.
+  It pays for itself in the first batch by reducing low-confidence
+  extractions and notation errors.

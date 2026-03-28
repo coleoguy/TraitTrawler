@@ -164,8 +164,8 @@ def safe_write_json(path: str, data: Any, indent: int = 2,
             f.flush()
             os.fsync(f.fileno())  # force to disk
 
-        # Step 3: Atomic rename
-        os.rename(tmp_path, path)
+        # Step 3: Atomic replace (works cross-filesystem on POSIX)
+        os.replace(tmp_path, path)
 
     except Exception:
         # Clean up temp file on failure

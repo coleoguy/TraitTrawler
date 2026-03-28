@@ -138,9 +138,10 @@ results.csv successfully but the subsequent processed.json / search_log.json
 writes are incomplete — typically because the agent's generated code updates
 them in a separate step that silently fails or is skipped after an error.
 
-**Fix:** The state sync check in §8b (extraction_and_validation.md) now runs
-after every batch write and auto-patches missing entries. If you discover
-desync at session start, run the sync check manually before continuing.
+**Fix:** In v4, the Writer agent verifies results.csv after every write and
+updates processed.json as part of its pipeline (see `agents/writer.md`).
+The Manager also runs `verify_session.py` at session start to catch any
+remaining desync. If you discover desync, run verify_session.py manually.
 
 ### results.csv write failure
 

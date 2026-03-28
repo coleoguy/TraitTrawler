@@ -16,7 +16,7 @@ species or data point is missed.
   - `source_context`: verbatim quote from the paper, max 200 characters
   - `extraction_reasoning`: one sentence explaining the extraction (required
     for ambiguous cases, blank if the value is unambiguous)
-- Return ONLY a valid JSON array of record objects
+- Return a JSON object with `records` and `traces` arrays (see Output Format)
 - If the paper contains NO extractable trait data, return an empty array `[]`
 
 ## Confidence Scoring
@@ -125,7 +125,7 @@ return the same structure):
 }
 ```
 
-The `enumeration_inventory_size` field records how many species your
-enumeration found (used by the consensus orchestrator to detect missed
-records). Replace `TRAIT_FIELD_1`, etc. with the actual field names from
+The `enumeration_inventory_size` field is Agent B-internal — it records
+how many species your enumeration found so the consensus orchestrator can
+detect missed records. The Writer strips this field before CSV write. Replace `TRAIT_FIELD_1`, etc. with the actual field names from
 `OUTPUT FIELDS`.

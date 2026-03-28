@@ -19,6 +19,7 @@ Usage:
 """
 
 import csv
+import fcntl
 import json
 import os
 import sys
@@ -328,19 +329,35 @@ def validate_record(record: dict, output_fields: list,
 # Deduplication
 # ---------------------------------------------------------------------------
 
+# Fields that are NOT trait data (used for dedup key computation)
+_CORE_FIELDS = {
+    "doi", "paper_title", "paper_authors", "first_author", "paper_year",
+    "paper_journal", "session_id", "species", "family", "subfamily", "genus",
+    "extraction_confidence", "flag_for_review", "source_type", "pdf_source",
+    "pdf_filename", "pdf_url", "notes", "processed_date", "collection_locality",
+    "country", "source_page", "source_context", "extraction_reasoning",
+    "accepted_name", "gbif_key", "taxonomy_note",
+    "audit_status", "audit_session", "audit_prior_values",
+    "calibrated_confidence", "consensus_agreement", "extraction_trace_id",
+}
+
+
+def _get_trait_fields(output_fields: list) -> list:
+    """Return trait fields from output_fields (excludes core/provenance fields)."""
+    return [f for f in output_fields if f not in _CORE_FIELDS]
+
+
+def _make_key(row_or_record: dict, trait_fields: list) -> tuple:
+    """Create a dedup key from a row/record using pre-computed trait fields."""
+    return (
+        row_or_record.get("species", ""),
+        tuple(row_or_record.get(k, "") for k in trait_fields),
+    )
+
+
 def build_dedup_keys(csv_path: str, output_fields: list) -> set:
     """Build set of dedup keys from existing results.csv."""
-    core_fields = {
-        "doi", "paper_title", "paper_authors", "first_author", "paper_year",
-        "paper_journal", "session_id", "species", "family", "subfamily", "genus",
-        "extraction_confidence", "flag_for_review", "source_type", "pdf_source",
-        "pdf_filename", "pdf_url", "notes", "processed_date", "collection_locality",
-        "country", "source_page", "source_context", "extraction_reasoning",
-        "accepted_name", "gbif_key", "taxonomy_note",
-        "audit_status", "audit_session", "audit_prior_values",
-        "calibrated_confidence", "consensus_agreement", "extraction_trace_id",
-    }
-    trait_fields = [f for f in output_fields if f not in core_fields]
+    trait_fields = _get_trait_fields(output_fields)
 
     keys = set()
     if not os.path.exists(csv_path):
@@ -349,31 +366,13 @@ def build_dedup_keys(csv_path: str, output_fields: list) -> set:
     with open(csv_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            key = (
-                row.get("species", ""),
-                tuple(row.get(k, "") for k in trait_fields),
-            )
-            keys.add(key)
+            keys.add(_make_key(row, trait_fields))
     return keys
 
 
 def make_dedup_key(record: dict, output_fields: list) -> tuple:
     """Create a dedup key for a single record."""
-    core_fields = {
-        "doi", "paper_title", "paper_authors", "first_author", "paper_year",
-        "paper_journal", "session_id", "species", "family", "subfamily", "genus",
-        "extraction_confidence", "flag_for_review", "source_type", "pdf_source",
-        "pdf_filename", "pdf_url", "notes", "processed_date", "collection_locality",
-        "country", "source_page", "source_context", "extraction_reasoning",
-        "accepted_name", "gbif_key", "taxonomy_note",
-        "audit_status", "audit_session", "audit_prior_values",
-        "calibrated_confidence", "consensus_agreement", "extraction_trace_id",
-    }
-    trait_fields = [f for f in output_fields if f not in core_fields]
-    return (
-        record.get("species", ""),
-        tuple(record.get(k, "") for k in trait_fields),
-    )
+    return _make_key(record, _get_trait_fields(output_fields))
 
 
 # ---------------------------------------------------------------------------
@@ -525,31 +524,21 @@ class SchemaEnforcedWriter:
         # This is safer than direct append for crash protection
         try:
             if file_exists:
-                # For append, we use a simpler atomic strategy:
-                # write new rows to a temp file, then cat-append atomically
-                tmp_fd, tmp_path = tempfile.mkstemp(
-                    suffix=".csv",
-                    dir=self.project_root,
-                    prefix=".results_append_"
-                )
-                try:
-                    with os.fdopen(tmp_fd, "w", newline="",
-                                   encoding="utf-8") as f:
+                # Atomic append with file locking to prevent interleaved writes
+                # Lock the CSV file, append new rows, then release lock
+                with open(self.csv_path, "a", newline="",
+                           encoding="utf-8") as dst:
+                    fcntl.flock(dst.fileno(), fcntl.LOCK_EX)
+                    try:
                         writer = csv.DictWriter(
-                            f, fieldnames=fieldnames,
+                            dst, fieldnames=fieldnames,
                             extrasaction="ignore"
                         )
                         writer.writerows(rows_to_write)
-
-                    # Append temp content to main file
-                    with open(tmp_path, "r", encoding="utf-8") as src:
-                        content = src.read()
-                    with open(self.csv_path, "a", encoding="utf-8") as dst:
-                        dst.write(content)
-                finally:
-                    # Clean up temp file
-                    if os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
+                        dst.flush()
+                        os.fsync(dst.fileno())
+                    finally:
+                        fcntl.flock(dst.fileno(), fcntl.LOCK_UN)
             else:
                 # New file: write header + rows atomically
                 tmp_fd, tmp_path = tempfile.mkstemp(

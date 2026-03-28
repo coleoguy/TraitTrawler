@@ -122,7 +122,7 @@ output_fields:
   - audit_status
   - audit_session
   - audit_prior_values
-source_type_values: [full_text, table, catalogue]
+source_type_values: [full_text, table, catalogue, compilation]
 pdf_source_values: [unpaywall, openalex, europepmc, semanticscholar, core, proxy, local_pdf]
 """
 

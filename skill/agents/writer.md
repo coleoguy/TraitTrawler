@@ -169,7 +169,12 @@ writer = SchemaEnforcedWriter("results.csv", "collector_config.yaml")
 result = writer.append_records(records)
 ```
 
-Add `session_id` and `processed_date` (ISO timestamp) to each record.
+Add `session_id` (passed by the Manager in the Writer prompt) and
+`processed_date` (current ISO date) to each record.
+
+Strip the `agent_values` field before writing — it is used by the consensus
+orchestrator for transparency but is not a CSV column. Also strip `doubt_note`
+(Agent C internal field) and `enumeration_inventory_size` (Agent B internal).
 
 ### Step 7: Verify
 
@@ -215,7 +220,7 @@ Return a JSON summary to the Manager:
 
 ## CSV Field Order
 
-Records must follow this field order (from `csv_schema.md`):
+Records must follow this field order:
 
 **Paper metadata**: doi, paper_title, paper_authors, first_author, paper_year,
 paper_journal, session_id, processed_date

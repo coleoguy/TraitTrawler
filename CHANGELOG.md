@@ -4,6 +4,23 @@ All notable changes to TraitTrawler will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.1] — 2026-03-28
+
+### Fixed
+- **Dead confidence anomaly check**: `check_confidence_anomaly()` in `verify_session.py` had a self-referential comparison (`mean < mean - 2*stdev`) that could never trigger. Now correctly flags batches where >30% of records fall below the 2-SD threshold, plus an absolute check for session means below 0.5.
+- **Non-atomic CSV append**: `csv_writer.py` append path used separate read/write operations with no locking. Replaced with `fcntl.flock()` exclusive lock + `fsync()` for true atomic appends.
+- **GBIF rate limiting missing**: `gbif_match()` and `gbif_family_species_count()` in `taxonomy_resolver.py` called the GBIF API without any delay between requests, risking IP bans. Added `time.sleep(RATE_LIMIT_DELAY)` before each call.
+- **Dedup key inconsistency**: `build_dedup_keys()` and `make_dedup_key()` in `csv_writer.py` each defined their own `core_fields` set independently. Extracted shared `_CORE_FIELDS` constant and `_get_trait_fields()` helper to guarantee consistency.
+- **JSON decode crash in `resilient_fetch()`**: `api_utils.py` did not handle non-JSON responses (HTML error pages, empty bodies) from APIs returning HTTP 200. Now catches `json.JSONDecodeError` and raises a descriptive `APIError`.
+- **Retry-After header parsing**: `api_utils.py` only parsed `Retry-After` as seconds. Now handles both seconds and HTTP-date formats per RFC 7231.
+- **Cross-filesystem rename failure**: `state_utils.py` used `os.rename()` which fails across filesystems. Replaced with `os.replace()`.
+- **Silent PDF relocation failures**: `relocate_misplaced_pdfs()` in `pdf_utils.py` crashed on `OSError` from `shutil.move()`. Now catches errors, logs to stderr, and continues.
+- **Silent logging failures**: `_log_retry()` in `api_utils.py` swallowed all exceptions. Now logs to stderr so disk/permission issues are visible.
+
+### Added
+- **GBIF rank validation**: `taxonomy_resolver.py` now rejects matches at ranks above SPECIES (GENUS, FAMILY, etc.) and flags them as `flag_higher_rank` instead of silently accepting family-level data as species-level.
+- **Taxonomy cache TTL**: Cache entries in `taxonomy_resolver.py` now expire after 90 days (`CACHE_TTL_DAYS`). Stale entries are refreshed from GBIF on next access.
+
 ## [2.0.0] — 2026-03-25
 
 ### Added

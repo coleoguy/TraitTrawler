@@ -32,6 +32,7 @@ from urllib.error import URLError, HTTPError
 GBIF_MATCH_URL = "https://api.gbif.org/v1/species/match"
 GBIF_SPECIES_URL = "https://api.gbif.org/v1/species"
 RATE_LIMIT_DELAY = 0.35  # seconds between requests (~3/sec)
+CACHE_TTL_DAYS = 90  # cache entries older than this are refreshed
 
 
 def load_cache(cache_path):
@@ -55,7 +56,8 @@ def save_cache(cache, cache_path):
 
 
 def gbif_match(species_name, kingdom="Animalia"):
-    """Query GBIF species match API."""
+    """Query GBIF species match API (rate-limited)."""
+    time.sleep(RATE_LIMIT_DELAY)
     url = (
         f"{GBIF_MATCH_URL}"
         f"?name={quote(species_name)}"
@@ -71,7 +73,8 @@ def gbif_match(species_name, kingdom="Animalia"):
 
 
 def gbif_family_species_count(family_name):
-    """Get approximate species count for a family from GBIF."""
+    """Get approximate species count for a family from GBIF (rate-limited)."""
+    time.sleep(RATE_LIMIT_DELAY)
     url = (
         f"{GBIF_SPECIES_URL}/search"
         f"?rank=FAMILY&q={quote(family_name)}&limit=1"
@@ -95,16 +98,30 @@ def gbif_family_species_count(family_name):
     return 0
 
 
+def _cache_is_fresh(entry):
+    """Check if a cache entry is within its TTL."""
+    lookup_date = entry.get("lookup_date", "")
+    if not lookup_date:
+        return False
+    try:
+        from datetime import datetime, timedelta
+        cached_date = datetime.strptime(lookup_date, "%Y-%m-%d")
+        return (datetime.now() - cached_date).days < CACHE_TTL_DAYS
+    except (ValueError, TypeError):
+        return False
+
+
 def resolve_species(species_name, kingdom, cache):
     """Resolve a single species name. Returns a result dict."""
-    # Check cache first
+    # Check cache first (with TTL)
     if species_name in cache:
         cached = cache[species_name]
-        return {
-            "query": species_name,
-            "cached": True,
-            **cached
-        }
+        if _cache_is_fresh(cached):
+            return {
+                "query": species_name,
+                "cached": True,
+                **cached
+            }
 
     # Query GBIF
     time.sleep(RATE_LIMIT_DELAY)
@@ -170,6 +187,14 @@ def resolve_species(species_name, kingdom, cache):
         result["note"] = (
             f"Original name: {species_name}, resolved to accepted name "
             f"via GBIF (acceptedUsageKey: {accepted_key})"
+        )
+
+    elif result["rank"] and result["rank"] not in ("SPECIES", "SUBSPECIES", "VARIETY", "FORM", ""):
+        # Match resolved to a rank above species — flag it
+        result["action"] = "flag_higher_rank"
+        result["note"] = (
+            f"GBIF matched to {result['rank']} rank ({result['matched_name']}), "
+            f"not species level. Genus/family fields may be unreliable."
         )
 
     elif match_type == "FUZZY":

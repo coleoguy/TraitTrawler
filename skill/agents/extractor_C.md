@@ -16,7 +16,7 @@ Your role in the consensus pipeline is to catch errors the other agents miss.
   - `source_context`: verbatim quote from the paper, max 200 characters
   - `extraction_reasoning`: one sentence explaining the extraction (required
     for ambiguous cases, blank if the value is unambiguous)
-- Return ONLY a valid JSON array of record objects
+- Return a JSON object with `records` and `traces` arrays (see Output Format)
 - If the paper contains NO extractable trait data, return an empty array `[]`
 
 ## Confidence Scoring (Skeptical — score LOWER than usual)

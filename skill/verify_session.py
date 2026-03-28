@@ -272,19 +272,30 @@ def check_confidence_anomaly(rows: List[Dict[str, str]]) -> List[Dict[str, Any]]
     session_mean = mean(confidences)
     session_std = stdev(confidences)
 
-    # Warning threshold: >2 SD below the session mean (within this batch)
-    # This is a self-referential check to spot batches with unusual low confidence
+    # Warning: flag if >30% of records fall more than 2 SD below session mean
     if session_std > 0:
         low_threshold = session_mean - (2 * session_std)
-        if session_mean < low_threshold:
+        low_records = [c for c in confidences if c < low_threshold]
+        if len(low_records) > len(confidences) * 0.3:
             issues.append({
                 'type': 'confidence_anomaly',
                 'severity': 'warning',
                 'field': 'extraction_confidence',
                 'row_number': None,
-                'message': f"Session mean confidence ({session_mean:.3f}) is unusually low relative to internal variance. Review extraction quality.",
-                'value': f"mean={session_mean:.3f}, stdev={session_std:.3f}"
+                'message': f"Session has {len(low_records)}/{len(confidences)} records with confidence below {low_threshold:.3f} (mean={session_mean:.3f}, 2SD threshold). Review extraction quality.",
+                'value': f"mean={session_mean:.3f}, stdev={session_std:.3f}, low_count={len(low_records)}"
             })
+
+    # Also flag if session mean is very low (below 0.5)
+    if session_mean < 0.5:
+        issues.append({
+            'type': 'confidence_anomaly',
+            'severity': 'warning',
+            'field': 'extraction_confidence',
+            'row_number': None,
+            'message': f"Session mean confidence ({session_mean:.3f}) is below 0.5. Review extraction quality.",
+            'value': f"mean={session_mean:.3f}, stdev={session_std:.3f}"
+        })
 
     return issues
 

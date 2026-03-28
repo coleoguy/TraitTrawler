@@ -95,7 +95,7 @@ The Extractor returns one of three outcomes:
 - Move handoff from `ready_for_extraction/` to `state/dealt/` with outcome
 - Mark paper in `state/processed.json`:
   ```json
-  {"outcome": "extracted", "records": N, "consensus": "full|majority|mixed",
+  {"outcome": "extracted", "records": N,
    "date": "...", "session_id": "..."}
   ```
 
@@ -136,7 +136,7 @@ Append to `state/run_log.jsonl`:
   "doi": "...",
   "outcome": "extracted|no_data|consensus_failed",
   "records": N,
-  "consensus_type": "full|majority|mixed|single_pass|opus_escalation|none",
+  "consensus_type": "full|majority|two_found|single_agent|single_pass|opus_escalation|none",
   "extraction_mode": "consensus|fast",
   "model_used": "sonnet|opus"
 }

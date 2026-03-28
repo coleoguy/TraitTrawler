@@ -122,9 +122,14 @@ def relocate_misplaced_pdfs(project_root, dry_run=True):
         if dry_run:
             results.append((str(src), str(dst), False))
         else:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dst))
-            results.append((str(src), str(dst), True))
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dst))
+                results.append((str(src), str(dst), True))
+            except OSError as e:
+                print(f"WARNING: Failed to move {src} -> {dst}: {e}",
+                      file=sys.stderr)
+                results.append((str(src), str(dst), False))
 
     return results
 

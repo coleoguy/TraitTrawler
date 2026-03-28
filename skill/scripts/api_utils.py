@@ -133,6 +133,25 @@ class APIError(Exception):
         )
 
 
+def _parse_retry_after(value: str) -> Optional[float]:
+    """Parse Retry-After header as seconds (int/float) or HTTP-date (RFC 7231)."""
+    value = value.strip()
+    # Try as seconds first
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    # Try as HTTP-date (e.g., "Wed, 21 Oct 2015 07:28:00 GMT")
+    from email.utils import parsedate_to_datetime
+    try:
+        target = parsedate_to_datetime(value)
+        from datetime import datetime, timezone
+        delta = (target - datetime.now(timezone.utc)).total_seconds()
+        return max(0.0, delta)
+    except (ValueError, TypeError):
+        return None
+
+
 def resilient_fetch(url: str, api_name: str = "default",
                     headers: Optional[dict] = None,
                     timeout: int = 30,
@@ -181,7 +200,14 @@ def resilient_fetch(url: str, api_name: str = "default",
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 data = response.read()
                 if parse_json:
-                    return json.loads(data)
+                    try:
+                        return json.loads(data)
+                    except (json.JSONDecodeError, ValueError) as je:
+                        raise APIError(
+                            url, api_name, response.status,
+                            f"Invalid JSON response ({len(data)} bytes): "
+                            f"{data[:100]!r}", attempt
+                        ) from je
                 return data
 
         except urllib.error.HTTPError as e:
@@ -198,10 +224,9 @@ def resilient_fetch(url: str, api_name: str = "default",
                 if status == 429:
                     retry_after = e.headers.get("Retry-After", "")
                     if retry_after:
-                        try:
-                            delay = max(delay, float(retry_after))
-                        except ValueError:
-                            pass
+                        retry_delay = _parse_retry_after(retry_after)
+                        if retry_delay is not None:
+                            delay = max(delay, retry_delay)
 
                 _log_retry(api_name, url, status, attempt, max_retries,
                            delay, log_file)
@@ -283,8 +308,13 @@ def _log_retry(api_name: str, url: str, status: int, attempt: int,
         }
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass  # logging failures should never interrupt the pipeline
+    except Exception as log_err:
+        # Log to stderr so disk/permission issues are visible
+        try:
+            print(f"WARNING: Failed to write retry log: {log_err}",
+                  file=sys.stderr)
+        except Exception:
+            pass  # truly last-resort — never interrupt the pipeline
 
 
 # ---------------------------------------------------------------------------
