@@ -42,6 +42,20 @@ batch_size: 20
 # Print a rolling progress update every N papers.
 report_every: 5
 
+# --- v4 Extraction pipeline ---
+# "consensus" (default): 3 Sonnet agents per paper with majority-rule voting.
+#   Best accuracy. ~3x extraction token cost per paper.
+# "fast": 1 Sonnet agent per paper, no voting. Use for exploratory runs,
+#   well-understood traits, or when budget is tight.
+extraction_mode: consensus
+
+# How many papers to extract in parallel. Each Dealer handles one paper.
+# In consensus mode, each Dealer spawns 3 extraction agents, so peak
+# concurrent agents = max_concurrent_dealers * 3.
+# Increase to 3-4 if extraction is the bottleneck; set to 1 for debugging.
+concurrency:
+  max_concurrent_dealers: 2
+
 taxonomy_api: "gbif"
 
 # Output is always written to results.csv in the project root.
@@ -87,26 +101,23 @@ output_fields:
   - pdf_url
   - notes
   - processed_date
-  # --- Calibration & consensus (§19, §21, §22) ---
+  # --- Calibration & consensus ---
   - calibrated_confidence
-  - consensus_agreement
+  - consensus
   - extraction_trace_id
+  # --- Audit tracking ---
+  - audit_status
+  - audit_session
+  - audit_prior_values
 
-# --- Model routing (optional) ---
-# Controls which model handles each pipeline stage. Cheaper models save cost;
-# more expensive models improve accuracy on hard tasks. The agent escalates
-# automatically when it detects problems (see SKILL.md §2).
-# Allowed values: haiku, sonnet, opus
+# --- Model routing (v4) ---
+# v4 uses a simpler two-tier model: Opus manages, Sonnet works.
+# Opus escalation happens automatically when Sonnet consensus fails.
+# You generally don't need to change these defaults.
 # model_routing:
-#   search: haiku
-#   triage: haiku
-#   state_management: haiku
-#   extraction: sonnet
-#   validation: sonnet
-#   knowledge_review: sonnet
-#   escalation_model: opus
-#   escalation_confidence_threshold: 0.5
-#   escalation_row_mismatch_pct: 10
+#   manager: opus         # Coordinator (this is the skill's default model)
+#   sub_processes: sonnet  # All pipeline agents (search, fetch, extract, write)
+#   escalation: opus       # Triggered when consensus fails on a paper
 
 # --- Audit mode (optional) ---
 # Self-cleaning: re-examines low-confidence, statistically anomalous, and
@@ -132,10 +143,49 @@ output_fields:
 #     value: 100
 #     action: ask_continue
 
+# --- Required fields ---
+# Fields that must be non-empty for a record to be written to results.csv.
+# Records missing any required field are dropped (logged to needs_attention.csv).
+# doi and extraction_confidence are always required regardless of this list.
+# For among-species projects, the wizard adds "species" here.
+# For within-species projects (population-level data for a single species),
+# species is NOT required — the key field might be locality, population, etc.
+# required_fields:
+#   - species
+
+# --- Deduplication key ---
+# Fields that together define a unique record. Records matching ALL dedup_key
+# fields against an existing row in results.csv are skipped as duplicates.
+# Records matching all fields EXCEPT doi are kept (independent observations).
+# The setup wizard generates this. If not set, falls back to doi + all trait fields.
+#
+# Among-species example:
+# dedup_key:
+#   - species
+#   - doi
+#   - body_mass_g_mean
+#
+# Within-species example (population-level data):
+# dedup_key:
+#   - population
+#   - doi
+#   - body_mass_g_mean
+
+# --- Compilation tables ---
+# How to handle tables that compile previously published values from other
+# papers (common in review/comparative papers).
+# "skip" (default): Only extract primary data. Safest — no misattribution.
+# "extract_attributed": Extract with source_type="compilation" and lower
+#   confidence. Captures more data but risks transcription errors.
+# "extract_as_leads": Don't extract values, but capture the cited references
+#   so the Searcher can find the original papers.
+compilation_tables: extract_attributed
+
 # --- Taxonomy resolution (optional) ---
 # Validate species names against GBIF Backbone Taxonomy.
 # Resolves synonyms to accepted names, auto-fills higher taxonomy.
 # Original names preserved in notes field when changed.
+# Set to false for within-species projects or when the unit isn't a species.
 taxonomy_resolution: true
 # taxonomy_kingdom: "Animalia"  # GBIF kingdom filter (Animalia, Plantae, Fungi)
 
@@ -153,15 +203,15 @@ taxonomy_resolution: true
 #     max: 200000
 #     on_fail: flag
 
-# --- Consensus extraction (optional, §21) ---
-# Multi-agent consensus for low-confidence extractions.
-# When triggered, runs 2 additional extraction passes with different
-# prompting strategies and resolves by field-level voting.
+# --- Consensus extraction (v4) ---
+# In v4, consensus is controlled by extraction_mode above (consensus/fast).
+# When extraction_mode is "consensus", ALL papers get 3-agent voting.
+# When extraction_mode is "fast", papers get single-agent extraction.
+# The user chooses the mode at session start.
+# These settings fine-tune consensus behavior:
 # consensus_config:
-#   enabled: true
-#   trigger_threshold: 0.7       # Mean confidence below this triggers consensus
-#   min_papers_before_active: 20 # Don't run consensus until guide.md is stable
-#   max_consensus_per_session: 5 # Cap to control token spend
+#   opus_escalation: true         # Escalate to Opus when Sonnet consensus fails
+#   opus_confidence_threshold: 0.7 # Opus result accepted if mean confidence >= this
 
 # --- Confidence calibration (optional, §19) ---
 # Post-hoc calibration transforms raw confidence heuristics into

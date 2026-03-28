@@ -1,24 +1,20 @@
 ---
 name: trait-trawler
-model: sonnet
+model: opus
 effort: high
 description: >
-  Autonomous scientific literature mining agent that builds structured trait
-  databases (karyotype, morphometric, life-history, any phenotype) from the
-  primary literature. Searches PubMed, OpenAlex, bioRxiv, and Crossref;
-  retrieves full-text PDFs via open-access cascades and institutional proxies;
-  extracts structured data from prose, tables, and catalogues; resolves
-  taxonomy against GBIF; validates and writes to CSV with full provenance.
-  Includes statistical QC (Chao1, Grubbs), citation chaining, self-improving
-  domain knowledge, confidence calibration, multi-agent consensus extraction,
-  and formal reproducibility. Use when the user wants to: collect trait data,
-  mine the literature, run a session, build a trait database, process papers,
-  extract data, run QC, audit the database, or continue collecting. Do NOT use
-  for casual literature review (use deepscholar), simple data exploration, or
-  one-off paper summaries.
+  Collects trait data, mines literature, runs sessions, builds trait databases,
+  processes papers, extracts data, runs QC, and audits databases. Autonomous
+  multi-agent pipeline that searches PubMed/OpenAlex/bioRxiv/Crossref,
+  retrieves full-text PDFs, extracts structured records via 3-agent consensus
+  voting, and writes to CSV with taxonomy resolution and provenance tracking.
+  Handles karyotype, morphometric, life-history, or any phenotype data.
+  Also triggers on: continue collecting, run a session, process papers.
+  Do NOT use for casual literature review (use deepscholar) or one-off
+  paper summaries.
 allowed-tools: >
   Bash(python3:*) Bash(pip:*) Bash(cp:*) Bash(mkdir:*) Bash(wc:*) Bash(ls:*)
-  Bash(open:*) Bash(pkill:*) Bash(sleep:*)
+  Bash(open:*) Bash(pkill:*) Bash(sleep:*) Bash(mv:*) Bash(rm:*)
   Read Write Edit Glob Grep Agent WebFetch WebSearch
 argument-hint: "[session-target or command, e.g. '20 papers', 'run QC', 'audit']"
 compatibility: >
@@ -31,157 +27,58 @@ compatibility: >
   public APIs).
 metadata:
   author: Heath Blackmon
-  version: 3.0.0
+  version: 4.0.0
 ---
 
-# TraitTrawler
+# TraitTrawler v4 — Opus Manager
 
-Searches the scientific literature, retrieves full-text papers, and extracts
-structured data records into a CSV. Everything about *what* to collect lives in
-three project files: `collector_config.yaml` (taxa, trait, fields), `config.py`
-(search queries), and `guide.md` (domain knowledge for extraction). The skill
-itself is taxon- and trait-agnostic.
+You are the **Manager** of a multi-agent literature mining pipeline. You
+coordinate Sonnet sub-processes that do the actual work. You never do
+extraction, search, or CSV writing yourself.
 
-Run until the user stops, `session_target` is reached, or the search queue is
-exhausted. Pick up exactly where the previous session ended.
+**Your responsibilities**: interact with the user, read project state, decide
+what to do next, spawn agents, review results, and manage knowledge evolution.
 
 **Skill directory**: `${CLAUDE_SKILL_DIR}`
-**Project root**: the folder Cowork has open (the current working directory).
+**Agent specs**: `${CLAUDE_SKILL_DIR}/agents/` (one .md per agent type)
+**Project root**: the current working directory
 
-## Pipeline stages (detail in reference files)
+---
 
-| Stage | Section | Reference file | When to load |
+## Architecture Overview
+
+| Agent | Model | Role | Spec file |
 |---|---|---|---|
-| Calibration (first run) | §0b | [calibration.md](references/calibration.md) | First run only, after setup wizard |
-| Search & Triage | §3–4 | [search_and_triage.md](references/search_and_triage.md) | Every search cycle |
-| Fetch, Extract, Validate, Write | §5–8 | [extraction_and_validation.md](references/extraction_and_validation.md) | Every extraction cycle |
-| State, Reporting, Dashboard | §9–13 | [session_management.md](references/session_management.md) | Session start and end |
-| Model routing | §2 | [model_routing.md](references/model_routing.md) | Session start (reference) |
-| Self-improving knowledge | §14 | [knowledge_evolution.md](references/knowledge_evolution.md) | Session end, if discoveries logged |
-| Taxonomic intelligence | §16 | [taxonomy.md](references/taxonomy.md) | During extraction (after records, before write) |
-| Statistical QC | §17 | [statistical_qc.md](references/statistical_qc.md) | Session end or on-demand ("run QC") |
-| Campaign planning | §18 | [campaign_planning.md](references/campaign_planning.md) | On-demand after 3+ sessions |
-| Audit mode | §15 | [audit_mode.md](references/audit_mode.md) | On-demand ("audit the database") |
-| Confidence calibration | §19 | [confidence_calibration.md](references/confidence_calibration.md) | Session end, if calibration data exists |
-| Extraction benchmarking | §20 | [benchmarking.md](references/benchmarking.md) | During calibration + on-demand |
-| Consensus extraction | §21 | [consensus_extraction.md](references/consensus_extraction.md) | Auto on low-confidence papers |
-| Advanced features | §22–28 | [advanced_features.md](references/advanced_features.md) | Traces, active learning, adaptive tools, transfer, KG export, streaming, reproducibility |
-| Troubleshooting | — | [troubleshooting.md](references/troubleshooting.md) | When something goes wrong |
+| **You (Manager)** | opus | Coordinate, user interaction, decisions | This file |
+| Sonnet-Searcher | sonnet | Search APIs, triage papers | `agents/searcher.md` |
+| Sonnet-Fetcher | sonnet | Acquire PDFs, write handoff files | `agents/fetcher.md` |
+| Sonnet-Dealer | sonnet | Coordinate extraction per paper | `agents/dealer.md` |
+| Sonnet-Extractor | sonnet | 3-agent consensus extraction | `agents/extractor_consensus.md` |
+| Sonnet-Writer | sonnet | Validate, resolve taxonomy, write CSV | `agents/writer.md` |
 
-Read the appropriate reference file when entering that pipeline stage.
-**During the setup wizard (§0) and calibration (§0b), only read
-`calibration.md` and `config_template.yaml`.** Do not pre-load
-extraction_and_validation.md, session_management.md, or other reference
-files — they are not needed until §1+ and loading them wastes context.
+**Inter-agent communication** is folder-based:
+- `ready_for_extraction/` — Fetcher writes, Dealer reads
+- `finds/` — Extractor writes, Writer reads and deletes after verified write
+- `learning/` — Extractor writes, Manager reviews at session end
+- Nothing is deleted until the downstream consumer has verified its work.
 
 ---
 
 ## 0. First-Run Detection
 
-Check whether `collector_config.yaml` exists in the current working directory.
+Check whether `collector_config.yaml` exists in the project root.
 
-**If it does NOT exist → run setup wizard:**
-
-Ask these questions one at a time (wait for each answer):
-
-1. "What taxa are you collecting data for? (e.g. Coleoptera, Aves, Mammalia)"
-2. "What trait or data type are you collecting? (e.g. karyotype, body size, mating system)"
-3. "What keywords in a paper title make it clearly relevant even without an abstract?"
-4. "What is your contact email? (used for API polite-pool access)"
-5. "What institution do you use for library access? (for the proxy URL)"
-   — For Texas A&M: proxy is `http://proxy.library.tamu.edu/login?url=`
-   — For others: offer to look it up or ask them to paste it
-
-### Researching answers the user delegates
-
-For any wizard question, the user may say "you figure it out", "look it up",
-or "research it." **Spawn a haiku subagent** to do the research — pass it
-the taxon, trait, and the specific question. The subagent does the API
-calls, reads abstracts, and returns a concise answer (proposed keyword list,
-proxy URL, taxonomic group list, etc.). Present the subagent's findings to
-the user for approval. This keeps search results, abstracts, and intermediate
-reasoning out of the main context.
-
-See [calibration.md](references/calibration.md) §0a for the research
-strategy per question — include these instructions in the subagent prompt.
-
-### Create project files
-
-- Create `collector_config.yaml` from answers using the template in
-  `${CLAUDE_SKILL_DIR}/references/config_template.yaml`. Populate
-  `{TRAIT_FIELDS}` with trait-specific field names using these conventions:
-  - snake_case, include unit when applicable (e.g. `body_mass_g_mean`)
-  - Include `_mean`, `_sd`, `_min`, `_max` for continuous measurements
-  - Include `sex`, `sample_size`, `age_class` when trait is per-individual
-  - Include method/technique fields when relevant
-  - **Always include provenance fields**: `source_page`, `source_context`,
-    `extraction_reasoning`
-  - Show the user the field list and ask if they want changes
-- Create `state/` folder with empty state files:
-  `processed.json` (`{}`), `queue.json` (`[]`), `search_log.json` (`{}`),
-  `large_pdf_progress.json` (`{}`), `run_log.jsonl` (empty),
-  `discoveries.jsonl` (empty), `taxonomy_cache.json` (`{}`),
-  `calibration_data.jsonl` (empty), `benchmark_gold.jsonl` (empty),
-  `triage_outcomes.jsonl` (empty), `source_stats.json` (`{}`),
-  `consensus_stats.json` (`{}`)
-- Create `state/extraction_traces/` and `state/snapshots/` directories
-- Create `pdfs/` folder
-- Create `results.csv` with just the header row
-
-**Generate `config.py`** if it doesn't exist — ask:
-7. "What are the major taxonomic groups I should search?"
-8. "Any specific journals or author names that are especially relevant?"
-
-Generate cross-product of taxonomic groups × trait keywords. File MUST define
-`SEARCH_TERMS` as a list. Tell the user the query count.
-
-**Generate `guide.md`** if it doesn't exist — ask:
-9. "What should I know about how this trait is reported in the literature?"
-
-Generate structured guide with sections for: Units/notation, What to extract,
-What to skip, Common pitfalls, Taxonomy notes. Tell user they can edit anytime.
-
-### 0b. Calibration phase
-
-After generating config files, run a calibration phase before the first
-real session. Full details in [calibration.md](references/calibration.md).
-
-Summary: ask for seed DOIs (or find automatically) → extract with aggressive
-discovery logging → immediate knowledge review → citation-seed the queue →
-auto-generate `extraction_examples.md`. The first real session starts with
-battle-tested domain knowledge and a warm queue.
-
-**After calibration completes**, write a checkpoint flag to
-`state/calibration_complete.json` (keys: `completed`, `date`, `seed_papers`,
-`records`). Then tell the user:
-
-```
-Calibration complete — config files, guide.md, and extraction examples are
-ready. Start a new conversation and say "continue collecting" or "run a
-session" to begin the first collection batch with a fresh context window.
-```
-
-**Do NOT proceed to §1 in the same invocation.** The wizard + calibration
-consumes most of the context window. Starting §1 → §3 here risks context
-exhaustion mid-session, causing state desync, skipped papers, or silent
-failures. A fresh session gets the full context budget for actual collection.
-
-**If `collector_config.yaml` exists → skip to §1.**
+**If it does NOT exist** → read `${CLAUDE_SKILL_DIR}/references/setup_wizard.md`
+and follow its instructions. The wizard walks through project setup (fresh
+start or CSV bootstrap) and calibration. Do NOT proceed to section 1 in the
+same invocation — wizard + calibration consumes most of the context window.
 
 ---
 
 ## 1. Startup
 
-If `state/calibration_complete.json` exists and this is the first session
-after calibration, acknowledge it briefly:
-```
-Calibration data loaded — {N} records from {M} seed papers, queue has {Q} papers.
-```
-Then proceed normally with §1a–§1f.
+### 1a. Dependencies
 
-### 1a. Check dependencies
-
-**Check Python dependencies** (run once per session):
 ```bash
 python3 -c "import pdfplumber" 2>/dev/null || pip install pdfplumber --break-system-packages -q
 python3 -c "import yaml" 2>/dev/null || pip install pyyaml --break-system-packages -q
@@ -189,47 +86,21 @@ python3 -c "import scipy" 2>/dev/null || pip install scipy matplotlib --break-sy
 python3 -c "import sklearn" 2>/dev/null || pip install scikit-learn --break-system-packages -q
 ```
 
-If any install fails, warn but continue — fall back gracefully.
+Check MCPs by suffix: `search_articles` (PubMed), `search_works` (OpenAlex),
+`search_preprints` (bioRxiv), `search_crossref`, `navigate` (Chrome).
+Degrade gracefully if unavailable.
 
-**Check MCP availability** — attempt one lightweight call to each; degrade
-gracefully if unavailable. MCP tool names vary by environment (e.g.,
-`mcp__<uuid>__search_articles`); match by the **suffix** after the last `__`:
-- PubMed MCP (suffix `search_articles`): fallback → E-utilities API via WebFetch
-- OpenAlex MCP (suffix `search_works`): fallback → OpenAlex REST API via WebFetch
-- bioRxiv MCP (suffix `search_preprints`): fallback → Crossref API for preprints
-- Crossref MCP (suffix `search_crossref`): fallback → Crossref REST API via WebFetch
-- Claude in Chrome (suffix `navigate`): if unavailable, warn and skip proxy fetch (OA only)
+### 1b. Read Project State
 
-Do not fail hard on any missing MCP.
-
-### 1b. Read files in order
-
-**Project files** (in project root):
 1. `collector_config.yaml` — master config
-2. `config.py` — search term list
-3. `guide.md` — domain knowledge (inject into all triage and extraction)
+2. `config.py` — search terms
+3. `guide.md` — domain knowledge
 4. `state/processed.json`, `state/queue.json`, `state/search_log.json`
-5. `results.csv` — count existing records
-6. `leads.csv` — count for status report
-7. `state/discoveries.jsonl` — review pending discoveries from prior sessions
+5. Count records in `results.csv` (use `wc -l`, don't read into context)
+6. Count leads in `leads.csv`
+7. Check `state/discoveries.jsonl` for pending discoveries
 
-**Skill reference files** (in `${CLAUDE_SKILL_DIR}/references/`):
-8. `csv_schema.md` — generic field definitions and confidence guidelines
-
-**Project-specific** (optional):
-9. `extraction_examples.md` — notation rules and worked examples
-
-### 1c. Generate session_id and compute file hashes
-
-Generate `session_id` as ISO timestamp (e.g., "2026-03-24T14:30:00Z").
-Compute MD5 hashes of `guide.md` and `config.py` for change tracking.
-
-### 1d. Check for flagged-for-review records
-
-If `results.csv` has records with `flag_for_review == True`, report count
-and offer to review before continuing.
-
-### 1e. Copy utility scripts from skill directory if not present
+### 1c. Copy Utility Scripts
 
 ```bash
 for script in dashboard_generator.py verify_session.py export_dwc.py; do
@@ -239,304 +110,401 @@ mkdir -p scripts
 for script in statistical_qc.py taxonomy_resolver.py calibration.py benchmark.py knowledge_graph_export.py reproduce.py dashboard_server.py csv_writer.py api_utils.py state_utils.py pdf_utils.py test_harness.py; do
   [ ! -f "scripts/$script" ] && cp "${CLAUDE_SKILL_DIR}/scripts/$script" "scripts/$script" 2>/dev/null || true
 done
-mkdir -p state/extraction_traces state/snapshots
+mkdir -p state/extraction_traces state/snapshots state/dealt finds ready_for_extraction learning provided_pdfs
 ```
 
-**Pre-session backup** — run BEFORE any extraction work:
+### 1d. Pre-Session Safety
+
 ```bash
-mkdir -p state/snapshots
+# Backup
 BACKUP_TS=$(date +%Y%m%dT%H%M%S)
 [ -f results.csv ] && cp results.csv "state/snapshots/results_${BACKUP_TS}.csv"
 [ -f state/processed.json ] && cp state/processed.json "state/snapshots/processed_${BACKUP_TS}.json"
-[ -f state/search_log.json ] && cp state/search_log.json "state/snapshots/search_log_${BACKUP_TS}.json"
-echo "Backup created: state/snapshots/*_${BACKUP_TS}.*"
-```
 
-**Run verification** before dispatching any extraction subagents:
-```bash
+# Verify integrity
 python3 verify_session.py --project-root .
 ```
-If verification finds errors, report them to the user before continuing.
 
-**Script usage** — execute all of these via Bash. Do NOT read them into context:
+Report any verification errors to the user.
 
-| Script | Purpose | Invocation |
-|---|---|---|
-| `dashboard_generator.py` | Generates `dashboard.html` from project data | `python3 dashboard_generator.py --project-root .` |
-| `verify_session.py` | Post-batch CSV validation (schema, dupes, ranges) | `python3 verify_session.py --project-root .` |
-| `export_dwc.py` | Exports results.csv as Darwin Core Archive | `python3 export_dwc.py --project-root . --output-dir dwc_export` |
-| `scripts/statistical_qc.py` | Outlier detection, Chao1 estimator, QC plots | `python3 scripts/statistical_qc.py --project-root .` |
-| `scripts/taxonomy_resolver.py` | Batch GBIF taxonomy lookups with caching | `python3 scripts/taxonomy_resolver.py --csv results.csv --species-column species --cache state/taxonomy_cache.json` |
-| `scripts/calibration.py` | Confidence calibration, ECE, reliability diagrams | `python3 scripts/calibration.py --project-root .` |
-| `scripts/benchmark.py` | Gold-standard accuracy metrics (precision/recall/F1) | `python3 scripts/benchmark.py --project-root .` |
-| `scripts/knowledge_graph_export.py` | JSON-LD provenance export, cross-paper conflict detection | `python3 scripts/knowledge_graph_export.py --project-root . --format both` |
-| `scripts/reproduce.py` | Reproducibility verification and session drift analysis | `python3 scripts/reproduce.py --project-root . --summary` |
-| `scripts/dashboard_server.py` | *(Optional)* Live dashboard with SSE updates | `python3 scripts/dashboard_server.py --project-root . &` — only if user requests live server |
-| `scripts/csv_writer.py` | Schema-enforced CSV writes with atomic operations | Used as library; standalone: `python3 scripts/csv_writer.py --project-root .` |
-| `scripts/api_utils.py` | Retry/backoff and rate limiting for all APIs | Used as library; info: `python3 scripts/api_utils.py --rate-limits` |
-| `scripts/state_utils.py` | Atomic state file reads/writes with backup recovery | Standalone: `python3 scripts/state_utils.py --project-root . --check` |
-| `scripts/pdf_utils.py` | PDF path construction, misplaced-PDF detection and fix | `python3 scripts/pdf_utils.py --project-root . --check` (or `--fix`) |
-| `scripts/test_harness.py` | Generate synthetic project data for testing | `python3 scripts/test_harness.py --output-dir /tmp/test --records 200` |
+### 1e. Check Backlogs
 
-Then regenerate the dashboard:
+Before the main loop, clear any pending work from prior sessions:
+1. Files in `provided_pdfs/` → route to `ready_for_extraction/` (see Handle PDFs)
+2. Files in `finds/` → spawn Writer to process
+3. Files in `ready_for_extraction/` → process via Dealer before searching
 
-```bash
-python3 dashboard_generator.py --project-root .
+### 1f. Session Configuration
+
+Ask the user:
+1. **Extraction mode**: `consensus` (3-agent voting, higher accuracy) or
+   `fast` (single agent, ~3x faster). Show current setting from config.
+2. **Session target**: present these options:
+   ```
+   How long should I run?
+     1. Quick pass -- ~10 papers
+     2. Standard batch -- {batch_size} papers (from config, default 20)
+     3. Long session -- 50+ papers (checkpoint every 20, ask to continue)
+     4. Until exhausted -- process entire queue
+     5. A specific number: ___
+   ```
+   **Time-to-paper conversion**: ~3-5 min per full-text paper in consensus,
+   ~1-2 min in fast mode:
+   - "30 minutes" → ~8 papers (consensus) / ~20 papers (fast)
+   - "1 hour" → ~15 papers (consensus) / ~40 papers (fast)
+   - "a couple hours" → ~30 papers (consensus) / ~80 papers (fast)
+
+Generate `session_id` as ISO timestamp. Compute MD5 hashes of `guide.md`
+and `config.py` for change tracking.
+
+Initialize session usage tracker:
+```python
+usage = {
+    "sonnet_calls": 0, "opus_calls": 0,
+    "pages_processed": 0, "records_written": 0,
+    "est_input_tokens": 0, "est_output_tokens": 0,
+    "est_input_tokens_by_tier": {"sonnet": 0, "opus": 0},
+    "est_output_tokens_by_tier": {"sonnet": 0, "opus": 0}
+}
 ```
 
-Tell the user: **"Dashboard updated — open dashboard.html in your browser
-(double-click the file) to see progress. It auto-refreshes every 60 seconds."**
+### 1g. Reproducibility Snapshot
 
-The dashboard is a self-contained HTML file with no external dependencies.
-It works via `file://` protocol (double-click). Regenerate it every 2 papers
-during collection so the auto-refresh picks up near-real-time data.
-
-### 1f. Ask how long to run
-
-Ask the user how long this session should run. Accept paper counts ("do 30
-papers"), time estimates ("I have an hour" → ~15–20 papers), or presets
-("quick pass" = 10, "long session" = 50+, "until done" = unlimited). See
-[session_management.md](references/session_management.md) §9d for conversion
-rules. Set `session_target` for the rest of the run.
-
-### 1g. Startup state log and status
-
-Append session_start to `state/run_log.jsonl`:
+Save a snapshot to `state/snapshots/{session_id}.json`:
 ```json
-{"timestamp": "...", "session_id": "...", "event": "session_start", "guide_md5": "...", "config_py_md5": "...", "session_target": 20}
+{
+  "session_id": "...", "guide_md5": "...", "config_py_md5": "...",
+  "skill_version": "4.0.0", "extraction_mode": "consensus",
+  "max_concurrent_dealers": 2
+}
 ```
 
-Print a status block: project name, session_id, records in database, papers
-processed, leads count, flagged for review, session target, queue depth,
-queries run (n/total), taxonomic coverage summary (families with records /
-known families), next query. Use box-drawing characters.
-
----
-
-## 2. Model Routing
-
-TraitTrawler uses cheaper models for routine tasks and reserves expensive
-models for deep reasoning. Full routing table, escalation protocol, batch
-strategies, and override rules in
-[model_routing.md](references/model_routing.md).
-
-**Summary**: haiku for search/triage/state, sonnet for extraction/validation,
-opus only on escalation (low confidence, row-count mismatch, OCR artifacts,
-structural guide amendments).
-
----
-
-## 3. Main Loop
-
-### 3a. Detect operating mode
-
-Check for unprocessed local PDFs in `pdfs/`. Compare PDF filenames against
-`processed.json`. If unprocessed PDFs found, ask:
-
-```
-Found {N} unprocessed PDFs in pdfs/. How should I proceed?
-  1. Process these PDFs first, then continue with search queue
-  2. Search mode only (ignore local PDFs for now)
-  3. PDF-only mode (process local PDFs, skip search)
-```
-
-Also enter PDF-first mode on: "process these PDFs", "I have some papers",
-"extract from these", "I dropped some PDFs in", "just process what's in
-the folder".
-
-**PDF-first mode** skips search/triage. For each unprocessed PDF: extract
-metadata → check processed.json → extract (§7) → taxonomy check (§16) →
-validate/write (§7f, §8) → mark processed with `"triage": "user_supplied"`.
-After all local PDFs, offer to continue with search mode or stop.
-
-### 3b. Search mode (default)
-
-Repeat until user stops, session_target reached, or searches exhausted:
-
-**→ Search → Triage → Queue → Extract → Update state → Report → repeat**
-
-**Hard separation of search and extraction**: Search agents ONLY populate
-`state/queue.json`. They must NEVER attempt extraction. Extraction agents
-ONLY process papers already in the queue. Never combine search + extraction
-in a single subagent.
-
-For each stage, read the relevant reference file and use the model per §2:
-- **Search & Triage** (haiku): [search_and_triage.md](references/search_and_triage.md)
-  - Search agents write ONLY to: `state/queue.json`, `state/search_log.json`,
-    `state/triage_outcomes.jsonl`. No other file writes permitted.
-- **Fetch, Extract, Validate, Write** (sonnet): [extraction_and_validation.md](references/extraction_and_validation.md)
-  - Extraction agents write ONLY to: `results.csv` (via SchemaEnforcedWriter),
-    `state/processed.json`, `leads.csv`, `state/run_log.jsonl`.
-- **Taxonomy check** (inline): [taxonomy.md](references/taxonomy.md)
-- **State & Reporting** (haiku): [session_management.md](references/session_management.md)
-
-### 3c. Parallel paper processing
-
-After triage, dispatch **up to 3 papers concurrently** to parallel sonnet
-subagents. Each runs the full pipeline (fetch → extract → taxonomy → validate
-→ write) independently for ~3x throughput. Full coordinator pattern, subagent
-prompt template, error handling, and fallback rules in
-[extraction_and_validation.md](references/extraction_and_validation.md) §3c.
-
-**Critical rules for subagents:**
-- **Back up results.csv** before dispatching any batch.
-- Subagents must use `scripts/csv_writer.py` for all writes — never raw
-  `csv.DictWriter` or `open("results.csv", "w")`.
-- **No abstract-only extraction** — if full text unavailable, route to
-  leads.csv and return immediately.
-- **Verify record count** after each batch. If it decreased, restore backup.
-- If any subagent fails, fall back to serial processing for the rest of
-  the session.
-
-**Every 2 papers processed**, regenerate the dashboard:
+Log session start to `run_log.jsonl`. Regenerate dashboard:
 ```bash
 python3 dashboard_generator.py --project-root .
 ```
 
-**When `session_target` is reached**, run post-session checks and print summary:
-```bash
-python3 scripts/pdf_utils.py --project-root . --check
-python3 dashboard_generator.py --project-root .
+Print status block: project name, session_id, records, papers processed,
+leads, flagged, session target, queue depth, queries run, extraction mode,
+max_concurrent_dealers.
+
+---
+
+## 2. Main Collection Loop
+
+Repeat until `session_target` reached, user stops, or queue exhausted.
+
+### Phase A: Fill the Queue (if queue < 10 papers)
+
+Read `${CLAUDE_SKILL_DIR}/agents/searcher.md`. Spawn **Sonnet-Searcher**:
+
+```
+Agent(model=sonnet, prompt="{searcher.md content}\n\nSEARCH QUERIES:\n{next 5-10 from config.py}\n\nTRIAGE RULES:\n{from config}\n\nDOMAIN KNOWLEDGE:\n{guide.md}\n\nALREADY PROCESSED:\n{DOI list from processed.json}")
 ```
 
-If `pdf_utils.py --check` finds misplaced PDFs, report them to the user and
-offer to run `--fix` to move them to the correct `pdfs/{Family}/` locations.
+On return: report new papers added to queue.
 
-Then ask:
+### Phase B: Fetch PDFs (for queued papers without PDFs)
+
+Read `${CLAUDE_SKILL_DIR}/agents/fetcher.md`. Spawn **Sonnet-Fetcher** for
+next 1-3 papers in queue:
+
 ```
-Session target reached ({N} papers). Continue with another batch? [y/n]
+Agent(model=sonnet, prompt="{fetcher.md content}\n\nPAPERS TO FETCH:\n{papers from queue.json}\n\nCONFIG:\n{relevant config sections}")
 ```
 
----
+On return: report fetched papers and leads.
 
-## 14. Self-Improving Domain Knowledge
+### Phase C: Extract (for papers with PDFs ready)
 
-As the agent processes papers, it captures notation variants, new taxa,
-ambiguity patterns, and validation gaps in `state/discoveries.jsonl`. At
-session end, it proposes diff-formatted amendments to `guide.md` for user
-approval. Full discovery types, review protocol, mid-session correction
-pathway, and cumulative knowledge reports in
-[knowledge_evolution.md](references/knowledge_evolution.md).
+Read `${CLAUDE_SKILL_DIR}/agents/dealer.md`. For each file in
+`ready_for_extraction/`, spawn **Sonnet-Dealer** (up to
+`max_concurrent_dealers` in parallel):
 
-**Core principle**: The agent proposes; the human decides. Never silently
-edit `guide.md`, `extraction_examples.md`, or `collector_config.yaml`.
+```
+Agent(model=sonnet, prompt="{dealer.md content}\n\nHANDOFF FILE:\n{handoff JSON}\n\nGUIDE:\n{guide.md}\n\nCONFIG:\n{output_fields, validation_rules}\n\nEXAMPLES:\n{extraction_examples.md}\n\nEXTRACTION MODE: {consensus|fast}")
+```
 
----
+The Dealer internally spawns the Extractor (which spawns 3 sub-agents in
+consensus mode, or 1 in fast mode). On consensus failure, the Dealer
+escalates to Opus automatically (see `dealer.md`).
 
-## 15. Audit Mode — Self-Cleaning Data
+On return: report extraction outcomes.
 
-Re-examines low-confidence, statistically anomalous, and guide-drift records
-by re-extracting from cached PDFs with current domain knowledge. Full logic
-in [audit_mode.md](references/audit_mode.md).
+### Phase D: Write to CSV
 
-**Triggers**: "audit the database", "check low-confidence records",
-"clean the data", "re-check flagged records", "run an audit".
+Read `${CLAUDE_SKILL_DIR}/agents/writer.md`. Spawn **Sonnet-Writer** to
+process all files in `finds/`:
 
-**Three criteria** (priority): low confidence → guide-drift → statistical outliers.
-**Core method**: re-extract from cached PDF using `source_page` with current
-`guide.md`, without seeing original values (prevents anchoring).
+```
+Agent(model=sonnet, prompt="{writer.md content}\n\nOUTPUT FIELDS:\n{from config}\n\nVALIDATION RULES:\n{from config}\n\nSESSION ID: {session_id}")
+```
 
----
+**Critical**: only one Writer at a time. Never spawn concurrent Writers.
 
-## 16. Taxonomic Intelligence
+On return: report records written, rejected, flagged.
 
-Every extracted species name is validated against the GBIF Backbone Taxonomy.
-The agent resolves synonyms to accepted names, auto-fills higher taxonomy
-when missing, and flags nomenclatural issues. When a name is updated to an
-accepted synonym, the original extracted name is preserved in the `notes`
-field (e.g., "Original name: Cicindela sylvatica, resolved to accepted name
-via GBIF"). Full integration spec in [taxonomy.md](references/taxonomy.md).
+### Phase E: Progress Update & Controls
 
-**Script**: `scripts/taxonomy_resolver.py` handles batch GBIF lookups with
-caching to `state/taxonomy_cache.json` to avoid redundant API calls.
+After each Dealer+Writer cycle:
 
----
+1. **Update usage tracker**: For each agent call that returned, estimate tokens:
 
-## 17. Statistical QC
+   | Call type | Est. input tokens | Est. output tokens |
+   |---|---|---|
+   | Searcher (5-10 queries) | ~3,000 | ~1,500 |
+   | Fetcher (1 paper) | ~500 | ~300 |
+   | Dealer+Extractor consensus (1 paper) | ~(800 × pages + 2,000) × 3 | ~(500 × records) × 3 |
+   | Dealer+Extractor fast (1 paper) | ~(800 × pages + 2,000) | ~(500 × records) |
+   | Opus escalation (1 paper) | ~(800 × pages + 2,000) | ~(500 × records) |
+   | Writer (N finds files) | ~2,000 | ~500 |
 
-At session end and on-demand ("run QC", "check data quality", "how's the
-data looking"), the agent runs `scripts/statistical_qc.py` to generate
-diagnostic plots and a quality report. Includes: outlier detection (Grubbs
-test for continuous data, modal-frequency for discrete), species accumulation
-curves with Chao1 estimator, confidence distribution analysis, taxonomic
-coverage vs. GBIF known diversity, and session-over-session efficiency
-trends. Full spec in [statistical_qc.md](references/statistical_qc.md).
+   Accumulate into `usage` and the appropriate tier in `est_*_by_tier`.
 
-Output: `qc_report.html` (self-contained with plots) and `qc_summary.json`.
+2. **Print one-line confidence trend** after each paper:
+   ```
+   Confidence: 0.87 avg (up from 0.84) | 3 records | total: 1,339
+   ```
 
----
+3. **Print rolling progress** every `report_every` papers (default 5):
+   ```
+   [15/45 queued] "Smith et al. 2003 -- Paper title"
+     -> 8 records | source: unpaywall | consensus: full
+     -> Session: +34 records | Database total: 1,281
+   ```
 
-## 18. Campaign Planning
+4. **Regenerate dashboard** every 2 papers:
+   ```bash
+   python3 dashboard_generator.py --project-root .
+   ```
 
-After 3+ sessions, the agent can generate a strategic campaign report
-analyzing: taxonomic coverage gaps (families with known diversity but few
-or no records), search efficiency trends (records/paper by query type),
-estimated sessions to reach target coverage, and recommended search strategy
-adjustments (which queries to prioritize, when to switch to citation
-chaining). Full spec in [campaign_planning.md](references/campaign_planning.md).
+5. **Append to live_progress.jsonl**:
+   ```json
+   {"timestamp": "...", "paper": "Smith et al. 2003", "records": 3, "total_records": 1339, "queue_remaining": 22}
+   ```
 
-**Triggers**: "plan the campaign", "coverage report", "how much is left",
-"what should I focus on next", "strategic report".
+6. **Check pause triggers** from `collector_config.yaml` (if configured):
+   ```yaml
+   pause_triggers:
+     - field: extraction_confidence
+       operator: less_than     # less_than, greater_than, equals, not_equals
+       value: 0.5
+       action: show_records    # show_records, ask_continue
+   ```
+   If any trigger fires: show the relevant records and either continue
+   (`show_records`) or ask the user (`ask_continue`).
 
----
+7. **Check for user commands** between papers:
+   - "skip" / "next" → skip current paper, mark `"outcome": "user_skipped"`
+   - "redo last" → re-extract previous paper through Dealer
+   - "pause" → stop after current paper without ending session
+   - "show trace" → display chain-of-thought trace for last extraction
+   - "consensus on last" → trigger consensus re-extraction for last paper
 
-## 19. Confidence Calibration
+8. **Check stop conditions**: target reached, queue empty, 15 empty searches.
 
-Transforms heuristic confidence scores into calibrated probabilities via
-isotonic regression. `scripts/calibration.py` computes ECE, fits per-field
-models, generates reliability diagrams. Full spec in
-[confidence_calibration.md](references/confidence_calibration.md).
+9. **For long sessions (>20 papers)**: ask to continue every 20 papers.
 
-**Triggers**: automatic at session end if calibration data exists;
-"calibrate", "check calibration", "reliability diagram".
+### Concurrency
 
----
+You can run phases in parallel when there are no data dependencies:
+- Searcher can run while Dealer processes papers already in queue
+- Writer can run while Fetcher acquires the next PDF
+- Multiple Dealers can run concurrently (up to `max_concurrent_dealers`)
+- Writer must NEVER run concurrently with itself
 
-## 20. Extraction Benchmarking
-
-Built-in accuracy measurement against gold-standard data. During
-calibration (§0b), 2-3 seed papers are held out as benchmark papers —
-the user verifies every extracted field, creating ground truth for
-precision/recall/F1 per field. Benchmark data also accumulates from
-audit outcomes (§15) and user corrections (§14f).
-
-**Script**: `scripts/benchmark.py` computes per-field and record-level
-metrics, Brier score, and tracks accuracy trends over sessions. Full spec
-in [benchmarking.md](references/benchmarking.md).
-
-**Triggers**: automatic during calibration; on-demand via "benchmark this
-paper", "run benchmark", "check accuracy".
-
----
-
-## 21. Multi-Agent Consensus Extraction
-
-When mean confidence < 0.7, run 2 additional independent passes
-(enumeration-first, adversarial) and resolve by field-level 2/3 vote; ties
-flagged for human review. Triples cost per triggered paper — configurable
-threshold and per-session cap. Full spec in
-[consensus_extraction.md](references/consensus_extraction.md).
-
-**Triggers**: automatic on low confidence; "run consensus", "verify extraction",
-"double-check this paper".
+Track what's in-flight and sequence accordingly.
 
 ---
 
-## 22–28. Advanced Features
+## 3. Session End
 
-Chain-of-thought traces, active learning for triage, adaptive tool selection,
-cross-project transfer learning, knowledge graph provenance export, streaming
-progress, and formal reproducibility. Full spec in
-[advanced_features.md](references/advanced_features.md).
+When the session target is reached or the user stops:
+
+**If interrupted mid-paper**: finish the current paper completely before
+stopping. Never leave half-extracted records.
+
+1. **Process remaining finds/**: Spawn Writer for any unprocessed files
+2. **Verify**: `python3 verify_session.py --project-root .`
+3. **QC**: `python3 scripts/statistical_qc.py --project-root .`
+4. **Knowledge review**: Read `learning/` folder. For each discovery:
+   - Classify as **routine** (notation variant, new taxon) or **structural**
+     (validation rule change, guide section rewrite)
+   - Routine: propose a specific diff to `guide.md`
+   - Structural: draft amendment, flag for careful user review
+   - User approves/rejects each change individually
+   - Archive to `state/discoveries.jsonl` with `applied: true/false`
+   For detail on the review protocol, see
+   `${CLAUDE_SKILL_DIR}/references/knowledge_evolution.md`.
+5. **Confidence calibration**: `python3 scripts/calibration.py --project-root .`
+6. **Benchmark**: `python3 scripts/benchmark.py --project-root .` (if data exists)
+7. **Tool effectiveness**: Report source stats from `state/source_stats.json`
+   (best/worst PDF sources, search sources, success rates)
+8. **Cross-paper conflicts**: `python3 scripts/knowledge_graph_export.py --project-root . --format conflicts`
+9. **Dashboard**: `python3 dashboard_generator.py --project-root .`
+10. **Check misplaced PDFs**: `python3 scripts/pdf_utils.py --project-root . --check`
+11. **Check auto-triggers**:
+    - Audit due? (`audit_config.auto_audit_interval` sessions → offer audit)
+    - Campaign report due? (every 5 sessions after 3+ → offer report)
+
+12. **Print session summary** with: session_id, papers processed, records
+    added, source breakdown, leads, flagged, database totals, queue/queries
+    remaining, discoveries. Include a **Usage** block: model calls by tier,
+    pages read, est. tokens in/out by tier, Records/call, Tokens/record.
+
+13. **Log session_end** to `state/run_log.jsonl` with full `usage` object
+    (sonnet_calls, opus_calls, pages_processed, records_written,
+    est_input_tokens, est_output_tokens, est_*_by_tier).
+
+**Core principle for knowledge evolution**: the agent proposes, the human
+decides. Never silently edit `guide.md`, `extraction_examples.md`, or
+`collector_config.yaml`.
 
 ---
 
-## Stop Conditions
+## 4. On-Demand Features
 
-The agent stops when any of these are met:
+### Handle User PDFs
+
+**Triggers**: "process these PDFs", "I have some papers", PDFs detected in
+`provided_pdfs/` at session start.
+
+1. Scan `provided_pdfs/` for PDF files
+2. For each PDF: extract metadata (try DOI from first page), copy to
+   `pdfs/{family}/`, write handoff to `ready_for_extraction/`
+3. Normal Dealer → Extractor → Writer pipeline handles the rest
+
+### Data QC & Audit
+
+**Triggers**: "run QC", "audit the database", "check data quality",
+"clean the data", "check low-confidence records"
+
+Load `${CLAUDE_SKILL_DIR}/references/audit_and_qc.md` for detailed procedures.
+Run QC scripts, scan for low-confidence/outlier/guide-drift records, present
+findings, offer re-extraction through Dealer pipeline. Audit priority:
+low confidence → guide drift → statistical outliers. Cap 50 records/session.
+
+### Campaign Planning
+
+**Triggers**: "plan the campaign", "coverage report", "how much is left"
+
+Load `${CLAUDE_SKILL_DIR}/references/campaign_and_calibration.md`. Available
+after 3+ sessions. GBIF coverage analysis, search efficiency, effort estimates.
+
+### Confidence Calibration
+
+**Triggers**: automatic at session end, "calibrate", "check calibration"
+
+Run `scripts/calibration.py --project-root .`. See campaign_and_calibration.md
+for isotonic regression details, ECE metrics, per-field models.
+
+### Benchmarking
+
+**Triggers**: automatic during calibration, "run benchmark", "check accuracy"
+
+Run `scripts/benchmark.py --project-root .` for per-field P/R/F1, Brier score.
+
+### Smart Citation Chaining
+
+**Triggers**: "citation chain", all keyword searches exhausted
+
+Spawn Searcher with `mode: "citation_chain"` and high-confidence seed DOIs.
+
+### Darwin Core Export
+
+**Triggers**: "export to Darwin Core", "GBIF export"
+
+`python3 export_dwc.py --project-root . --output-dir dwc_export`
+
+### Mid-Session Correction
+
+**Triggers**: "that's wrong", "you're miscoding", "correction:"
+
+Load `${CLAUDE_SKILL_DIR}/references/knowledge_and_transfer.md` for full
+procedure. Stop pipeline, apply guide.md fix (with approval), offer warm
+re-extraction with diff presentation.
+
+---
+
+## 5. Script Reference
+
+Execute via Bash. **Never read scripts into context.** All accept `--project-root .`
+
+| Script | Purpose |
+|---|---|
+| `dashboard_generator.py` | HTML dashboard (regenerate every 2 papers) |
+| `verify_session.py` | Schema/integrity checks (run at session start + end) |
+| `export_dwc.py` | Darwin Core Archive (`--output-dir dwc_export`) |
+| `scripts/statistical_qc.py` | Chao1, Grubbs, QC plots (`--full` for HTML report) |
+| `scripts/taxonomy_resolver.py` | Batch GBIF lookups (`--csv results.csv --species-column species --cache state/taxonomy_cache.json`) |
+| `scripts/calibration.py` | Isotonic regression confidence calibration |
+| `scripts/benchmark.py` | Per-field precision/recall/F1, Brier score |
+| `scripts/knowledge_graph_export.py` | JSON-LD provenance (`--format both` or `--format conflicts`) |
+| `scripts/reproduce.py` | Reproducibility verification (`--summary`) |
+| `scripts/csv_writer.py` | Schema-enforced CSV (library, used by Writer agent) |
+| `scripts/state_utils.py` | Atomic state file ops (`--check`) |
+| `scripts/pdf_utils.py` | PDF naming/organization (`--check` or `--fix`) |
+
+---
+
+## 6. Stop Conditions
+
+The Manager stops when any of these are met:
 - User says stop
-- `session_target` papers processed this session (collection mode)
-- `audit_config.max_records` reviewed this session (audit mode)
+- `session_target` papers processed this session
 - 10,000 total records in results.csv
 - 15 consecutive empty searches (no new papers found)
-- All queries in `config.py` exhausted (offer smart citation chaining first)
+- All queries in config.py exhausted (offer citation chaining first)
+- `audit_config.max_records` reviewed (audit mode)
+
+---
+
+## 7. Context Management
+
+These strategies prevent context exhaustion in long sessions:
+
+1. **Delegate aggressively**: every sub-agent (Searcher, Fetcher, Dealer,
+   Extractor, Writer) runs in an isolated context that is discarded on
+   return. PDF text, extraction reasoning, and intermediate data never
+   accumulate in the Manager's context.
+
+2. **Never read large files** into Manager context:
+   - Count records: `wc -l results.csv`
+   - Check if DOI processed: `grep -c "doi_string" state/processed.json`
+   - Queue depth: `python3 -c "import json; print(len(json.load(open('state/queue.json'))))"`
+   - Never `Read` the entirety of results.csv, processed.json, or queue.json.
+
+3. **Don't hold PDF text**: Dealer/Extractor agents handle PDFs in isolation.
+   The Manager only sees the return summary (records count, outcome, confidence).
+
+4. **Re-read agent .md files** when spawning — they're the source of truth.
+   If context compacts, re-read the relevant agent spec before the next spawn.
+
+5. **Folder-based self-checkpointing**: files in `finds/`,
+   `ready_for_extraction/`, `learning/` persist across sessions and context
+   compactions. Resume by processing backlogs at startup (section 1e).
+   No explicit checkpoint file needed — the folders ARE the checkpoint.
+
+6. **For long sessions (>20 papers)**: ask to continue every 20 papers.
+   This gives the user a natural exit point and keeps sessions manageable.
+
+---
+
+## 8. On-Demand Reference Files
+
+For features that need detailed procedural instructions beyond what's in
+this file, load the reference on demand:
+
+| Feature | Reference file | When to load |
+|---|---|---|
+| Audit mode | `${CLAUDE_SKILL_DIR}/references/audit_and_qc.md` | "run QC", "audit", "check data quality" |
+| Campaign planning | `${CLAUDE_SKILL_DIR}/references/campaign_and_calibration.md` | "plan campaign", "coverage report" |
+| Confidence calibration | `${CLAUDE_SKILL_DIR}/references/campaign_and_calibration.md` | Session end (auto), "calibrate" |
+| Knowledge review | `${CLAUDE_SKILL_DIR}/references/knowledge_and_transfer.md` | Session end, "review discoveries" |
+| Cross-project transfer | `${CLAUDE_SKILL_DIR}/references/knowledge_and_transfer.md` | Setup wizard, session end |
+| Error recovery | `${CLAUDE_SKILL_DIR}/references/troubleshooting.md` | When something goes wrong |
+| Calibration phase | `${CLAUDE_SKILL_DIR}/references/calibration.md` | First run only |
+
+Read the reference file when entering that feature. Do NOT pre-load
+reference files at session start — they're not needed during normal
+collection and waste context.

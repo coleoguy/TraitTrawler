@@ -17,6 +17,31 @@ Records show `pdf_source: browser_failed` for paywalled papers.
 The agent uses your active browser session — it cannot authenticate for you.
 After logging in, tell the agent to continue. It will retry proxy fetches.
 
+### PDF stuck in ready_for_extraction/ (v4)
+
+**Symptom:** A handoff file sits in `ready_for_extraction/` across sessions
+and is never processed.
+
+**Cause:** The Dealer agent failed or timed out without moving the file to
+`state/dealt/`. The Manager's backlog check (section 1e) should catch this
+at next session start.
+
+**Fix:** The Manager automatically retries files in `ready_for_extraction/`
+at startup. If a specific file keeps failing, check the handoff JSON for
+issues (missing pdf_path, corrupted metadata). Delete the handoff file to
+skip the paper.
+
+### Records stuck in finds/ (v4)
+
+**Symptom:** JSON files accumulate in `finds/` and are never written to CSV.
+
+**Cause:** The Writer agent failed or the Manager didn't spawn the Writer
+after extraction. The Manager's backlog check handles this at next startup.
+
+**Fix:** Manually trigger: "process the finds folder". The Manager spawns
+a Writer to clear the backlog. If a specific file fails repeatedly, check
+its JSON for schema issues.
+
 ### Unpaywall / OpenAlex return no PDF URL
 
 **Symptom:** Papers with valid DOIs show `pdf_source: abstract_only` even
@@ -261,10 +286,37 @@ which handles the standard collector_config.yaml format.
 **Symptom:** Agent loses track of pipeline state, skips papers, or stops
 unexpectedly mid-session.
 
-**Cause:** Long sessions accumulate context. The agent's context management
-(§9b-2) mitigates this but very long sessions (50+ papers) can still hit
-limits.
+**Cause:** Long sessions accumulate context. v4's multi-agent architecture
+mitigates this (each sub-agent has its own context), but very long sessions
+can still hit the Manager's limit.
 
-**Fix:** Use shorter sessions (20-30 papers). The checkpoint system
-(§9b-2) ensures perfect resumption across sessions. If this happens
-mid-session, restart — the agent picks up from the last checkpoint.
+**Fix:** Use shorter sessions (20-30 papers). v4's folder-based architecture
+is self-checkpointing — files in `finds/`, `ready_for_extraction/`, and
+`learning/` persist across sessions. Restart and the Manager picks up from
+the backlog automatically (section 1e).
+
+### Consensus extraction all three agents wrong (v4)
+
+**Symptom:** All 3 Sonnet agents make the same systematic error (e.g.,
+misinterpreting unusual notation). Consensus voting produces a confident
+but incorrect result.
+
+**Cause:** Systematic errors where all agents share a blind spot. Consensus
+catches random errors but not shared misconceptions.
+
+**Fix:** This is what the Opus escalation path is for — when consensus fails,
+the Dealer spawns an Opus agent. But if consensus SUCCEEDS with wrong values,
+the error is only caught by audit mode or user correction. Use "correction:"
+to trigger mid-session correction, which updates guide.md and re-extracts
+affected papers.
+
+### Agent spawn overhead too high (v4)
+
+**Symptom:** Small sessions (5-10 papers) feel slow due to agent startup.
+
+**Cause:** Each Agent tool invocation has overhead. The v4 pipeline spawns
+Searcher + Fetcher + Dealer + Extractor(x3) + Writer per paper.
+
+**Fix:** Use `fast` extraction mode for small exploratory sessions. This
+reduces extraction agents from 3 to 1 per paper. For very small sessions,
+consider processing PDFs directly ("PDF-only mode") which skips search.

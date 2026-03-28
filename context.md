@@ -238,9 +238,36 @@ Best-practices compliance audit against `claude_skill_best_practices.md`.
 - Voice is imperative + explanatory throughout ✓
 - Negative boundary clause present in description (differentiates from deepscholar) ✓
 
+## v4.0.0 — Multi-Agent Architecture Rebuild (2026-03-27)
+
+The v2/v3 monolithic SKILL.md approach hit a ceiling: context exhaustion, CSV corruption from concurrent writes, state desync, and fragile error recovery. Heath designed a new multi-agent architecture (block diagram) that fundamentally restructures TraitTrawler around dedicated agents with file-based communication.
+
+**Full spec**: `ARCHITECTURE_v4.md`
+
+### Key changes
+- **6 dedicated agents**: Opus-Manager (coordinator), Sonnet-Searcher, Sonnet-PDF Fetcher, Sonnet-Dealer, Sonnet-Extractor (3 sub-agents), Sonnet-Writer
+- **3 on-demand agents**: Setup Wizard, Data QC, Handle PDFs
+- **Consensus by default**: Every paper gets 3 independent extraction passes with majority-rule voting (was optional, low-confidence-only trigger)
+- **File-based queues**: `finds/`, `ready_for_extraction/`, `learning/` folders replace shared mutable JSON state
+- **Single CSV writer**: Only the Writer agent touches results.csv, eliminating all concurrent-write bugs
+- **Simpler model routing**: Opus manages, Sonnet works. No haiku tier.
+
+### Implementation plan (8 phases)
+1. Folder structure and contracts
+2. Sonnet-Writer (build first — safest, most critical)
+3. Sonnet-Extractor (3-agent consensus engine)
+4. Sonnet-Dealer (thin coordinator)
+5. Sonnet-PDF Fetcher
+6. Sonnet-Searcher
+7. Opus-Manager (main loop)
+8. On-demand agents + SKILL.md rewrite
+
+### What carries forward from v2/v3
+All Python scripts (csv_writer.py, taxonomy_resolver.py, statistical_qc.py, pdf_utils.py, etc.), dashboard_generator.py, verify_session.py, export_dwc.py, example configs, eval suite.
+
 ## Next actions
-- [ ] Register Zenodo DOI (flip GitHub integration on, tag v2.0.0 release)
-- [ ] Attach rebuilt .skill archive to GitHub Release
+- [ ] Implement v4 architecture per ARCHITECTURE_v4.md
+- [ ] Register Zenodo DOI (flip GitHub integration on, tag release)
 - [ ] Submit manuscript
 - [ ] Send to Anthropic with review document
 
