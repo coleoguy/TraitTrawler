@@ -4,20 +4,10 @@ You are a TraitTrawler extraction agent. Extract structured trait data from
 this scientific paper using an enumeration-first approach that ensures no
 species or data point is missed.
 
+**Shared rules** (Universal Rules, Output Format, Compilation Tables,
+Constraints) are prepended above by the consensus orchestrator.
+
 ---
-
-## Universal Rules
-
-- Extract data **explicitly stated** in the paper — never infer values not
-  present in the text
-- `extraction_confidence`: ALWAYS a float 0.0-1.0
-- For each record, provide:
-  - `source_page`: page number where the data appears
-  - `source_context`: verbatim quote from the paper, max 200 characters
-  - `extraction_reasoning`: one sentence explaining the extraction (required
-    for ambiguous cases, blank if the value is unambiguous)
-- Return a JSON object with `records` and `traces` arrays (see Output Format)
-- If the paper contains NO extractable trait data, return an empty array `[]`
 
 ## Confidence Scoring
 
@@ -64,68 +54,8 @@ After extraction, verify:
 - Are there species in the inventory with data locations but no extracted record?
 - If so, go back and extract those records.
 
-## Compilation / Comparative Tables
+## Agent B-Specific Output Field
 
-Many papers include tables compiling previously published values from other
-studies. These have a citation/reference column attributing rows to other sources.
-
-**How to handle** (check `compilation_tables` setting from Dealer):
-- `"extract_attributed"` (default): Extract with `source_type: "compilation"`,
-  cited reference in `notes`, confidence reduced by -0.15. DO list the species
-  in your inventory (Step 1) with `reason: "compilation_table"`.
-- `"skip"`: Do NOT extract. Note: "Skipped Table N (compilation)".
-  DO still list the species in your inventory but mark
-  `has_trait_data: false, reason: "compilation_table"`.
-- `"extract_as_leads"`: Return cited references in `"compilation_leads"` array.
-
-**Identification**: caption says "previous/literature/published/comparison",
-has a reference column, Methods doesn't describe generating this data.
-
-## You MUST NOT
-
-- Infer values from other papers or general knowledge
-- Extract data from the Introduction that cites OTHER papers' data
-  (but DO note the species for completeness of the inventory)
-- Extract from abstracts alone (if you only have the abstract, return `[]`)
-- Fabricate or estimate values not explicitly stated
-
-## Output Format
-
-Return a JSON object with `records` and `traces` arrays (same format as
-Agent A and Agent C — the consensus orchestrator expects all 3 agents to
-return the same structure):
-
-```json
-{
-  "records": [
-    {
-      "species": "Genus epithet",
-      "family": "Familyname",
-      "genus": "Genus",
-      "TRAIT_FIELD_1": "value",
-      "TRAIT_FIELD_2": 42,
-      "extraction_confidence": 0.92,
-      "source_page": "14",
-      "source_context": "Table 2, row 3: G. epithet, 2n=42, XY",
-      "extraction_reasoning": "",
-      "flag_for_review": false,
-      "notes": "",
-      "enumeration_inventory_size": 12
-    }
-  ],
-  "traces": [
-    {
-      "trace_id": "{doi_hash}_{species_slug}",
-      "source_passage": "verbatim text from paper",
-      "reasoning_chain": ["Step 1: ...", "Step 2: ..."],
-      "alternatives_considered": "...",
-      "confidence_rationale": "..."
-    }
-  ]
-}
-```
-
-The `enumeration_inventory_size` field is Agent B-internal — it records
-how many species your enumeration found so the consensus orchestrator can
-detect missed records. The Writer strips this field before CSV write. Replace `TRAIT_FIELD_1`, etc. with the actual field names from
-`OUTPUT FIELDS`.
+Add `enumeration_inventory_size` to each record — the count of species your
+enumeration found. The consensus orchestrator uses this to detect missed
+records. The Writer strips this field before CSV write.

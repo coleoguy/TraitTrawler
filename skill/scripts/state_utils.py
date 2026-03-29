@@ -6,6 +6,12 @@ Provides crash-safe read/write for all JSON state files (processed.json,
 queue.json, search_log.json, etc.) using write-to-temp-then-rename pattern.
 Includes JSON validation on read with fallback to last-known-good backup.
 
+Concurrent access safety: queue and processed helpers use fcntl.flock() file
+locking to prevent race conditions between the Searcher (background, adds to
+queue/processed) and the Fetcher/Dealer (foreground, removes from
+queue/updates processed). All agents MUST use these helpers — never do raw
+json.load/json.dump on shared state files.
+
 Usage:
     from state_utils import safe_read_json, safe_write_json, append_jsonl
 
@@ -20,6 +26,7 @@ Usage:
     append_jsonl("state/run_log.jsonl", {"event": "paper_processed", ...})
 """
 
+import fcntl
 import json
 import os
 import shutil
@@ -28,6 +35,57 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional, Union
+
+
+# ---------------------------------------------------------------------------
+# File locking for concurrent access
+# ---------------------------------------------------------------------------
+
+class FileLock:
+    """
+    Advisory file lock using fcntl.flock().
+
+    Prevents race conditions when multiple agents (e.g., Searcher and Fetcher)
+    read-modify-write the same state file concurrently. The lock file is a
+    separate .lock file next to the target — this avoids interfering with
+    the atomic temp-then-rename write pattern.
+
+    Usage:
+        with FileLock("state/queue.json"):
+            data = safe_read_json("state/queue.json", default=[])
+            data.append(new_item)
+            safe_write_json("state/queue.json", data)
+    """
+
+    def __init__(self, path: str, timeout: float = 30.0):
+        self.lock_path = path + ".lock"
+        self.timeout = timeout
+        self._fd = None
+
+    def __enter__(self):
+        parent = os.path.dirname(self.lock_path) or "."
+        os.makedirs(parent, exist_ok=True)
+        self._fd = open(self.lock_path, "w")
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                fcntl.flock(self._fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except (IOError, OSError):
+                if time.monotonic() >= deadline:
+                    self._fd.close()
+                    raise TimeoutError(
+                        f"Could not acquire lock on {self.lock_path} "
+                        f"within {self.timeout}s"
+                    )
+                time.sleep(0.1)
+
+    def __exit__(self, *exc):
+        if self._fd:
+            fcntl.flock(self._fd.fileno(), fcntl.LOCK_UN)
+            self._fd.close()
+            self._fd = None
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -245,34 +303,45 @@ def update_processed(state_dir: str, doi: str, entry: dict) -> None:
     """
     Add or update a DOI entry in processed.json.
 
+    Uses file locking to prevent race conditions between concurrent
+    Searcher (triage_rejected writes) and Dealer (extraction outcome writes).
+
     Args:
         state_dir: Path to state/ directory.
         doi: DOI string (key).
         entry: Dict with triage, outcome, records, date, etc.
     """
     path = os.path.join(state_dir, "processed.json")
-    processed = safe_read_json(path, default={})
-    processed[doi] = entry
-    safe_write_json(path, processed)
+    with FileLock(path):
+        processed = safe_read_json(path, default={})
+        processed[doi] = entry
+        safe_write_json(path, processed)
 
 
 def remove_from_queue(state_dir: str, doi: str) -> None:
     """
     Remove a DOI from queue.json.
 
+    Uses file locking to prevent race conditions with concurrent
+    Searcher (add_to_queue) operations.
+
     Args:
         state_dir: Path to state/ directory.
         doi: DOI to remove.
     """
     path = os.path.join(state_dir, "queue.json")
-    queue = safe_read_json(path, default=[])
-    queue = [item for item in queue if item.get("doi") != doi]
-    safe_write_json(path, queue)
+    with FileLock(path):
+        queue = safe_read_json(path, default=[])
+        queue = [item for item in queue if item.get("doi") != doi]
+        safe_write_json(path, queue)
 
 
 def add_to_queue(state_dir: str, papers: list) -> int:
     """
     Add papers to queue.json, deduplicating by DOI.
+
+    Uses file locking to prevent race conditions with concurrent
+    Fetcher (remove_from_queue) operations.
 
     Args:
         state_dir: Path to state/ directory.
@@ -282,15 +351,16 @@ def add_to_queue(state_dir: str, papers: list) -> int:
         Number of new papers added.
     """
     path = os.path.join(state_dir, "queue.json")
-    queue = safe_read_json(path, default=[])
-    existing_dois = {item.get("doi") for item in queue}
-    added = 0
-    for paper in papers:
-        if paper.get("doi") and paper["doi"] not in existing_dois:
-            queue.append(paper)
-            existing_dois.add(paper["doi"])
-            added += 1
-    safe_write_json(path, queue)
+    with FileLock(path):
+        queue = safe_read_json(path, default=[])
+        existing_dois = {item.get("doi") for item in queue}
+        added = 0
+        for paper in papers:
+            if paper.get("doi") and paper["doi"] not in existing_dois:
+                queue.append(paper)
+                existing_dois.add(paper["doi"])
+                added += 1
+        safe_write_json(path, queue)
     return added
 
 
@@ -319,6 +389,54 @@ def log_event(state_dir: str, event: dict) -> None:
     """
     path = os.path.join(state_dir, "run_log.jsonl")
     append_jsonl(path, event)
+
+
+# Alias for SKILL.md compatibility
+append_run_log = log_event
+
+
+# ---------------------------------------------------------------------------
+# DOI routing defaults (shared across dispatch.py and session_manager.py)
+# ---------------------------------------------------------------------------
+
+DEFAULT_OA_LIKELY = {
+    "10.3897", "10.3390", "10.7717", "10.1371", "10.7554", "10.1186",
+    "10.1098", "10.21203", "10.12688", "10.1101",
+}
+
+DEFAULT_PAYWALLED = {
+    "10.1016", "10.1002", "10.1007", "10.1080", "10.1159", "10.1111",
+    "10.1038", "10.1093", "10.1086", "10.1017", "10.1046", "10.1023",
+}
+
+
+def load_doi_routing(project_root):
+    """Load DOI routing prefixes from config, falling back to defaults."""
+    config_path = os.path.join(project_root, "collector_config.yaml")
+    oa = set(DEFAULT_OA_LIKELY)
+    pw = set(DEFAULT_PAYWALLED)
+    try:
+        import yaml
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        routing = config.get("doi_routing", {})
+        if routing.get("oa_likely"):
+            oa = set(routing["oa_likely"])
+        if routing.get("paywalled"):
+            pw = set(routing["paywalled"])
+    except Exception:
+        pass
+    return oa, pw
+
+
+# ---------------------------------------------------------------------------
+# Shared timestamp helper
+# ---------------------------------------------------------------------------
+
+def now_iso():
+    """Return current UTC timestamp in canonical ISO 8601 format."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ---------------------------------------------------------------------------

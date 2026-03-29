@@ -265,6 +265,9 @@ The v2/v3 monolithic SKILL.md approach hit a ceiling: context exhaustion, CSV co
 ### What carries forward from v2/v3
 All Python scripts (csv_writer.py, taxonomy_resolver.py, statistical_qc.py, pdf_utils.py, etc.), dashboard_generator.py, verify_session.py, export_dwc.py, example configs, eval suite.
 
+## Architecture diagram
+- `trait-trawler-architecture.html` — interactive modular diagram of the v4 6-agent architecture (Manager → Searcher → Fetcher → Dealer → Extractor[A,B,C] → Writer), file queues, consensus voting, and state files. Generated 2026-03-28.
+
 ## Next actions
 - [ ] Implement v4 architecture per ARCHITECTURE_v4.md
 - [ ] Register Zenodo DOI (flip GitHub integration on, tag release)

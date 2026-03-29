@@ -18,16 +18,13 @@ allowed-tools: >
   Read Write Edit Glob Grep Agent WebFetch WebSearch
 argument-hint: "[session-target or command, e.g. '20 papers', 'run QC', 'audit']"
 compatibility: >
-  Requires Python 3.9+, pyyaml, pdfplumber, scipy (optional, QC plots),
-  matplotlib (optional, QC plots), scikit-learn (optional, calibration).
-  Network access required for PubMed, OpenAlex, bioRxiv, Crossref,
-  Unpaywall, and GBIF APIs. Claude in Chrome MCP enables institutional
-  proxy PDF retrieval; without it degrades gracefully to open-access papers
-  and abstracts only. PubMed and bioRxiv MCPs are optional (falls back to
-  public APIs).
+  Python 3.9+, pyyaml, pdfplumber. Optional: scipy, matplotlib,
+  scikit-learn. Network access for PubMed, OpenAlex, bioRxiv, Crossref,
+  Unpaywall, GBIF APIs. Claude in Chrome MCP enables browser-based PDF
+  retrieval via institutional access; without it uses OA papers only.
 metadata:
   author: Heath Blackmon
-  version: 4.0.0
+  version: 4.3.0
 ---
 
 # TraitTrawler v4 — Opus Manager
@@ -38,6 +35,43 @@ extraction, search, or CSV writing yourself.
 
 **Your responsibilities**: interact with the user, read project state, decide
 what to do next, spawn agents, review results, and manage knowledge evolution.
+
+### You (Manager) MUST NOT
+
+- **Write to `results.csv`** — EVER. The Writer agent is the sole process
+  that writes to results.csv via SchemaEnforcedWriter. If you need records
+  written, spawn a Writer agent.
+- **Extract trait data** from papers or PDFs
+- **Search for papers** on PubMed, OpenAlex, etc. — spawn a Searcher agent
+- **Fetch PDFs** — spawn a Fetcher agent
+- **Read full contents of** `results.csv`, `processed.json`, `queue.json`,
+  `search_log.json`, or `guide.md` into your context — use lightweight
+  one-liners (wc -l, grep -c, python3 -c) for counts only
+- **Create files in the project root** — no .txt, .md, .json, .py reports
+- **Create new folders** — no temp/, logs/, reports/, etc.
+- **Write status/report/summary files** anywhere — report to the user in
+  your conversation output instead
+
+### Autonomous Operation Principle
+
+After the user answers the session configuration questions (section 1f),
+**you drive the entire pipeline autonomously**. Do not wait for the user
+to tell you to search, fetch, extract, or write. Instead:
+
+1. Assess pipeline state (what's queued, what's in-flight, what's ready)
+2. Spawn every agent that can do useful work right now
+3. When any agent returns, immediately assess state again and re-spawn
+4. Report progress to the user but do NOT pause for input unless:
+   - A pause trigger fires (Phase E)
+   - An error needs user attention (3+ agent failures)
+   - The long-session checkpoint is reached (every 20 papers)
+   - Session target is reached (proceed to session end)
+
+### Decision Logging
+
+Print dispatch reasoning, agent return summaries, and throughput blocks to
+the conversation so the user can monitor pipeline health. See
+`${CLAUDE_SKILL_DIR}/references/dispatch_cycle.md` for exact formats.
 
 **Skill directory**: `${CLAUDE_SKILL_DIR}`
 **Agent specs**: `${CLAUDE_SKILL_DIR}/agents/` (one .md per agent type)
@@ -55,12 +89,25 @@ what to do next, spawn agents, review results, and manage knowledge evolution.
 | Sonnet-Dealer | sonnet | Coordinate extraction per paper | `agents/dealer.md` |
 | Sonnet-Extractor | sonnet | 3-agent consensus extraction | `agents/extractor_consensus.md` |
 | Sonnet-Writer | sonnet | Validate, resolve taxonomy, write CSV | `agents/writer.md` |
+| Sonnet-Reviewer | sonnet | Classify discoveries, propose guide.md diffs | `agents/reviewer.md` |
 
 **Inter-agent communication** is folder-based:
 - `ready_for_extraction/` — Fetcher writes, Dealer reads
 - `finds/` — Extractor writes, Writer reads and deletes after verified write
 - `learning/` — Extractor writes, Manager reviews at session end
 - Nothing is deleted until the downstream consumer has verified its work.
+
+### Project Directory Layout
+
+The project root must stay clean. **Agents MUST NOT create files or folders
+outside the allowed layout** (see `${CLAUDE_SKILL_DIR}/references/dispatch_cycle.md`
+for the full listing and enforcement rules).
+
+Key folders for the dispatch cycle:
+- `search_results/`, `ready_for_extraction/`, `finds/`, `lead_files/` — inter-agent queues
+- `fetch_failures/`, `dealer_results/`, `writer_results/` — agent output folders
+- `state/` — all JSON state files (Manager-owned, agents never write here)
+- `learning/` — session discoveries; `provided_pdfs/` — user-supplied PDFs
 
 ---
 
@@ -77,116 +124,58 @@ same invocation — wizard + calibration consumes most of the context window.
 
 ## 1. Startup
 
-### 1a. Dependencies
+### 1a–1e. Session Initialization
+
+All startup tasks are handled by a single script call. This installs
+dependencies, copies scripts, backs up state, verifies integrity, syncs
+processed.json, detects stuck handoffs, and prioritizes the queue:
 
 ```bash
-python3 -c "import pdfplumber" 2>/dev/null || pip install pdfplumber --break-system-packages -q
-python3 -c "import yaml" 2>/dev/null || pip install pyyaml --break-system-packages -q
-python3 -c "import scipy" 2>/dev/null || pip install scipy matplotlib --break-system-packages -q
-python3 -c "import sklearn" 2>/dev/null || pip install scikit-learn --break-system-packages -q
+python3 scripts/session_manager.py start \
+    --project-root . \
+    --skill-dir "${CLAUDE_SKILL_DIR}" \
+    --session-id "$(date -u +%Y%m%dT%H%M%S)" \
+    --mode MODE --target TARGET --dealers N
 ```
+
+Parse the JSON summary and report: `records`, `queue.total`,
+`queries_remaining`, `stuck_handoffs`, `backfilled_dois`, `integrity`.
+
+**Upgrade detection**: If the output contains `upgraded_from`, the project
+was created with an older skill version. Report it:
+```
+Upgraded project from v{upgraded_from} → v{skill_version}.
+```
+If `csv_columns_added` is present, new fields were added to results.csv.
+
+**If `provided_pdfs/` has files**: route them to `ready_for_extraction/` now.
 
 Check MCPs by suffix: `search_articles` (PubMed), `search_works` (OpenAlex),
 `search_preprints` (bioRxiv), `search_crossref`, `navigate` (Chrome).
-Degrade gracefully if unavailable.
 
-### 1b. Read Project State
-
-1. `collector_config.yaml` — master config
-2. `config.py` — search terms
-3. `guide.md` — domain knowledge
-4. `state/processed.json`, `state/queue.json`, `state/search_log.json`
-5. Count records in `results.csv` (use `wc -l`, don't read into context)
-6. Count leads in `leads.csv`
-7. Check `state/discoveries.jsonl` for pending discoveries
-
-### 1c. Copy Utility Scripts
-
-```bash
-for script in dashboard_generator.py verify_session.py export_dwc.py; do
-  [ ! -f "$script" ] && cp "${CLAUDE_SKILL_DIR}/$script" "$script" 2>/dev/null || true
-done
-mkdir -p scripts
-for script in statistical_qc.py taxonomy_resolver.py calibration.py benchmark.py knowledge_graph_export.py reproduce.py dashboard_server.py csv_writer.py api_utils.py state_utils.py pdf_utils.py test_harness.py; do
-  [ ! -f "scripts/$script" ] && cp "${CLAUDE_SKILL_DIR}/scripts/$script" "scripts/$script" 2>/dev/null || true
-done
-mkdir -p state/extraction_traces state/snapshots state/dealt finds ready_for_extraction learning provided_pdfs
-```
-
-### 1d. Pre-Session Safety
-
-```bash
-# Backup
-BACKUP_TS=$(date +%Y%m%dT%H%M%S)
-[ -f results.csv ] && cp results.csv "state/snapshots/results_${BACKUP_TS}.csv"
-[ -f state/processed.json ] && cp state/processed.json "state/snapshots/processed_${BACKUP_TS}.json"
-
-# Verify integrity
-python3 verify_session.py --project-root .
-```
-
-Report any verification errors to the user.
-
-### 1e. Check Backlogs
-
-Before the main loop, clear any pending work from prior sessions:
-1. Files in `provided_pdfs/` → route to `ready_for_extraction/` (see Handle PDFs)
-2. Files in `finds/` → spawn Writer to process
-3. Files in `ready_for_extraction/` → process via Dealer before searching
+**Context-critical**: never read large files into Manager context. The
+session_manager already computed all counts — use those.
 
 ### 1f. Session Configuration
 
-Ask the user:
-1. **Extraction mode**: `consensus` (3-agent voting, higher accuracy) or
-   `fast` (single agent, ~3x faster). Show current setting from config.
-2. **Session target**: present these options:
-   ```
-   How long should I run?
-     1. Quick pass -- ~10 papers
-     2. Standard batch -- {batch_size} papers (from config, default 20)
-     3. Long session -- 50+ papers (checkpoint every 20, ask to continue)
-     4. Until exhausted -- process entire queue
-     5. A specific number: ___
-   ```
-   **Time-to-paper conversion**: ~3-5 min per full-text paper in consensus,
-   ~1-2 min in fast mode:
-   - "30 minutes" → ~8 papers (consensus) / ~20 papers (fast)
-   - "1 hour" → ~15 papers (consensus) / ~40 papers (fast)
-   - "a couple hours" → ~30 papers (consensus) / ~80 papers (fast)
+**Confirm three settings before starting** — parse the user's invocation
+first, only ask what's missing:
 
-Generate `session_id` as ISO timestamp. Compute MD5 hashes of `guide.md`
-and `config.py` for change tracking.
+1. **Extraction mode**: `consensus` or `fast` (default: consensus)
+2. **Session target**: number of papers or "until exhausted" (default: 20)
+3. **Concurrency**: max_concurrent_dealers (default: **5**)
 
-Initialize session usage tracker:
-```python
-usage = {
-    "sonnet_calls": 0, "opus_calls": 0,
-    "pages_processed": 0, "records_written": 0,
-    "est_input_tokens": 0, "est_output_tokens": 0,
-    "est_input_tokens_by_tier": {"sonnet": 0, "opus": 0},
-    "est_output_tokens_by_tier": {"sonnet": 0, "opus": 0}
-}
-```
+If the user gives a time ("1 hour"), convert: ~15 papers/hr consensus,
+~40 papers/hr fast.
 
-### 1g. Reproducibility Snapshot
+### 1g. Dispatch Tracking
 
-Save a snapshot to `state/snapshots/{session_id}.json`:
-```json
-{
-  "session_id": "...", "guide_md5": "...", "config_py_md5": "...",
-  "skill_version": "4.0.0", "extraction_mode": "consensus",
-  "max_concurrent_dealers": 2
-}
-```
+All agent dispatch/return logging uses `scripts/dispatch.py` — register
+before spawn (`start`), mark on return (`complete`), check state (`status`),
+route papers (`route-fetch`). See
+`${CLAUDE_SKILL_DIR}/references/dispatch_cycle.md` for exact commands.
 
-Log session start to `run_log.jsonl`. Regenerate dashboard:
-```bash
-python3 dashboard_generator.py --project-root .
-```
-
-Print status block: project name, session_id, records, papers processed,
-leads, flagged, session target, queue depth, queries run, extraction mode,
-max_concurrent_dealers.
+**Immediately enter the main loop.** Do not wait for user input.
 
 ---
 
@@ -194,126 +183,84 @@ max_concurrent_dealers.
 
 Repeat until `session_target` reached, user stops, or queue exhausted.
 
-### Phase A: Fill the Queue (if queue < 10 papers)
-
-Read `${CLAUDE_SKILL_DIR}/agents/searcher.md`. Spawn **Sonnet-Searcher**:
-
-```
-Agent(model=sonnet, prompt="{searcher.md content}\n\nSEARCH QUERIES:\n{next 5-10 from config.py}\n\nTRIAGE RULES:\n{from config}\n\nDOMAIN KNOWLEDGE:\n{guide.md}\n\nALREADY PROCESSED:\n{DOI list from processed.json}")
-```
-
-On return: report new papers added to queue.
-
-### Phase B: Fetch PDFs (for queued papers without PDFs)
-
-Read `${CLAUDE_SKILL_DIR}/agents/fetcher.md`. Spawn **Sonnet-Fetcher** for
-next 1-3 papers in queue:
+The pipeline has three **continuous background streams** (Searcher, Fetcher,
+Dealer) and one **serialized foreground stream** (Writer). Keep background
+streams running until they exhaust their inputs.
 
 ```
-Agent(model=sonnet, prompt="{fetcher.md content}\n\nPAPERS TO FETCH:\n{papers from queue.json}\n\nCONFIG:\n{relevant config sections}")
+Searcher → search_results/     Manager reads, updates queue.json + search_log.json
+Fetcher  → ready_for_extraction/ + fetch_failures/    Manager reads failures, updates leads + processed.json
+Dealer   → finds/ + dealer_results/    Manager reads results, updates processed.json
+Writer   → writer_results/     Manager reads summary
 ```
 
-On return: report fetched papers and leads.
+**Key principle**: Agents are stateless functions. They read input, produce
+output files, and touch NOTHING else. The Manager owns all state transitions.
 
-### Phase C: Extract (for papers with PDFs ready)
+**For full agent spawn templates, return processing commands, and validation
+procedures**, read `${CLAUDE_SKILL_DIR}/references/dispatch_cycle.md`.
 
-Read `${CLAUDE_SKILL_DIR}/agents/dealer.md`. For each file in
-`ready_for_extraction/`, spawn **Sonnet-Dealer** (up to
-`max_concurrent_dealers` in parallel):
+### State-Driven Dispatch
 
-```
-Agent(model=sonnet, prompt="{dealer.md content}\n\nHANDOFF FILE:\n{handoff JSON}\n\nGUIDE:\n{guide.md}\n\nCONFIG:\n{output_fields, validation_rules}\n\nEXAMPLES:\n{extraction_examples.md}\n\nEXTRACTION MODE: {consensus|fast}")
-```
-
-The Dealer internally spawns the Extractor (which spawns 3 sub-agents in
-consensus mode, or 1 in fast mode). On consensus failure, the Dealer
-escalates to Opus automatically (see `dealer.md`).
-
-On return: report extraction outcomes.
-
-### Phase D: Write to CSV
-
-Read `${CLAUDE_SKILL_DIR}/agents/writer.md`. Spawn **Sonnet-Writer** to
-process all files in `finds/`:
-
-```
-Agent(model=sonnet, prompt="{writer.md content}\n\nOUTPUT FIELDS:\n{from config}\n\nVALIDATION RULES:\n{from config}\n\nSESSION ID: {session_id}")
+**After every agent return**, checkpoint your volatile state:
+```bash
+python3 scripts/dispatch.py checkpoint --project-root . \
+    --papers-processed {papers_processed} \
+    --session-target {target} \
+    {--searcher-exhausted if all queries run}
 ```
 
-**Critical**: only one Writer at a time. Never spawn concurrent Writers.
+**On every turn**, call recommend instead of manually evaluating conditions:
+```bash
+python3 scripts/dispatch.py recommend --project-root . \
+    --max-concurrent-dealers {max_concurrent_dealers} \
+    --papers-processed {papers_processed} \
+    --session-target {target} \
+    {--searcher-exhausted if all queries run}
+```
 
-On return: report records written, rejected, flagged.
+If you lose track of `papers_processed` or `searcher_exhausted` after
+context compaction, call `recommend` **without** those flags — it falls
+back to the last checkpoint values automatically.
 
-### Phase E: Progress Update & Controls
+Returns JSON with `actions[]` (what to spawn), `session_complete` (whether
+to end), and `status`. For `spawn_dealers` actions, `handoff_files` lists
+which files to dispatch (filtered to exclude files claimed by active dealers).
 
-After each Dealer+Writer cycle:
+If recommend seems wrong for an edge case, fall back to this table:
 
-1. **Update usage tracker**: For each agent call that returned, estimate tokens:
+| Condition | Action |
+|---|---|
+| !searcher_active && !searcher_exhausted && unrun queries exist | Spawn Searcher (background) |
+| !api_fetcher_active && queue > 0 | Spawn API Fetcher (background) |
+| !browser_fetcher_active && queue has paywalled papers | Spawn Browser Fetcher (background) |
+| dealers_active < max_concurrent_dealers && ready > 0 | Spawn Dealer (background) |
+| !writer_active && finds > 0 && (dealers_active == 0 OR finds >= 3) | Spawn Writer (foreground) |
+| All streams exhausted && no agents in-flight && finds == 0 | → Session End |
 
-   | Call type | Est. input tokens | Est. output tokens |
-   |---|---|---|
-   | Searcher (5-10 queries) | ~3,000 | ~1,500 |
-   | Fetcher (1 paper) | ~500 | ~300 |
-   | Dealer+Extractor consensus (1 paper) | ~(800 × pages + 2,000) × 3 | ~(500 × records) × 3 |
-   | Dealer+Extractor fast (1 paper) | ~(800 × pages + 2,000) | ~(500 × records) |
-   | Opus escalation (1 paper) | ~(800 × pages + 2,000) | ~(500 × records) |
-   | Writer (N finds files) | ~2,000 | ~500 |
+Also run `cleanup-stale` if recommend shows stale agents:
+```bash
+python3 scripts/dispatch.py cleanup-stale --project-root .
+```
 
-   Accumulate into `usage` and the appropriate tier in `est_*_by_tier`.
+**After spawning agents, do NOT block.** When a background agent completes,
+run recommend again immediately.
 
-2. **Print one-line confidence trend** after each paper:
-   ```
-   Confidence: 0.87 avg (up from 0.84) | 3 records | total: 1,339
-   ```
+### Concurrency Rules
 
-3. **Print rolling progress** every `report_every` papers (default 5):
-   ```
-   [15/45 queued] "Smith et al. 2003 -- Paper title"
-     -> 8 records | source: unpaywall | consensus: full
-     -> Session: +34 records | Database total: 1,281
-   ```
+- **Searcher**: max 1 (background). Re-spawn on return.
+- **API Fetcher**: max 1 (background). Re-spawn on return.
+- **Browser Fetcher**: max 1 (background). Re-spawn on return.
+- API + Browser Fetchers **can run concurrently** with each other.
+- **Dealer**: up to `max_concurrent_dealers` (background). Re-spawn on return.
+- **Writer**: max 1 (**foreground**, NEVER concurrent with itself).
+- All background agents can run simultaneously with the foreground Writer.
 
-4. **Regenerate dashboard** every 2 papers:
-   ```bash
-   python3 dashboard_generator.py --project-root .
-   ```
+### Agent Failure & Progress
 
-5. **Append to live_progress.jsonl**:
-   ```json
-   {"timestamp": "...", "paper": "Smith et al. 2003", "records": 3, "total_records": 1339, "queue_remaining": 22}
-   ```
-
-6. **Check pause triggers** from `collector_config.yaml` (if configured):
-   ```yaml
-   pause_triggers:
-     - field: extraction_confidence
-       operator: less_than     # less_than, greater_than, equals, not_equals
-       value: 0.5
-       action: show_records    # show_records, ask_continue
-   ```
-   If any trigger fires: show the relevant records and either continue
-   (`show_records`) or ask the user (`ask_continue`).
-
-7. **Check for user commands** between papers:
-   - "skip" / "next" → skip current paper, mark `"outcome": "user_skipped"`
-   - "redo last" → re-extract previous paper through Dealer
-   - "pause" → stop after current paper without ending session
-   - "show trace" → display chain-of-thought trace for last extraction
-   - "consensus on last" → trigger consensus re-extraction for last paper
-
-8. **Check stop conditions**: target reached, queue empty, 15 empty searches.
-
-9. **For long sessions (>20 papers)**: ask to continue every 20 papers.
-
-### Concurrency
-
-You can run phases in parallel when there are no data dependencies:
-- Searcher can run while Dealer processes papers already in queue
-- Writer can run while Fetcher acquires the next PDF
-- Multiple Dealers can run concurrently (up to `max_concurrent_dealers`)
-- Writer must NEVER run concurrently with itself
-
-Track what's in-flight and sequence accordingly.
+For failure handling procedures, retry policy, progress reporting formats,
+pause triggers, and user mid-session commands, read
+`${CLAUDE_SKILL_DIR}/references/dispatch_cycle.md`.
 
 ---
 
@@ -324,37 +271,43 @@ When the session target is reached or the user stops:
 **If interrupted mid-paper**: finish the current paper completely before
 stopping. Never leave half-extracted records.
 
-1. **Process remaining finds/**: Spawn Writer for any unprocessed files
-2. **Verify**: `python3 verify_session.py --project-root .`
-3. **QC**: `python3 scripts/statistical_qc.py --project-root .`
-4. **Knowledge review**: Read `learning/` folder. For each discovery:
-   - Classify as **routine** (notation variant, new taxon) or **structural**
-     (validation rule change, guide section rewrite)
-   - Routine: propose a specific diff to `guide.md`
-   - Structural: draft amendment, flag for careful user review
-   - User approves/rejects each change individually
-   - Archive to `state/discoveries.jsonl` with `applied: true/false`
+1. **Process remaining finds/**: Spawn Writer for any unprocessed files.
+
+2. **Consolidate leads**: Convert queued lead files to CSV:
+   ```bash
+   python3 scripts/process_agent_output.py --action consolidate_leads --project-root .
+   ```
+
+3. **Knowledge review**: If `learning/` has files, spawn a Reviewer agent:
+   ```
+   Agent(model=sonnet, prompt="{reviewer.md content}\n\nPROJECT ROOT:\n{cwd}\n\nGUIDE PATH:\nguide.md")
+   ```
+   The Reviewer returns JSON with `routine` (proposed diffs) and `structural`
+   (proposed amendments). Present each proposal to the user for approval/rejection.
+   Archive decisions to `state/discoveries.jsonl` with `applied: true/false`.
    For detail on the review protocol, see
    `${CLAUDE_SKILL_DIR}/references/knowledge_and_transfer.md`.
-5. **Confidence calibration**: `python3 scripts/calibration.py --project-root .`
-6. **Benchmark**: `python3 scripts/benchmark.py --project-root .` (if data exists)
-7. **Tool effectiveness**: Report source stats from `state/source_stats.json`
-   (best/worst PDF sources, search sources, success rates)
-8. **Cross-paper conflicts**: `python3 scripts/knowledge_graph_export.py --project-root . --format conflicts`
-9. **Dashboard**: `python3 dashboard_generator.py --project-root .`
-10. **Check misplaced PDFs**: `python3 scripts/pdf_utils.py --project-root . --check`
-11. **Check auto-triggers**:
-    - Audit due? (`audit_config.auto_audit_interval` sessions → offer audit)
-    - Campaign report due? (every 5 sessions after 3+ → offer report)
 
-12. **Print session summary** with: session_id, papers processed, records
-    added, source breakdown, leads, flagged, database totals, queue/queries
-    remaining, discoveries. Include a **Usage** block: model calls by tier,
-    pages read, est. tokens in/out by tier, Records/call, Tokens/record.
+4. **Run session teardown** — handles verify, QC, calibration, per-query
+   yield analysis, dashboard regeneration, and session_end logging:
+   ```bash
+   python3 scripts/session_manager.py end \
+       --project-root . \
+       --session-id $SESSION_ID \
+       --papers-processed N \
+       --records-written N
+   ```
+   Parse the JSON output and report to the user:
+   - `scripts.verify`: integrity check results
+   - `scripts.session_report`: throughput, agent durations, outcome distribution
+   - `query_yield.top_queries`: best-performing search queries
+   - `query_yield.lowest_yield`: queries that waste fetch cycles
+   - `final_state`: database totals, queue remaining
 
-13. **Log session_end** to `state/run_log.jsonl` with full `usage` object
-    (sonnet_calls, opus_calls, pages_processed, records_written,
-    est_input_tokens, est_output_tokens, est_*_by_tier).
+5. **Print session summary** with: session_id, papers processed, records
+   added, source breakdown, leads, flagged, database totals, queue/queries
+   remaining, discoveries. Include a **Usage** block: model calls by tier,
+   pages read.
 
 **Core principle for knowledge evolution**: the agent proposes, the human
 decides. Never silently edit `guide.md`, `extraction_examples.md`, or
@@ -364,65 +317,16 @@ decides. Never silently edit `guide.md`, `extraction_examples.md`, or
 
 ## 4. On-Demand Features
 
-### Handle User PDFs
-
-**Triggers**: "process these PDFs", "I have some papers", PDFs detected in
-`provided_pdfs/` at session start.
-
-1. Scan `provided_pdfs/` for PDF files
-2. For each PDF: extract metadata (try DOI from first page), copy to
-   `pdfs/{family}/`, write handoff to `ready_for_extraction/`
-3. Normal Dealer → Extractor → Writer pipeline handles the rest
-
-### Data QC & Audit
-
-**Triggers**: "run QC", "audit the database", "check data quality",
-"clean the data", "check low-confidence records"
-
-Load `${CLAUDE_SKILL_DIR}/references/audit_and_qc.md` for detailed procedures.
-Run QC scripts, scan for low-confidence/outlier/guide-drift records, present
-findings, offer re-extraction through Dealer pipeline. Audit priority:
-low confidence → guide drift → statistical outliers. Cap 50 records/session.
-
-### Campaign Planning
-
-**Triggers**: "plan the campaign", "coverage report", "how much is left"
-
-Load `${CLAUDE_SKILL_DIR}/references/campaign_and_calibration.md`. Available
-after 3+ sessions. GBIF coverage analysis, search efficiency, effort estimates.
-
-### Confidence Calibration
-
-**Triggers**: automatic at session end, "calibrate", "check calibration"
-
-Run `scripts/calibration.py --project-root .`. See campaign_and_calibration.md
-for isotonic regression details, ECE metrics, per-field models.
-
-### Benchmarking
-
-**Triggers**: automatic during calibration, "run benchmark", "check accuracy"
-
-Run `scripts/benchmark.py --project-root .` for per-field P/R/F1, Brier score.
-
-### Smart Citation Chaining
-
-**Triggers**: "citation chain", all keyword searches exhausted
-
-Spawn Searcher with `mode: "citation_chain"` and high-confidence seed DOIs.
-
-### Darwin Core Export
-
-**Triggers**: "export to Darwin Core", "GBIF export"
-
-`python3 export_dwc.py --project-root . --output-dir dwc_export`
-
-### Mid-Session Correction
-
-**Triggers**: "that's wrong", "you're miscoding", "correction:"
-
-Load `${CLAUDE_SKILL_DIR}/references/knowledge_and_transfer.md` for full
-procedure. Stop pipeline, apply guide.md fix (with approval), offer warm
-re-extraction with diff presentation.
+| Feature | Triggers | Action |
+|---|---|---|
+| **User PDFs** | "process these PDFs", files in `provided_pdfs/` | Extract metadata, copy to `pdfs/`, create handoff, run through pipeline |
+| **QC & Audit** | "run QC", "audit", "check data quality" | Load `references/audit_and_qc.md`. Priority: low confidence → guide drift → outliers. Cap 50/session |
+| **Campaign** | "plan campaign", "coverage report" | Load `references/campaign_and_calibration.md`. Available after 3+ sessions |
+| **Calibration** | session end (auto), "calibrate" | `scripts/calibration.py --project-root .` |
+| **Benchmark** | "run benchmark", "check accuracy" | `scripts/benchmark.py --project-root .` |
+| **Citation chain** | "citation chain", searches exhausted | Spawn Searcher with `mode: "citation_chain"` + seed DOIs |
+| **DwC Export** | "export to Darwin Core" | `python3 export_dwc.py --project-root . --output-dir dwc_export` |
+| **Correction** | "that's wrong", "correction:" | Load `references/knowledge_and_transfer.md`. Stop, fix guide.md (with approval), offer re-extraction |
 
 ---
 
@@ -432,7 +336,7 @@ Execute via Bash. **Never read scripts into context.** All accept `--project-roo
 
 | Script | Purpose |
 |---|---|
-| `dashboard_generator.py` | HTML dashboard (regenerate every 2 papers) |
+| `dashboard_generator.py` | HTML dashboard (regenerate every 10 papers or session end) |
 | `verify_session.py` | Schema/integrity checks (run at session start + end) |
 | `export_dwc.py` | Darwin Core Archive (`--output-dir dwc_export`) |
 | `scripts/statistical_qc.py` | Chao1, Grubbs, QC plots (`--full` for HTML report) |
@@ -441,62 +345,51 @@ Execute via Bash. **Never read scripts into context.** All accept `--project-roo
 | `scripts/benchmark.py` | Per-field precision/recall/F1, Brier score |
 | `scripts/knowledge_graph_export.py` | JSON-LD provenance (`--format both` or `--format conflicts`) |
 | `scripts/reproduce.py` | Reproducibility verification (`--summary`) |
+| `scripts/session_manager.py` | Session startup + teardown (`start` / `end` subcommands) |
+| `scripts/dispatch.py` | Agent dispatch tracking + DOI routing (`start` / `complete` / `status` / `route-fetch` / `checkpoint` / `recommend`) |
+| `scripts/process_agent_output.py` | Process agent output folders → state updates (`--action search_results\|fetch_failures\|...`) |
 | `scripts/csv_writer.py` | Schema-enforced CSV (library, used by Writer agent) |
 | `scripts/state_utils.py` | Atomic state file ops (`--check`) |
 | `scripts/pdf_utils.py` | PDF naming/organization (`--check` or `--fix`) |
+| `scripts/write_finds.py` | Writer pipeline: validate → taxonomy → calibrate → write (`--session-id ID`) |
+| `scripts/validate_finds_json.py` | Schema validation for finds/ JSON files (`--file PATH` or `--dir DIR`) |
 
 ---
 
 ## 6. Stop Conditions
 
 The Manager stops when any of these are met:
-- User says stop
+- User says stop or "pause"
 - `session_target` papers processed this session
 - 10,000 total records in results.csv
-- 15 consecutive empty searches (no new papers found)
-- All queries in config.py exhausted (offer citation chaining first)
+- All streams exhausted: Searcher done (all queries run + 15 empty) AND
+  queue empty AND ready_for_extraction/ empty AND finds/ empty AND no
+  agents in-flight
 - `audit_config.max_records` reviewed (audit mode)
+
+When search queries are exhausted but queue/extraction work remains, do NOT
+stop — keep Fetcher and Dealer running until they drain.
+
+When all keyword searches are exhausted AND the session target hasn't been
+reached, automatically offer citation chaining before declaring complete.
 
 ---
 
 ## 7. Context Management
 
-These strategies prevent context exhaustion in long sessions:
+Delegate aggressively. Never read large files. Don't hold PDF text. Re-read
+agent .md files when spawning after compaction. Folders ARE the checkpoint.
 
-1. **Delegate aggressively**: every sub-agent (Searcher, Fetcher, Dealer,
-   Extractor, Writer) runs in an isolated context that is discarded on
-   return. PDF text, extraction reasoning, and intermediate data never
-   accumulate in the Manager's context.
-
-2. **Never read large files** into Manager context:
-   - Count records: `wc -l results.csv`
-   - Check if DOI processed: `grep -c "doi_string" state/processed.json`
-   - Queue depth: `python3 -c "import json; print(len(json.load(open('state/queue.json'))))"`
-   - Never `Read` the entirety of results.csv, processed.json, or queue.json.
-
-3. **Don't hold PDF text**: Dealer/Extractor agents handle PDFs in isolation.
-   The Manager only sees the return summary (records count, outcome, confidence).
-
-4. **Re-read agent .md files** when spawning — they're the source of truth.
-   If context compacts, re-read the relevant agent spec before the next spawn.
-
-5. **Folder-based self-checkpointing**: files in `finds/`,
-   `ready_for_extraction/`, `learning/` persist across sessions and context
-   compactions. Resume by processing backlogs at startup (section 1e).
-   No explicit checkpoint file needed — the folders ARE the checkpoint.
-
-6. **For long sessions (>20 papers)**: ask to continue every 20 papers.
-   This gives the user a natural exit point and keeps sessions manageable.
+For full context management guidelines, see
+`${CLAUDE_SKILL_DIR}/references/dispatch_cycle.md`.
 
 ---
 
 ## 8. On-Demand Reference Files
 
-For features that need detailed procedural instructions beyond what's in
-this file, load the reference on demand:
-
 | Feature | Reference file | When to load |
 |---|---|---|
+| Dispatch details | `${CLAUDE_SKILL_DIR}/references/dispatch_cycle.md` | Session start, after compaction |
 | Audit mode | `${CLAUDE_SKILL_DIR}/references/audit_and_qc.md` | "run QC", "audit", "check data quality" |
 | Campaign planning | `${CLAUDE_SKILL_DIR}/references/campaign_and_calibration.md` | "plan campaign", "coverage report" |
 | Confidence calibration | `${CLAUDE_SKILL_DIR}/references/campaign_and_calibration.md` | Session end (auto), "calibrate" |

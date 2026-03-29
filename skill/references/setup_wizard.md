@@ -125,7 +125,10 @@ to wait until every question is answered — generate what you can and refine.
 - **`collector_config.yaml`** from template at
   `${CLAUDE_SKILL_DIR}/references/config_template.yaml`
   - Set `extraction_mode: consensus` (default)
-  - Set `concurrency: {max_concurrent_dealers: 2}`
+  - Ask the user how many concurrent dealers to run. Explain that each
+    dealer handles one paper at a time, and in consensus mode each spawns
+    3 extraction agents, so peak concurrent agents = N × 3. Set
+    `concurrency: {max_concurrent_dealers: <user's answer>}`.
   - Populate trait-specific fields from the schema you built
   - Set `required_fields` based on among/within-species decision
 
@@ -175,8 +178,52 @@ If the user says yes:
    `taxonomy_note`, `pdf_source`, `source_type`, `notes`
 2. **Ask only what can't be inferred** — typically taxon, trait name, email,
    proxy. Have a brief conversation to fill gaps rather than a checklist.
-3. **Import data**: copy CSV to `results.csv`, populate `processed.json`
-   from DOIs
+3. **Import data**: copy CSV to `results.csv`, then **populate
+   `state/processed.json`** so the Searcher never wastes time re-finding
+   papers that are already in the database.
+
+   Run this script to build processed.json from the imported CSV:
+   ```python
+   import csv, json
+   from datetime import datetime
+
+   processed = {}
+   with open("results.csv", "r", encoding="utf-8") as f:
+       reader = csv.DictReader(f)
+       for row in reader:
+           doi = (row.get("doi") or "").strip()
+           if not doi:
+               continue
+           if doi in processed:
+               # Increment record count for papers with multiple records
+               processed[doi]["records"] = processed[doi].get("records", 0) + 1
+               continue
+           processed[doi] = {
+               "outcome": "imported",
+               "records": 1,
+               "date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+               "session_id": "bootstrap",
+               "source": "csv_import"
+           }
+
+   # Atomic write
+   import tempfile, os
+   tmp = tempfile.mktemp(suffix=".json", dir="state")
+   with open(tmp, "w") as f:
+       json.dump(processed, f, indent=2)
+   os.replace(tmp, "state/processed.json")
+   print(f"Populated processed.json: {len(processed)} unique DOIs "
+         f"from results.csv")
+   ```
+
+   **This step is critical.** Without it, the Searcher will re-find every
+   paper already in the database, wasting API calls and creating duplicate
+   queue entries. Verify the count matches expectations before proceeding.
+
+   If the CSV has rows without DOIs, warn the user: those papers cannot be
+   deduplicated by the Searcher and may be re-found. Suggest adding DOIs
+   manually if possible.
+
 4. **Skip calibration** if 20+ records exist (the data itself serves as
    calibration)
 5. **Generate `extraction_examples.md`** from 3-5 high-confidence records

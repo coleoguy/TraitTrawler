@@ -81,6 +81,24 @@ def load_validation_rules(project_root: str) -> list:
         return []
 
 
+_DEFAULT_CONFIDENCE_WORD_MAP = {"high": "0.85", "medium": "0.65", "low": "0.4"}
+
+
+def _load_confidence_word_map(project_root: str) -> dict:
+    """Read confidence_word_map from collector_config.yaml with fallback."""
+    config_path = os.path.join(project_root, "collector_config.yaml")
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        custom = config.get("confidence_word_map", {})
+        if custom:
+            return {k.lower(): str(v) for k, v in custom.items()}
+    except (ImportError, Exception):
+        pass
+    return dict(_DEFAULT_CONFIDENCE_WORD_MAP)
+
+
 # ---------------------------------------------------------------------------
 # Field type inference and validation
 # ---------------------------------------------------------------------------
@@ -260,6 +278,17 @@ def validate_record(record: dict, output_fields: list,
             action="flag"
         ))
 
+    # 9b. Genus-only species detection — catches table parsing errors where
+    # genus and species were in separate columns and only one was extracted
+    species_val = str(record.get("species", "")).strip()
+    if species_val and " " not in species_val and not family_val and not doi:
+        errors.append(ValidationError(
+            "species", species_val, "genus_only_no_provenance",
+            f"Single-word species '{species_val}' with no family and no DOI — "
+            f"likely a table parsing artifact (genus/species split across columns)",
+            action="drop"
+        ))
+
     # 10. Project-specific validation rules
     for rule in validation_rules:
         field = rule.get("field", "")
@@ -414,6 +443,60 @@ class SchemaEnforcedWriter:
         self.csv_path = os.path.join(project_root, "results.csv")
         self.output_fields = load_output_fields(project_root)
         self.validation_rules = load_validation_rules(project_root)
+        self.confidence_word_map = _load_confidence_word_map(project_root)
+
+    def _save_rejected_record(self, record: dict,
+                              errors: list) -> None:
+        """Save a rejected record to state/needs_attention.csv.
+
+        Records that fail hard validation still contain consensus-extracted
+        data that may be recoverable after manual review or guide updates.
+        This prevents silent data loss from the extraction pipeline.
+        """
+        na_path = os.path.join(self.project_root, "state",
+                               "needs_attention.csv")
+        na_exists = os.path.exists(na_path)
+
+        # Add rejection metadata
+        record = dict(record)  # copy to avoid mutating original
+        record["rejection_reasons"] = "; ".join(e.message for e in errors)
+        record["rejection_date"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        record["rejection_status"] = "pending"  # pending | fixed | discarded
+
+        # Determine fieldnames: use existing header or build from record
+        fieldnames = None
+        if na_exists:
+            try:
+                with open(na_path, "r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    if reader.fieldnames:
+                        fieldnames = list(reader.fieldnames)
+            except Exception:
+                pass
+
+        if not fieldnames:
+            fieldnames = (self.output_fields +
+                          ["rejection_reasons", "rejection_date",
+                           "rejection_status"])
+
+        # Add any new fields from the record that aren't in the header
+        for k in record:
+            if k not in fieldnames:
+                fieldnames.append(k)
+
+        try:
+            os.makedirs(os.path.join(self.project_root, "state"),
+                        exist_ok=True)
+            with open(na_path, "a", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames,
+                                        extrasaction="ignore")
+                if not na_exists:
+                    writer.writeheader()
+                writer.writerow(record)
+        except Exception as e:
+            # Log but don't fail the main write operation
+            print(f"WARNING: Could not save rejected record to "
+                  f"needs_attention.csv: {e}", file=sys.stderr)
 
     def get_fieldnames(self) -> list:
         """Get fieldnames from existing CSV header, or from config if new."""
@@ -465,6 +548,9 @@ class SchemaEnforcedWriter:
                 report.rejected += 1
                 for e in drop_errors:
                     report.errors.append((i, e))
+                # Preserve rejected records in needs_attention.csv so
+                # consensus-extracted data is never silently lost
+                self._save_rejected_record(record, drop_errors)
                 continue
 
             # Apply flags
@@ -491,13 +577,21 @@ class SchemaEnforcedWriter:
             if sex_val and sex_val in _SEX_CHROM_NORMALIZE:
                 record["sex_chromosome_system"] = _SEX_CHROM_NORMALIZE[sex_val]
 
-            # Normalize extraction_confidence: convert strings to float
+            # Reject word-based confidence values — extractors must provide
+            # numeric confidence (0.0–1.0). Word labels indicate the extractor
+            # didn't follow instructions and the value is unreliable.
             ec = record.get("extraction_confidence", "")
             if isinstance(ec, str) and ec.strip():
                 ec_lower = ec.strip().lower()
-                conf_word_map = {"high": "0.85", "medium": "0.65", "low": "0.4"}
-                if ec_lower in conf_word_map:
-                    record["extraction_confidence"] = conf_word_map[ec_lower]
+                if ec_lower in ("high", "medium", "low"):
+                    record["flag_for_review"] = "True"
+                    existing_notes = record.get("notes", "") or ""
+                    record["notes"] = (
+                        f"{existing_notes}; VALIDATION: Confidence was word "
+                        f"'{ec_lower}' — converted to numeric estimate"
+                    ).strip("; ")
+                    record["extraction_confidence"] = self.confidence_word_map.get(
+                        ec_lower, "0.65")
 
             # Sanitize: replace embedded newlines/carriage returns with spaces
             # This prevents column-offset corruption from verbatim text fields

@@ -116,7 +116,7 @@ We validated TraitTrawler against a manually curated Coleoptera karyotype databa
   <img src="docs/traittrawler_pipeline.png" alt="TraitTrawler pipeline" width="900">
 </p>
 
-TraitTrawler v4 uses a **multi-agent pipeline** where an Opus Manager coordinates dedicated Sonnet sub-processes. Agents communicate via filesystem folders — nothing is deleted until the downstream consumer verifies its work.
+TraitTrawler v4 uses a **multi-agent pipeline** where an Opus Manager coordinates dedicated Sonnet sub-processes. Agents communicate via filesystem folders — nothing is deleted until the downstream consumer verifies its work. All shared state files use file locking (`fcntl.flock`) for safe concurrent access between background agents.
 
 Each session the pipeline:
 
@@ -173,12 +173,13 @@ Log into your institution's library portal in Chrome before starting a session. 
 
 ## Running a session
 
-When you start a session, the Manager reads all project files, checks dependencies, clears any backlog from prior sessions, and prints a status report. It then asks two questions:
+When you start a session, the Manager checks dependencies, copies utility scripts, clears any backlog from prior sessions, syncs `processed.json` against `results.csv` (so hot-started projects don't re-fetch known papers), and prints a status report. It then confirms three settings (parsing as many as possible from your invocation message):
 
 1. **Extraction mode** — `consensus` (3-agent voting, best accuracy) or `fast` (single agent, ~3x faster). Consensus is the default.
-2. **Session length** — paper count, time estimate, or preset ("quick pass" ~10, "standard" 20, "long session" 50+, "until done" unlimited).
+2. **Session target** — paper count, time estimate, or preset ("quick pass" ~10, "standard" 20, "long session" 50+, "until exhausted").
+3. **Concurrency** — max concurrent dealers (papers extracted in parallel). Each dealer spawns 3 agents in consensus mode, so peak agents = N × 3.
 
-Stop anytime by telling the agent to stop. All state is saved continuously — the folder-based architecture means files in `finds/` and `ready_for_extraction/` persist across sessions. A mid-session crash loses nothing.
+After configuration, the Manager drives the pipeline autonomously — you never need to say "now search" or "now fetch". Say "20 papers, consensus, 2 dealers" and watch it go. Stop anytime by telling the agent to stop. All state is saved continuously — the folder-based architecture means files in `finds/` and `ready_for_extraction/` persist across sessions. A mid-session crash loses nothing.
 
 **The dashboard.** The agent generates `dashboard.html`, updated at session start, every 2 papers, and session end. Double-click it to open in any browser — it auto-refreshes every 60 seconds. Fully self-contained with no external dependencies.
 
@@ -194,7 +195,7 @@ Stop anytime by telling the agent to stop. All state is saved continuously — t
 
 ### results.csv
 
-One row per observation per paper. For among-species projects, this is typically one row per species per paper; for within-species projects, one row per population or individual per paper. Fields are defined by your `collector_config.yaml`. Every record carries `extraction_confidence` (0.0-1.0), `consensus` (full/majority/single_pass/opus_escalation), `flag_for_review`, `doi`, `source_page`, `source_context` (verbatim text the record came from), and `extraction_reasoning`. Data from compilation tables is tagged `source_type: "compilation"` with the original reference noted.
+One row per observation per paper. For among-species projects, this is typically one row per species per paper; for within-species projects, one row per population or individual per paper. Fields are defined by your `collector_config.yaml`. Every record carries `extraction_confidence` (0.0-1.0), `consensus` (full/majority/single_pass/opus_escalation), `consensus_vote` (per-agent agreement pattern like `1_1_0_NA` — Agent A agreed, Agent B agreed, Agent C disagreed, Opus not used), `flag_for_review`, `doi`, `source_page`, `source_context` (verbatim text the record came from), and `extraction_reasoning`. Data from compilation tables is tagged `source_type: "compilation"` with the original reference noted. Records that fail validation are preserved in `state/needs_attention.csv` rather than silently dropped.
 
 ### leads.csv
 
@@ -273,7 +274,7 @@ TraitTrawler/
 │   └── sample_results.csv        # Example output (5 records)
 │
 ├── skill/                        # Skill source (taxon-agnostic)
-│   ├── SKILL.md                  # Opus Manager specification (v4)
+│   ├── SKILL.md                  # Opus Manager specification (v4.2)
 │   ├── agents/                   # Per-agent specs (v4 multi-agent pipeline)
 │   │   ├── searcher.md           # Search APIs, triage, citation chaining
 │   │   ├── fetcher.md            # PDF acquisition, OA cascade

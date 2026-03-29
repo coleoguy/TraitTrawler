@@ -8,7 +8,9 @@ apply majority-rule voting to produce a single high-confidence result.
 
 ## Inputs
 
-- PDF text (or path for vision extraction)
+- PDF path (read the PDF text yourself — see Step 0 below)
+- `document_type`: "table-heavy", "prose", "catalogue", or "scanned"
+- `text_pages`: page count (chunk at 50 pages if > 100)
 - Paper metadata (doi, title, year, journal, authors)
 - `guide.md` content
 - `output_fields` and `validation_rules` from config
@@ -21,13 +23,40 @@ apply majority-rule voting to produce a single high-confidence result.
 - Optional lesson learned file in `learning/{doi_safe}_{timestamp}.json`
 - Reasoning traces in `state/extraction_traces/`
 
+## You MUST NOT
+
+- Write to `results.csv` (that's the Writer's job)
+- Write to `state/queue.json`, `leads.csv`, or `state/processed.json`
+- Create ANY files in the project root (no .txt, .md, .json, .py reports)
+- Create ANY new folders (no temp/, logs/, etc.)
+- Write status/report/summary files anywhere — return results in your
+  JSON response to the Dealer instead
+
 ---
 
 ## Procedure
 
+### Step 0: Read the PDF
+
+Read the PDF text from the provided `pdf_path`:
+- For normal PDFs: use pdfplumber to extract text
+  ```python
+  import pdfplumber
+  with pdfplumber.open(pdf_path) as pdf:
+      text = "\n\n".join(page.extract_text() or "" for page in pdf.pages)
+  ```
+- For scanned PDFs (`document_type: "scanned"`): use Claude's native PDF
+  vision capabilities (Read the PDF file directly)
+- For large PDFs (`text_pages > 100`): read in 50-page chunks. Process
+  each chunk through the 3 agents separately, then merge results.
+
 ### Step 1: Spawn 3 Independent Extraction Agents
 
-Launch all 3 agents **in parallel** (use the Agent tool 3 times in one message):
+First, read `references/extractor_common.md` (shared rules, output format,
+compilation tables, constraints). Include its content at the top of each
+sub-agent's prompt so they all share the same base instructions.
+
+Then launch all 3 agents **in parallel** (use the Agent tool 3 times in one message):
 
 **Agent A (Standard)**: Use prompt from `extractor_A.md`
 - "Extract all trait records from this paper systematically."
@@ -39,6 +68,7 @@ Launch all 3 agents **in parallel** (use the Agent tool 3 times in one message):
 - "Extract but challenge every value — flag uncertainty."
 
 Each agent receives the same:
+- Content of `references/extractor_common.md` (prepended)
 - PDF text
 - Paper metadata
 - guide.md, output_fields, validation_rules, examples
@@ -88,6 +118,21 @@ For each aligned record, vote on each field:
 Use it to inform confidence adjustments and flag decisions. Do NOT include
 `doubt_note` in the final output — it is internal to the consensus process.
 
+**Consensus vote string**: For each record, generate a `consensus_vote` string
+that encodes per-agent agreement on the primary trait field(s). Format:
+`{A}_{B}_{C}_{opus}` where each position is `1` (agreed with final value),
+`0` (disagreed or empty), or `NA` (agent did not run / timed out).
+
+Examples:
+- `1_1_1_NA` — all 3 Sonnet agents agreed, no Opus escalation
+- `0_1_1_NA` — Agent B and C agreed (majority), Agent A disagreed
+- `1_1_0_NA` — Agent A and B agreed, Agent C disagreed
+- `0_0_0_1` — all 3 Sonnet agents disagreed, Opus escalation succeeded
+- `0_0_0_0` — all agents disagreed, no consensus (routed to needs_attention)
+- `1_NA_NA_NA` — only Agent A completed (single_agent)
+
+This field is written to the finds/ JSON and preserved through to results.csv.
+
 ### Step 5: Handle Partial Coverage
 
 **Records found by 2 agents** (not all 3):
@@ -114,7 +159,28 @@ For every record, store the individual agent values in the `agent_values` field:
 
 This allows downstream review of disagreements.
 
-### Step 7: Write Result File
+### Step 7: Validate and Write Result File
+
+**Before writing, validate the output.** This prevents format drift from
+wasting downstream Writer cycles. If validation fails, fix the structure
+(you have the raw agent outputs) — do NOT write invalid JSON to `finds/`.
+
+If an agent returned prose instead of JSON, or used a non-standard schema
+(e.g., `consensus_records`, `consensus_results`, or a flat dict instead of
+a `records` array), normalize it to the correct schema below before writing.
+
+After assembling the JSON, write it to a temp file and validate:
+```bash
+python3 scripts/validate_finds_json.py --file finds/{doi_safe}_{timestamp}.json
+```
+
+This checks: required top-level keys (`doi`, `records`, `extraction_timestamp`),
+`records` is an array, each record has `species`, `extraction_confidence`,
+`consensus`, `consensus_vote`, `source_page`, confidence in [0,1], and
+`paper_metadata` has `year`, `journal`, `first_author`.
+
+If validation fails (exit code 1), read the errors from the JSON output,
+fix the structure, and re-validate. Do NOT leave invalid JSON in `finds/`.
 
 Write to `finds/` with a unique name:
 ```
@@ -138,6 +204,7 @@ Full schema:
       "TRAIT_FIELD": "value",
       "extraction_confidence": 0.92,
       "consensus": "full",
+      "consensus_vote": "1_1_1_NA",
       "source_page": "14",
       "source_context": "Table 2, row 3: ...",
       "extraction_reasoning": "...",

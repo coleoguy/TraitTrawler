@@ -32,7 +32,23 @@ from urllib.error import URLError, HTTPError
 GBIF_MATCH_URL = "https://api.gbif.org/v1/species/match"
 GBIF_SPECIES_URL = "https://api.gbif.org/v1/species"
 RATE_LIMIT_DELAY = 0.35  # seconds between requests (~3/sec)
-CACHE_TTL_DAYS = 90  # cache entries older than this are refreshed
+CACHE_TTL_DAYS = 90  # default; overridden by collector_config.yaml taxonomy_cache_ttl_days
+
+
+def load_cache_ttl(project_root):
+    """Load cache TTL from config. Returns int days."""
+    global CACHE_TTL_DAYS
+    config_path = os.path.join(project_root, "collector_config.yaml")
+    try:
+        import yaml
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        ttl = config.get("taxonomy_cache_ttl_days")
+        if ttl is not None:
+            CACHE_TTL_DAYS = int(ttl)
+    except Exception:
+        pass
+    return CACHE_TTL_DAYS
 
 
 def load_cache(cache_path):
@@ -111,7 +127,7 @@ def _cache_is_fresh(entry):
         return False
 
 
-def resolve_species(species_name, kingdom, cache):
+def resolve_species(species_name, kingdom, cache, offline=False):
     """Resolve a single species name. Returns a result dict."""
     # Check cache first (with TTL)
     if species_name in cache:
@@ -122,6 +138,28 @@ def resolve_species(species_name, kingdom, cache):
                 "cached": True,
                 **cached
             }
+
+    # Offline mode: return placeholder without GBIF call.
+    # Do NOT cache the placeholder — keep cache clean for real lookups.
+    if offline:
+        parts = species_name.strip().split()
+        return {
+            "query": species_name,
+            "cached": False,
+            "match_type": "NONE",
+            "status": "OFFLINE",
+            "confidence": 0,
+            "gbif_key": None,
+            "matched_name": "",
+            "accepted_name": None,
+            "accepted_key": None,
+            "kingdom": "", "phylum": "", "class": "", "order": "",
+            "family": "",
+            "genus": parts[0] if len(parts) >= 2 else "",
+            "rank": "",
+            "action": "deferred_offline",
+            "note": "GBIF unavailable; taxonomy resolution deferred",
+        }
 
     # Query GBIF
     time.sleep(RATE_LIMIT_DELAY)
@@ -252,6 +290,8 @@ def main():
     parser.add_argument("--cache", default="state/taxonomy_cache.json", help="Cache file path")
     parser.add_argument("--kingdom", default="Animalia", help="GBIF kingdom filter")
     parser.add_argument("--family-counts", nargs="+", help="Get species counts for families")
+    parser.add_argument("--offline", action="store_true",
+                        help="Skip GBIF calls; return placeholders for uncached species")
 
     args = parser.parse_args()
 
@@ -295,7 +335,8 @@ def main():
     cached_count = 0
     resolved_count = 0
     for name in sorted(species_names):
-        result = resolve_species(name, args.kingdom, cache)
+        result = resolve_species(name, args.kingdom, cache,
+                                 offline=args.offline)
         results.append(result)
         if result["cached"]:
             cached_count += 1
