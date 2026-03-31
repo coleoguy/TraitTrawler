@@ -363,7 +363,7 @@ _CORE_FIELDS = {
     "doi", "paper_title", "paper_authors", "first_author", "paper_year",
     "paper_journal", "session_id", "species", "family", "subfamily", "genus",
     "extraction_confidence", "flag_for_review", "source_type", "pdf_source",
-    "pdf_filename", "pdf_url", "notes", "processed_date", "collection_locality",
+    "pdf_path", "pdf_filename", "pdf_url", "notes", "processed_date", "collection_locality",
     "country", "source_page", "source_context", "extraction_reasoning",
     "accepted_name", "gbif_key", "taxonomy_note",
     "audit_status", "audit_session", "audit_prior_values",
@@ -402,6 +402,32 @@ def build_dedup_keys(csv_path: str, output_fields: list) -> set:
 def make_dedup_key(record: dict, output_fields: list) -> tuple:
     """Create a dedup key for a single record."""
     return _make_key(record, _get_trait_fields(output_fields))
+
+
+# Secondary dedup: species + key traits + DOI (catches re-extraction drift)
+_DOI_DEDUP_FIELDS = ("species", "2n_male", "sex_chromosome_system", "doi")
+
+
+def _make_doi_key(row_or_record: dict) -> tuple | None:
+    """Create a DOI-based dedup key. Returns None if any field is empty."""
+    vals = tuple(row_or_record.get(k, "") for k in _DOI_DEDUP_FIELDS)
+    if all(vals):
+        return vals
+    return None
+
+
+def build_doi_dedup_keys(csv_path: str) -> set:
+    """Build set of (species, 2n_male, sex_chromosome_system, doi) keys."""
+    keys = set()
+    if not os.path.exists(csv_path):
+        return keys
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            k = _make_doi_key(row)
+            if k is not None:
+                keys.add(k)
+    return keys
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +552,7 @@ class SchemaEnforcedWriter:
 
         # Build dedup keys from existing data
         dedup_keys = build_dedup_keys(self.csv_path, self.output_fields)
+        doi_dedup_keys = build_doi_dedup_keys(self.csv_path)
 
         rows_to_write = []
 
@@ -565,13 +592,22 @@ class SchemaEnforcedWriter:
                 for e in flag_errors:
                     report.errors.append((i, e))
 
-            # Dedup check
+            # Dedup check (primary: species + all trait values)
             key = make_dedup_key(record, self.output_fields)
             if key in dedup_keys:
                 report.duplicates += 1
                 continue
 
+            # Secondary dedup: species + 2n_male + sex_chromosome_system + doi
+            # Catches re-extraction where trait values drifted slightly
+            doi_key = _make_doi_key(record)
+            if doi_key is not None and doi_key in doi_dedup_keys:
+                report.duplicates += 1
+                continue
+
             dedup_keys.add(key)
+            if doi_key is not None:
+                doi_dedup_keys.add(doi_key)
             # Auto-normalize sex chromosome notation before writing
             sex_val = record.get("sex_chromosome_system", "")
             if sex_val and sex_val in _SEX_CHROM_NORMALIZE:

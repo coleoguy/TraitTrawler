@@ -31,7 +31,12 @@ VALID_CONSENSUS_TYPES = {
 
 REQUIRED_TOP_KEYS = {"doi", "records", "extraction_timestamp"}
 REQUIRED_RECORD_KEYS = {"species", "extraction_confidence", "consensus",
-                        "consensus_vote", "source_page"}
+                        "consensus_vote"}
+# source_page is strongly recommended but not required — many valid
+# extraction scenarios (compiled databases, supplementary tables) don't
+# have meaningful page numbers. Missing source_page triggers a warning
+# but does NOT block validation.
+SOFT_REQUIRED_RECORD_KEYS = {"source_page"}
 
 
 def validate_file(path):
@@ -90,11 +95,19 @@ def validate_file(path):
                           f"{type(rec).__name__}")
             continue
 
-        # Required fields
+        # Required fields (hard — blocks validation)
         for key in REQUIRED_RECORD_KEYS:
             val = rec.get(key)
             if val is None or (isinstance(val, str) and not val.strip()):
                 errors.append(f"{prefix}: missing or empty '{key}'")
+
+        # Soft-required fields (warning only — does NOT block validation)
+        for key in SOFT_REQUIRED_RECORD_KEYS:
+            val = rec.get(key)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                # Log warning but don't append to errors
+                print(f"WARNING: {prefix}: '{key}' is empty (recommended "
+                      f"but not required)", file=sys.stderr)
 
         # extraction_confidence must be float in [0, 1]
         ec = rec.get("extraction_confidence")

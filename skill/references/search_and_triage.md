@@ -18,7 +18,7 @@ function which enforces per-API rate limits automatically:
 | PubMed | 3/s (with key) / 1/s (without) | Add `api_key` to E-utilities URL |
 | OpenAlex | 10/s (polite) / 1/s (default) | Add `mailto={contact_email}` |
 | Crossref | 50/s (polite) / 1/s (default) | Add `mailto:{contact_email}` header |
-| bioRxiv | via MCP or Crossref API | N/A |
+| bioRxiv/medRxiv | via MCP (date+category) | N/A |
 
 **Always use the `contact_email` from `collector_config.yaml`** in API calls
 to access polite/priority pools. This is the difference between 1 req/s and
@@ -32,8 +32,17 @@ OpenAlex indexes 250M+ works including many taxonomy, ecology, and regional
 natural history journals absent from PubMed. For each result, extract DOI,
 title, abstract, journal from the work object.
 
-**bioRxiv/medRxiv** (secondary): Use `search_preprints` — covers recent work not
-yet in PubMed. Call `get_preprint` for metadata.
+**bioRxiv/medRxiv** (secondary): The MCP `search_preprints` supports date+category
+browsing on both servers (`server="biorxiv"` or `server="medrxiv"`). Browse
+relevant categories (genetics, evolutionary biology, zoology, ecology, genomics)
+for recent preprints. Call `get_preprint(doi, server)` for full metadata.
+Note: keyword search is NOT supported — OpenAlex is the primary discovery path
+for preprints. The MCP catches recent preprints not yet indexed by OpenAlex.
+
+**Other preprint servers**: OpenAlex indexes EcoEvoRxiv, arXiv (q-bio),
+PeerJ Preprints, Research Square, and others. Papers from these servers are
+discovered automatically via the OpenAlex query — no separate API needed.
+When recording source, use the server name from OpenAlex metadata.
 
 **Crossref** (tertiary): Use the Crossref MCP `search_crossref` for additional
 coverage, especially for older publications and non-English journals.
@@ -143,21 +152,34 @@ other orders (Hemiptera, Diptera, Lepidoptera, etc.) that happen to discuss
 chromosomes should be triaged as `unlikely`. This catches cross-order false
 positives from generic keyword searches.
 
-**Journal yield guidance**: Some journals consistently yield primary trait
-data; others are analytical and rarely contain raw measurements.
+**Abstract-level trait verification**: When an abstract is available, check
+that it mentions the target trait (from `collector_config.yaml`) or closely
+related terms — not just the target taxon. A paper about the right organism
+but the wrong measurement is a false positive. If the abstract discusses
+the taxon but never mentions the trait, measurements, or data collection,
+triage as `uncertain` (not `likely`).
 
-High-yield journals for karyotype data (promote to `likely`):
-- Comparative Cytogenetics, Caryologia, Cytologia, Hereditas, Genetica,
-  European Journal of Entomology, Genetika, Folia Biologica, Chromosome
-  Research, Cytogenetic and Genome Research
+**Config-driven exclusion**: If `collector_config.yaml` defines
+`triage_exclude_keywords`, use them to demote papers. These are
+project-specific terms the user identifies as off-topic for their trait.
+Papers whose title/abstract prominently features an exclusion keyword
+should be triaged as `unlikely` unless the abstract also explicitly
+mentions the target trait with specific measurements.
 
-Low-yield journals (demote to `uncertain` unless abstract is very specific):
-- Genome Biology and Evolution, PLoS Genetics, Molecular Biology and
-  Evolution, Systematic Biology, eLife, Cell, Nature Genetics, BMC Genomics
+**Journal yield guidance**: Consult `guide.md` for project-specific
+journal yield notes. In general:
+- Journals that specialize in the target trait's domain → promote to `likely`
+- Review/methods journals that rarely contain primary measurements →
+  demote to `uncertain` unless abstract is very specific
+- Journals outside the trait's field entirely → triage as `unlikely`
 
-Papers from low-yield journals that discuss "genome assemblies", "synteny
-analysis", or "phylogenomics" without mentioning specific chromosome counts
-should be triaged as `unlikely`.
+The Searcher should note journal-level yield patterns in its output so
+the Manager can update `guide.md` over time.
+
+**Triage quality target**: False positive rate should stay below 30%.
+If more than 30% of papers dispatched to dealers return `no_data`, the
+search queries or triage rules need tightening. The Manager should report
+this metric and suggest adjustments.
 
 ### 4b. Adaptive triage learning
 

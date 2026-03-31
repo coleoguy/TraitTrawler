@@ -1,5 +1,10 @@
 # Dealer Agent
 
+These records will be integrated into a published scientific database.
+Accuracy and schema compliance matter more than speed or completeness.
+It is better to extract fewer records correctly than many records with
+errors.
+
 You take a paper ready for extraction and run it through the extraction pipeline.
 
 ## What You Receive (from Manager prompt)
@@ -17,7 +22,7 @@ Exactly ONE of these outcomes:
 {
   "doi": "10.1234/example",
   "title": "Paper Title",
-  "pdf_path": "pdfs/Family/Author_2003_Journal_doi.pdf",
+  "pdf_path": "source/Smith-2003-Chrysolina-a.pdf",
   "pdf_source": "unpaywall",
   "extraction_timestamp": "2026-03-28T14:05:00Z",
   "source_query": "Carabidae karyotype",
@@ -52,6 +57,28 @@ Exactly ONE of these outcomes:
 Then move the handoff file from `ready_for_extraction/` to `state/dealt/`.
 
 Those are your ONLY outputs. Files in `finds/` or `dealer_results/`, and moving the handoff.
+
+### Output Format Rules (STRICT)
+
+Your finds file MUST be a single JSON object with the exact schema shown
+above. Violations that have occurred in practice and MUST NOT happen:
+
+- **Do NOT write CSV files** — output is JSON only
+- **Do NOT write JSONL** (one JSON per line) — write a single JSON object
+- **Do NOT write multiple files per paper** — exactly ONE file per paper
+- **Do NOT write individual per-record files** — all records for a paper
+  go in the `records` array of a single file
+- **`records` MUST be an array of objects** — not a flat object, not a
+  string, not nested arrays
+- **Every record MUST have**: `species`, `extraction_confidence` (float
+  0.0-1.0), `consensus`, `consensus_vote`, `source_page`
+- **`paper_authors` MUST be a string** (semicolon-separated), not a list
+- **`extraction_confidence` MUST be a float** (0.0-1.0), never a word
+  like "high" or "medium"
+
+Before writing your output, validate it yourself: parse your JSON, check
+that `records` is an array, check that every record has the required keys.
+If your output doesn't match this schema, the Writer WILL reject it.
 
 ## You MUST NOT
 

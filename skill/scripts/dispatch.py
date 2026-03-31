@@ -26,6 +26,7 @@ Usage:
 """
 
 import argparse
+import csv
 import glob
 import json
 import os
@@ -334,21 +335,82 @@ def recommend(project_root, searcher_exhausted=None,
             "reason": "paywalled papers or fetch failures need browser",
         })
 
-    # Dealers — exclude files already claimed by active dealers
+    # Dealers — exclude files already claimed by active dealers AND
+    # papers whose DOI is already in processed.json (prevents re-extraction
+    # of papers that were already successfully extracted in prior sessions,
+    # e.g. user-provided PDFs or dissertations processed via different paths)
     claimed = claimed_files(project_root)
     ready_files = glob.glob(
         os.path.join(project_root, "ready_for_extraction", "*.json"))
-    unclaimed = [os.path.basename(f) for f in ready_files
-                 if os.path.basename(f) not in claimed]
+
+    # Load processed DOIs for dedup guard
+    processed_path = os.path.join(project_root, "state", "processed.json")
+    processed_dois = set()
+    if os.path.exists(processed_path):
+        try:
+            proc_data = safe_read_json(processed_path, default={})
+            if isinstance(proc_data, dict):
+                processed_dois = set(proc_data.keys())
+            elif isinstance(proc_data, list):
+                processed_dois = {p.get("doi", "") for p in proc_data
+                                  if isinstance(p, dict)} - {""}
+        except Exception:
+            pass
+
+    # Also load DOIs already in results.csv to catch papers processed
+    # outside the normal pipeline (e.g. dissertation extraction)
+    results_path = os.path.join(project_root, "results.csv")
+    if os.path.exists(results_path):
+        try:
+            import csv
+            with open(results_path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    d = row.get("doi", "").strip()
+                    if d:
+                        processed_dois.add(d)
+        except Exception:
+            pass
+
+    unclaimed = []
+    skipped_already_processed = 0
+    for f in ready_files:
+        basename = os.path.basename(f)
+        if basename in claimed:
+            continue
+        # Check if this handoff's DOI is already processed
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                handoff = json.load(fh)
+            doi = handoff.get("doi", "").strip()
+            if doi and doi in processed_dois:
+                skipped_already_processed += 1
+                continue
+        except (json.JSONDecodeError, OSError):
+            pass  # let the dealer handle corrupt handoffs
+        unclaimed.append(basename)
+
     dealer_slots = max_concurrent_dealers - status["dealers_active"]
     if dealer_slots > 0 and unclaimed:
         to_spawn = min(dealer_slots, len(unclaimed))
+        reason = (f"{len(unclaimed)} unclaimed papers ready, "
+                  f"{dealer_slots} slots open")
+        if skipped_already_processed:
+            reason += (f" ({skipped_already_processed} skipped — "
+                       f"DOI already in processed/results)")
         actions.append({
             "action": "spawn_dealers",
             "count": to_spawn,
             "handoff_files": unclaimed[:to_spawn],
-            "reason": (f"{len(unclaimed)} unclaimed papers ready, "
-                       f"{dealer_slots} slots open"),
+            "reason": reason,
+        })
+    elif skipped_already_processed and dealer_slots > 0:
+        # All ready papers were already processed — report this
+        actions.append({
+            "action": "info",
+            "reason": (f"All {skipped_already_processed} ready papers have "
+                       f"DOIs already in processed.json or results.csv — "
+                       f"skipping to prevent duplicate extraction"),
         })
 
     # Writer
@@ -420,6 +482,126 @@ def route_fetch(project_root, api_batch_size=8, browser_batch_size=3):
     }
 
 
+def retriage_queue(project_root):
+    """Re-evaluate queued papers against current triage rules.
+
+    Removes papers that:
+    1. Have DOIs already in processed.json or results.csv (already extracted)
+    2. Match triage_exclude_keywords from collector_config.yaml
+    3. Have no abstract AND no triage_keywords match in title
+
+    Returns summary of what was kept/removed.
+    """
+    queue_path = os.path.join(project_root, "state", "queue.json")
+    queue = safe_read_json(queue_path, default=[])
+    if not queue:
+        return {"original": 0, "kept": 0, "removed_already_processed": 0,
+                "removed_exclude_keywords": 0, "removed_no_signal": 0}
+
+    # Load processed DOIs
+    processed_path = os.path.join(project_root, "state", "processed.json")
+    processed_dois = set()
+    proc_data = safe_read_json(processed_path, default={})
+    if isinstance(proc_data, dict):
+        processed_dois = set(proc_data.keys())
+
+    # Load DOIs from results.csv
+    results_path = os.path.join(project_root, "results.csv")
+    if os.path.exists(results_path):
+        try:
+            with open(results_path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    d = row.get("doi", "").strip()
+                    if d:
+                        processed_dois.add(d)
+        except Exception:
+            pass
+
+    # Load triage config
+    exclude_keywords = []
+    triage_keywords = []
+    try:
+        import yaml
+        config_path = os.path.join(project_root, "collector_config.yaml")
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+            exclude_keywords = [k.lower() for k in
+                                config.get("triage_exclude_keywords", [])]
+            triage_keywords = [k.lower() for k in
+                               config.get("triage_keywords", [])]
+    except (ImportError, Exception):
+        pass
+
+    kept = []
+    removed_processed = 0
+    removed_excluded = 0
+    removed_no_signal = 0
+
+    for paper in queue:
+        doi = paper.get("doi", "").strip()
+
+        # 1. Already processed?
+        if doi and doi in processed_dois:
+            removed_processed += 1
+            continue
+
+        # 2. Matches exclude keywords?
+        title = (paper.get("title", "") or "").lower()
+        abstract = (paper.get("abstract", "") or "").lower()
+        text = title + " " + abstract
+
+        if exclude_keywords and any(kw in text for kw in exclude_keywords):
+            removed_excluded += 1
+            # Mark as processed so we don't re-queue later
+            if doi:
+                from state_utils import update_processed
+                state_dir = os.path.join(project_root, "state")
+                update_processed(state_dir, doi, {
+                    "outcome": "retriage_excluded",
+                    "reason": "matched triage_exclude_keywords",
+                })
+            continue
+
+        # 3. No abstract AND title doesn't match any triage keyword?
+        if (not abstract.strip() and triage_keywords
+                and not any(kw in title for kw in triage_keywords)):
+            removed_no_signal += 1
+            if doi:
+                from state_utils import update_processed
+                state_dir = os.path.join(project_root, "state")
+                update_processed(state_dir, doi, {
+                    "outcome": "retriage_no_signal",
+                    "reason": "no abstract and title lacks triage keywords",
+                })
+            continue
+
+        kept.append(paper)
+
+    # Write filtered queue
+    safe_write_json(queue_path, kept)
+
+    # Log the retriage event
+    append_jsonl(_log_path(project_root), {
+        "event": "queue_retriage",
+        "original": len(queue),
+        "kept": len(kept),
+        "removed_already_processed": removed_processed,
+        "removed_exclude_keywords": removed_excluded,
+        "removed_no_signal": removed_no_signal,
+        "timestamp": now_iso(),
+    })
+
+    return {
+        "original": len(queue),
+        "kept": len(kept),
+        "removed_already_processed": removed_processed,
+        "removed_exclude_keywords": removed_excluded,
+        "removed_no_signal": removed_no_signal,
+    }
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -477,6 +659,12 @@ def main():
                                help="Remove stale agent entries")
     p_cleanup.add_argument("--project-root", default=".")
     p_cleanup.add_argument("--max-age-minutes", type=int, default=30)
+
+    # retriage
+    p_retriage = sub.add_parser("retriage",
+                                help="Re-evaluate queue against current "
+                                     "triage rules")
+    p_retriage.add_argument("--project-root", default=".")
 
     args = parser.parse_args()
 
@@ -541,6 +729,10 @@ def main():
             args.project_root,
             args.max_age_minutes,
         )
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "retriage":
+        result = retriage_queue(args.project_root)
         print(json.dumps(result, indent=2))
 
 

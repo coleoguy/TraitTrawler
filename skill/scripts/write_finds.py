@@ -362,6 +362,8 @@ def process_finds(project_root, session_id):
                     rec["first_author"] = pm["first_author"]
             if not rec.get("pdf_source"):
                 rec["pdf_source"] = data.get("pdf_source", "")
+            if not rec.get("pdf_path"):
+                rec["pdf_path"] = data.get("pdf_path", "")
 
         # Step 7: Write via SchemaEnforcedWriter (handles validation,
         # dedup, atomic write, post-write verification)

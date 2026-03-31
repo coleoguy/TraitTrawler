@@ -42,7 +42,35 @@ from state_utils import (
 )
 
 
-SKILL_VERSION = "4.3.0"
+SKILL_VERSION = "4.4.0"
+
+# Changelog: brief notes per version so the Manager (an LLM) understands
+# what changed when upgrading an existing project. Keyed by version string.
+# Only include entries that affect Manager behavior or project state.
+CHANGELOG = {
+    "4.4.0": [
+        "Dedup guard: dispatch.py now skips papers whose DOI is already in "
+        "processed.json or results.csv — prevents re-extraction of known papers.",
+        "Compact logging: dispatch blocks are 1-line, return blocks are 1-line, "
+        "throughput every 10 papers (3 lines). Do NOT print verbose blocks.",
+        "Auto-normalization: process_agent_output.py auto-fixes paper_authors "
+        "(list→string), confidence (word→float), source_page (int→string) in "
+        "finds/ before the Writer sees them.",
+        "source_page is now soft-required in finds validation — missing values "
+        "produce a warning, not a rejection.",
+        "Manager boundary hardened: MUST NOT search, extract, fetch, create "
+        "hybrid agents, or manually fix agent output. See 'When the Pipeline "
+        "Stalls' section in SKILL.md.",
+        "Triage: config-driven exclusion keywords (triage_exclude_keywords in "
+        "collector_config.yaml). 30% false positive target.",
+        "Queue re-triage: run 'dispatch.py retriage' to re-evaluate stale "
+        "queue entries against current triage rules and guide.md.",
+        "PDF storage: PDFs now saved to source/ with standardized names "
+        "(Lastname-Year-Word-index.pdf). pdf_path column added to CSV. "
+        "Add 'pdf_path' to output_fields in collector_config.yaml if not "
+        "already present.",
+    ],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +137,36 @@ def copy_utility_scripts(project_root, skill_dir):
     return copied
 
 
+def hash_pdf(path):
+    """Compute SHA-256 hex digest of a file."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def check_provided_pdf_hash(project_root, pdf_path):
+    """Return True if this PDF's content hash is already registered."""
+    registry_path = os.path.join(project_root, "state", "processed_pdfs.json")
+    registry = safe_read_json(registry_path, default={})
+    digest = hash_pdf(pdf_path)
+    return digest in registry
+
+
+def register_provided_pdf(project_root, pdf_path, session_id):
+    """Record a provided PDF's content hash so it won't be re-processed."""
+    registry_path = os.path.join(project_root, "state", "processed_pdfs.json")
+    registry = safe_read_json(registry_path, default={})
+    digest = hash_pdf(pdf_path)
+    registry[digest] = {
+        "filename": os.path.basename(pdf_path),
+        "session_id": session_id,
+        "processed_at": now_iso(),
+    }
+    safe_write_json(registry_path, registry)
+
+
 def ensure_directories(project_root):
     """Create all required project directories."""
     dirs = [
@@ -116,7 +174,7 @@ def ensure_directories(project_root):
         "state/session_reports",
         "finds", "ready_for_extraction", "search_results",
         "fetch_failures", "dealer_results", "writer_results", "lead_files",
-        "learning", "provided_pdfs",
+        "learning", "provided_pdfs", "provided_pdfs/done",
     ]
     for d in dirs:
         os.makedirs(os.path.join(project_root, d), exist_ok=True)
@@ -182,6 +240,55 @@ def sync_processed_json(project_root):
 
     if added:
         safe_write_json(proc_path, proc)
+
+    return added
+
+
+def ensure_standard_fields(project_root):
+    """Ensure standard fields like pdf_path are in collector_config.yaml.
+
+    Called during startup to inject fields the skill requires but the user
+    may not have added manually. Only adds fields that are genuinely
+    missing — never reorders or removes existing fields.
+
+    Returns list of field names added (empty if none needed).
+    """
+    config_path = os.path.join(project_root, "collector_config.yaml")
+    if not os.path.exists(config_path):
+        return []
+
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+    except (ImportError, Exception):
+        return []
+
+    fields = config.get("output_fields", [])
+    if not fields:
+        return []
+
+    # Standard fields that must exist in every project
+    required_standard = ["pdf_path"]
+    added = []
+    for field in required_standard:
+        if field not in fields:
+            # Insert pdf_path after pdf_source if it exists, else append
+            if field == "pdf_path" and "pdf_source" in fields:
+                idx = fields.index("pdf_source") + 1
+                fields.insert(idx, field)
+            else:
+                fields.append(field)
+            added.append(field)
+
+    if added:
+        config["output_fields"] = fields
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, default_flow_style=False,
+                          sort_keys=False, allow_unicode=True)
+        except Exception:
+            return []
 
     return added
 
@@ -589,7 +696,12 @@ def cmd_start(args):
     backfilled = sync_processed_json(root)
     result["backfilled_dois"] = backfilled
 
-    # 6b. Migrate CSV columns (add new output_fields to existing results.csv)
+    # 6b. Ensure standard fields in config (e.g. pdf_path)
+    injected_fields = ensure_standard_fields(root)
+    if injected_fields:
+        result["config_fields_added"] = injected_fields
+
+    # 6c. Migrate CSV columns (add new output_fields to existing results.csv)
     new_columns = migrate_csv_columns(root)
     if new_columns:
         result["csv_columns_added"] = new_columns
@@ -598,6 +710,13 @@ def cmd_start(args):
     previous_version = stamp_skill_version(root)
     if previous_version and previous_version != SKILL_VERSION:
         result["upgraded_from"] = previous_version
+        # Collect changelog entries for all versions after the previous one
+        changes = []
+        for ver, entries in CHANGELOG.items():
+            if ver > previous_version:
+                changes.extend(entries)
+        if changes:
+            result["upgrade_notes"] = changes
     result["skill_version"] = SKILL_VERSION
 
     # 7. Stuck handoffs

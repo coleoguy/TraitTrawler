@@ -9,46 +9,53 @@ context compaction if needed.
 
 ## Decision Logging Formats
 
-**Print your dispatch reasoning to the conversation window** so the user can
-see exactly what you're deciding and why. Before every dispatch cycle, output
-a brief decision block like this:
+**Print compact dispatch logs to the conversation window** so the user can
+monitor pipeline health. Keep these SHORT — every line consumes Manager
+context that can't be recovered. Use the compact formats below.
+
+**IMPORTANT — context conservation**: The Manager's context window is the
+pipeline's lifespan. Every unnecessary line printed shortens the session.
+Use the shortest format that conveys the essential information. Never
+print raw JSON output from scripts — extract the 2-3 key numbers and
+report those.
+
+Before a dispatch cycle, print ONE line:
 
 ```
-── dispatch ──────────────────────────────────
-state: queue=42 | ready=3 | finds=1 | leads=5
-agents: searcher=idle | fetcher=running | dealers=2/3 | writer=idle
-action: spawn dealer (handoff: 10.1234/example)
-action: spawn writer (3 finds files ready, no dealers finishing)
-reason: fetcher still running, searcher exhausted, 3 finds accumulated
-──────────────────────────────────────────────
+dispatch: q=42 rdy=3 finds=1 → spawn dealer(10.1234/example) + writer
 ```
 
-After each agent returns, print what happened **including duration**:
+After each agent returns, print ONE line:
 
 ```
-── fetcher returned (95s) ────────────────────
-result: 2/3 fetched, 1 lead (paywall, browser attempted: yes)
-source_stats check: browser attempts=3, successes=2
-validation: PASS (browser_used=yes, source_stats_updated=yes, yield=67%)
-ready_for_extraction: 5 files now
-next: spawn 2 dealers + re-spawn fetcher
-──────────────────────────────────────────────
+dealer_003 (95s): EXTRACTED 8 records | fetcher_001 (120s): 5/8 fetched
 ```
 
-Every 5 papers (or every 10 minutes), print a throughput summary:
+For no-data results, batch them:
 
 ```
-── throughput ────────────────────────────────
-session: 12 papers in 48 min (15.0 papers/hr)
-records: 87 written (7.3 per paper avg)
-fetch yield: 67% (20 fetched, 10 leads)
-avg durations: searcher=142s fetcher=95s dealer=210s writer=15s
-bottleneck: fetcher (queue backing up, 30 papers waiting)
-──────────────────────────────────────────────
+dealers 004-008: 2 extracted (12 records), 3 no-data (ecology, microbiome, genomics)
 ```
 
-This is not optional. Always print these blocks — they are the primary way
-the user monitors pipeline health and debugs agent misbehavior.
+Every 10 papers, print a 3-line throughput block:
+
+```
+── 10/20 papers | 48 min | 87 records (+7.3/paper) ──
+yield: 70% data | fetch: 67% | queue: 30 | confidence: 0.87 avg
+bottleneck: fetcher (queue backing up)
+```
+
+**Do NOT print**:
+- Full JSON output from `process_agent_output.py` — extract key numbers only
+- Validation detail blocks (PASS/FAIL per field) — only report failures
+- Source stats breakdowns — only report if yield is abnormally low
+- Agent spawn template details — you already know the templates
+- File contents from finds/, dealer_results/, or writer_results/
+
+**Do NOT read agent output files into Manager context.** Always use the
+processing scripts and only capture their summary numbers. The scripts
+handle all state updates — the Manager only needs counts for dispatch
+decisions and user reporting.
 
 ---
 
@@ -216,26 +223,12 @@ After each Dealer+Writer cycle:
 
    Accumulate into `usage` and the appropriate tier in `est_*_by_tier`.
 
-2. **Print one-line confidence trend** after each paper:
-   ```
-   Confidence: 0.87 avg (up from 0.84) | 3 records | total: 1,339
-   ```
+2. **Do NOT print per-paper progress lines.** The throughput block every
+   10 papers (above) is sufficient. Per-paper lines waste context.
 
-3. **Print rolling progress** every `report_every` papers (default 5):
-   ```
-   [15/45 queued] "Smith et al. 2003 -- Paper title"
-     -> 8 records | source: unpaywall | consensus: full
-     -> Session: +34 records | Database total: 1,281
-   ```
-
-4. **Regenerate dashboard** every 10 papers (or at session end):
+3. **Regenerate dashboard** every 10 papers (or at session end):
    ```bash
    python3 dashboard_generator.py --project-root .
-   ```
-
-5. **Append to live_progress.jsonl**:
-   ```json
-   {"timestamp": "...", "paper": "Smith et al. 2003", "records": 3, "total_records": 1339, "queue_remaining": 22}
    ```
 
 6. **Check pause triggers** from `collector_config.yaml` (if configured):
@@ -252,11 +245,9 @@ After each Dealer+Writer cycle:
 7. **Handle user commands** (if the user sends a message mid-session):
    Do NOT pause to solicit commands — keep dispatching. Only react if the
    user actively sends one of these:
-   - "skip" / "next" → skip current paper, mark `"outcome": "user_skipped"`
-   - "redo last" → re-extract previous paper through Dealer
-   - "pause" → stop after current paper without ending session
-   - "show trace" → display chain-of-thought trace for last extraction
-   - "consensus on last" → trigger consensus re-extraction for last paper
+   - "pause" → stop spawning new agents after current wave finishes
+   - "status" → run `dispatch.py status`, print pipeline state
+   - "explore [question]" → query the collected data (see SKILL.md §4b)
 
 8. **Check stop conditions**: target reached, user stops, or **all streams
    exhausted** (Searcher done + queue empty + ready_for_extraction/ empty +
@@ -328,7 +319,8 @@ state/                   — all JSON state files (Manager-owned, agents never w
   state/dealt/            — processed handoff files
   state/session_reports/  — session_report.py JSON output
   state/needs_attention.csv
-pdfs/                    — downloaded PDFs, organized by {family}/
+source/                  — downloaded PDFs, standardized names (Lastname-Year-Word-index.pdf)
+pdfs/                    — legacy PDF location (pre-v4.4.0), organized by {family}/
 finds/                   — extraction results awaiting Writer (Dealer writes, Writer reads)
 ready_for_extraction/    — handoff files (Fetcher writes, Dealer reads)
 search_results/          — Searcher output (Searcher writes, Manager reads + deletes)

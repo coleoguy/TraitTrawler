@@ -17,11 +17,11 @@ For EACH paper, produce exactly ONE of these outcomes:
 ```json
 {
   "doi": "10.1234/example",
-  "title": "Paper Title",
+  "title": "Karyotype of Chrysolina fastuosa",
   "authors": "Smith, J; Jones, B",
   "year": 2003,
   "journal": "Comparative Cytogenetics",
-  "pdf_path": "pdfs/Carabidae/Smith_2003_CompCytogen_9504.pdf",
+  "pdf_path": "source/Smith-2003-Chrysolina-a.pdf",
   "pdf_source": "unpaywall",
   "text_pages": 24,
   "has_tables": true,
@@ -29,6 +29,25 @@ For EACH paper, produce exactly ONE of these outcomes:
   "source_query": "Carabidae karyotype",
   "fetched_at": "2026-03-28T14:00:00Z"
 }
+```
+
+**PDF naming**: Save PDFs to `source/` using the standardized format:
+`Lastname-Year-RepresentativeWord-index.pdf`
+- `Lastname`: first author's last name
+- `Year`: publication year
+- `RepresentativeWord`: a taxonomically informative word from the title
+  (prefer genus or family names)
+- `index`: letter a-z to avoid collisions
+
+Use `scripts/pdf_utils.py::build_source_path()` to generate the path:
+```python
+from pdf_utils import build_source_path
+abs_path, rel_path = build_source_path(
+    project_root, authors="Smith, J; Jones, B",
+    year=2003, title="Karyotype of Chrysolina fastuosa",
+    doi="10.1234/example")
+# rel_path = "source/Smith-2003-Chrysolina-a.pdf"
+```
 ```
 
 **Failure** → write a failure file to `fetch_failures/{doi_safe}.json`:
@@ -138,12 +157,14 @@ write a failure file.
 
 ## Filename
 
+Save PDFs to `source/` using `scripts/pdf_utils.py::build_source_path()`:
 ```
-pdfs/{Family}/{FirstAuthor}_{Year}_{JournalAbbrev}_{ShortDOI}.pdf
+source/Lastname-Year-RepresentativeWord-index.pdf
 ```
-ShortDOI = last segment of DOI after `/`, truncated to 8 chars.
+Example: `source/Smith-2003-Chrysolina-a.pdf`
+
 **Never use `Unknown_*.pdf` or placeholder names.** If metadata is missing,
-use `pdfs/{Family}/{doi_safe}.pdf` instead.
+the function falls back to `unknown-noYear-paper-a.pdf`.
 
 ## Text Extraction
 

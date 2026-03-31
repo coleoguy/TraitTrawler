@@ -63,7 +63,7 @@ def process_search_results(project_root):
     total_new = 0
     total_rejected = 0
     queries_processed = []
-    source_counts = {"pubmed": 0, "openalex": 0, "biorxiv": 0, "crossref": 0}
+    source_counts = {"pubmed": 0, "openalex": 0, "biorxiv": 0, "medrxiv": 0, "crossref": 0}
 
     # Read search_log for update
     search_log_path = os.path.join(state_dir, "search_log.json")
@@ -397,6 +397,81 @@ def process_dealer_results(project_root):
     print(json.dumps(result))
 
 
+def _normalize_finds_file(fpath):
+    """Auto-fix common agent output format issues in a finds JSON file.
+
+    Fixes applied in-place:
+    - paper_authors: list → semicolon-separated string
+    - extraction_confidence: word ("high"/"medium"/"low") → float
+    - extraction_timestamp: add if missing
+    - records: unwrap if wrapped in extra nesting
+    - source_page: ensure string type
+
+    Returns True if the file was modified, False if no changes needed.
+    """
+    try:
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    if not isinstance(data, dict):
+        return False
+
+    modified = False
+
+    # Fix missing extraction_timestamp
+    if "extraction_timestamp" not in data:
+        from datetime import datetime, timezone
+        data["extraction_timestamp"] = datetime.now(
+            timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        modified = True
+
+    # Fix records that are a dict instead of a list
+    records = data.get("records")
+    if isinstance(records, dict):
+        # Agent wrote {species: {...}} instead of [{species: ...}]
+        data["records"] = [records]
+        records = data["records"]
+        modified = True
+
+    if not isinstance(records, list):
+        return modified
+
+    conf_word_map = {"high": 0.85, "medium": 0.65, "low": 0.4}
+
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+
+        # Fix paper_authors: list → string
+        pa = rec.get("paper_authors")
+        if isinstance(pa, list):
+            rec["paper_authors"] = "; ".join(str(a) for a in pa)
+            modified = True
+
+        # Fix extraction_confidence: word → float
+        ec = rec.get("extraction_confidence")
+        if isinstance(ec, str) and ec.strip().lower() in conf_word_map:
+            rec["extraction_confidence"] = conf_word_map[ec.strip().lower()]
+            modified = True
+
+        # Fix source_page: int → string
+        sp = rec.get("source_page")
+        if isinstance(sp, int):
+            rec["source_page"] = str(sp)
+            modified = True
+
+    if modified:
+        try:
+            with open(fpath, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except OSError:
+            return False
+
+    return modified
+
+
 def process_finds(project_root):
     """Count finds/*.json and update processed.json for extracted papers."""
     folder = os.path.join(project_root, "finds")
@@ -408,8 +483,13 @@ def process_finds(project_root):
 
     total_records = 0
     papers = []
+    normalized_count = 0
 
     for f in files:
+        # Auto-fix common format issues before processing
+        if _normalize_finds_file(f):
+            normalized_count += 1
+
         try:
             with open(f, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -436,6 +516,7 @@ def process_finds(project_root):
     result = {
         "files": len(files),
         "total_records": total_records,
+        "normalized": normalized_count,
         "papers": papers,
         "validation": {
             "has_records": total_records > 0,

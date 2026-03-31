@@ -183,9 +183,15 @@ After configuration, the Manager drives the pipeline autonomously — you never 
 
 **The dashboard.** The agent generates `dashboard.html`, updated at session start, every 2 papers, and session end. Double-click it to open in any browser — it auto-refreshes every 60 seconds. Fully self-contained with no external dependencies.
 
-**Processing local PDFs.** Drop PDFs into `provided_pdfs/` and the agent detects them automatically at session start, routing them into the normal extraction pipeline.
+**Processing local PDFs.** Drop PDFs into `provided_pdfs/` and the agent detects them automatically at session start, routing them into the normal extraction pipeline. PDFs are renamed to a standardized format (`Lastname-Year-Word-a.pdf`) and stored in `source/`. Every record in results.csv links back to its source PDF via the `pdf_path` column.
 
-**Mid-session commands.** Between papers you can say "skip", "redo last", "pause", "show trace", or "consensus on last" to control the pipeline interactively.
+**Bootstrapping existing PDFs.** If you already have a collection of PDFs, say "link PDFs" and the agent scans your files, extracts citation metadata from each PDF header, fuzzy-matches against records in results.csv, and creates the links automatically.
+
+**Data exploration.** Say "explore" or ask a question about the data ("how many families?", "show me low confidence records") at any time. The agent queries results.csv via lightweight scripts without loading it into context.
+
+**Help.** Say "help" or "commands" to see all available commands grouped by category.
+
+**Mid-session commands.** While collecting, say "pause" to stop after the current wave, "status" to see the pipeline state, or "explore [question]" to query the collected data without interrupting the session.
 
 **Token tracking.** The Manager estimates token usage per model tier and reports efficiency metrics (records/call, tokens/record) at session end.
 
@@ -199,13 +205,14 @@ One row per observation per paper. For among-species projects, this is typically
 
 ### leads.csv
 
-Papers identified as relevant but without obtainable full text. The agent no longer extracts from abstracts — papers without full text go directly to leads.csv with a `needs_fulltext` reason. Resolve by dropping the PDF into `pdfs/` and running again.
+Papers identified as relevant but without obtainable full text. The agent no longer extracts from abstracts — papers without full text go directly to leads.csv with a `needs_fulltext` reason. Resolve by dropping the PDF into `provided_pdfs/` and running again.
 
 ### state/ and pipeline folders
 
 Session state that enables resumption across sessions: `processed.json`, `queue.json`, `search_log.json`, `discoveries.jsonl`, `triage_outcomes.jsonl`, `source_stats.json`, `taxonomy_cache.json`. You should never need to edit these directly.
 
 The v4 pipeline also uses folder-based queues for inter-agent communication:
+- `source/` — standardized PDF library (`Lastname-Year-Word-a.pdf`); every record links here via `pdf_path`
 - `ready_for_extraction/` — PDFs waiting for extraction (Fetcher → Dealer)
 - `finds/` — extraction results waiting for CSV write (Extractor → Writer)
 - `learning/` — lessons learned from extraction (Extractor → Manager)
@@ -274,7 +281,7 @@ TraitTrawler/
 │   └── sample_results.csv        # Example output (5 records)
 │
 ├── skill/                        # Skill source (taxon-agnostic)
-│   ├── SKILL.md                  # Opus Manager specification (v4.2)
+│   ├── SKILL.md                  # Opus Manager specification (v4.4)
 │   ├── agents/                   # Per-agent specs (v4 multi-agent pipeline)
 │   │   ├── searcher.md           # Search APIs, triage, citation chaining
 │   │   ├── fetcher.md            # PDF acquisition, OA cascade
@@ -297,7 +304,7 @@ TraitTrawler/
 │   │   ├── benchmark.py          # Precision/recall/F1 per field
 │   │   ├── knowledge_graph_export.py  # JSON-LD provenance export
 │   │   ├── reproduce.py          # Reproducibility verification
-│   │   ├── pdf_utils.py          # PDF path construction + misplaced-PDF detection
+│   │   ├── pdf_utils.py          # PDF path construction, bootstrap, standardized naming
 │   │   ├── test_harness.py       # Synthetic data generator for testing
 │   │   └── dashboard_server.py   # Optional live dashboard with SSE updates
 │   └── references/               # On-demand reference files

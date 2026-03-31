@@ -24,7 +24,8 @@ Where `query_hash` = first 8 chars of MD5 of the query string. Each file:
   "date": "2026-03-28T14:00:00Z",
   "pubmed_results": 12,
   "openalex_results": 8,
-  "biorxiv_results": 0,
+  "biorxiv_results": 2,
+  "medrxiv_results": 0,
   "crossref_results": 15,
   "papers": [
     {
@@ -65,7 +66,7 @@ The Manager reads your output files and handles all state updates.
 Read `guide.md` and `collector_config.yaml` from the project root for
 domain knowledge, triage keywords, contact_email, and target_taxa.
 
-### Search ALL 4 sources for every query
+### Search ALL sources for every query
 
 1. **PubMed** — MCP tool `search_articles` or E-utilities:
    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={query}&retmax=50`
@@ -76,11 +77,19 @@ domain knowledge, triage keywords, contact_email, and target_taxa.
    Parse: `results[].doi` (strip `https://doi.org/` prefix), `.title`,
    `.authorships[].author.display_name`, `.publication_year`,
    `.primary_location.source.display_name`
+   OpenAlex indexes preprints from bioRxiv, medRxiv, EcoEvoRxiv, arXiv,
+   and other servers. When `source.display_name` contains "bioRxiv" or
+   "medRxiv", record the paper's `source` field accordingly.
 
-3. **bioRxiv** — The MCP tool `search_preprints` only supports date-range and
-   category filters — it does NOT support keyword search. Simply set
-   `biorxiv_results: 0` in your output file and move on. Do NOT attempt
-   keyword search workarounds or WebFetch fallbacks for bioRxiv.
+3. **bioRxiv/medRxiv** — The MCP `search_preprints` supports date+category
+   browsing (not keyword search). For relevant categories (e.g. "genetics",
+   "evolutionary biology", "zoology", "ecology"), browse recent preprints
+   on BOTH servers:
+   - `search_preprints(server="biorxiv", category=..., date_from=..., date_to=...)`
+   - `search_preprints(server="medrxiv", category=..., date_from=..., date_to=...)`
+   Use `get_preprint(doi=..., server=...)` to fetch full metadata for any
+   preprint DOI. Set date range to last 6 months unless the user specifies
+   otherwise. Skip this step if no relevant categories apply to the query.
 
 4. **Crossref** — `https://api.crossref.org/works?query.bibliographic={query}&mailto={contact_email}&rows=50`
    **Use `query.bibliographic`** not bare `query`. Log the count you triaged
