@@ -183,7 +183,7 @@ After configuration, the Manager drives the pipeline autonomously — you never 
 
 **The dashboard.** The agent generates `dashboard.html`, updated at session start, every 2 papers, and session end. Double-click it to open in any browser — it auto-refreshes every 60 seconds. Fully self-contained with no external dependencies.
 
-**Processing local PDFs.** Drop PDFs into `provided_pdfs/` and the agent detects them automatically at session start, routing them into the normal extraction pipeline. PDFs are renamed to a standardized format (`Lastname-Year-Word-a.pdf`) and stored in `source/`. Every record in results.csv links back to its source PDF via the `pdf_path` column.
+**Processing local PDFs.** Drop PDFs into `provided_pdfs/` and the agent detects them automatically at session start, routing them into the normal extraction pipeline. PDFs are renamed to a standardized format (`Lastname-Year-Word-a.pdf`) in `pdfs/`. Every record in results.csv links back to its source PDF via the `pdf_path` column.
 
 **Bootstrapping existing PDFs.** If you already have a collection of PDFs, say "link PDFs" and the agent scans your files, extracts citation metadata from each PDF header, fuzzy-matches against records in results.csv, and creates the links automatically.
 
@@ -290,7 +290,8 @@ TraitTrawler/
 │   │   ├── extractor_B.md        # Enumeration-first strategy
 │   │   ├── extractor_C.md        # Skeptical extraction strategy
 │   │   ├── extractor_consensus.md # 3-agent voting orchestrator
-│   │   └── writer.md             # Taxonomy, validation, CSV writing
+│   │   ├── writer.md             # Taxonomy, validation, CSV writing
+│   │   └── reviewer.md           # Discovery classification, guide.md proposals
 │   ├── dashboard_generator.py    # Generates dashboard.html
 │   ├── verify_session.py         # Post-batch deterministic verification
 │   ├── export_dwc.py             # Darwin Core Archive export
@@ -305,6 +306,11 @@ TraitTrawler/
 │   │   ├── knowledge_graph_export.py  # JSON-LD provenance export
 │   │   ├── reproduce.py          # Reproducibility verification
 │   │   ├── pdf_utils.py          # PDF path construction, bootstrap, standardized naming
+│   │   ├── dispatch.py           # Agent dispatch tracker, recommend, retriage
+│   │   ├── process_agent_output.py  # Agent output processing, auto-normalization
+│   │   ├── session_manager.py    # Session lifecycle, upgrades, state management
+│   │   ├── write_finds.py        # End-to-end Writer pipeline
+│   │   ├── validate_finds_json.py   # Finds JSON schema validation
 │   │   ├── test_harness.py       # Synthetic data generator for testing
 │   │   └── dashboard_server.py   # Optional live dashboard with SSE updates
 │   └── references/               # On-demand reference files
@@ -315,7 +321,16 @@ TraitTrawler/
 │       ├── troubleshooting.md    # Error recovery strategies
 │       ├── config_template.yaml  # Project config template
 │       ├── calibration.md        # Calibration phase details
-│       └── csv_schema.md         # Field definitions
+│       ├── csv_schema.md         # Field definitions
+│       ├── dispatch_cycle.md     # Agent spawn templates, logging formats
+│       ├── extractor_common.md   # Shared extraction rules (inlined to A/B/C)
+│       └── knowledge_evolution.md # Discovery types, logging format
+│
+├── .claude/
+│   └── hooks/                   # Claude Code hooks (agent guardrails)
+│       ├── block-manager-extraction.sh  # Prevents Manager from calling search/extraction MCPs
+│       ├── validate-finds.sh    # Validates finds/ JSON on write
+│       └── validate-dealer-output.sh    # Validates dealer_results/ JSON on write
 │
 ├── tests/
 │   ├── test_verify_and_export.py     # Verification + DwC export tests (8 tests)

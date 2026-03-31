@@ -197,9 +197,9 @@ drop papers that no longer pass current triage rules? [y/n]
 `scripts/session_manager.py::check_provided_pdf_hash()`. Skip any PDF whose
 hash is already in `state/processed_pdfs.json`. For new PDFs:
 1. Generate standardized path via `pdf_utils.build_source_path()`
-2. Copy PDF to `source/` with the standardized name
+2. Copy PDF to `pdfs/` with the standardized name
 3. Create handoff in `ready_for_extraction/` with the `pdf_path` pointing
-   to the `source/` copy
+   to the `pdfs/` copy
 4. Call `register_provided_pdf()` and move original to `provided_pdfs/done/`
 
 Check MCPs by suffix: `search_articles` (PubMed), `search_works` (OpenAlex),
@@ -440,7 +440,7 @@ Performance: ~4 min/paper (consensus), ~1.5 min/paper (fast)
 | **DwC Export** | "export to Darwin Core" | `python3 export_dwc.py --project-root . --output-dir dwc_export` |
 | **Correction** | "that's wrong", "correction:" | Load `references/knowledge_and_transfer.md`. Stop, fix guide.md (with approval), offer re-extraction |
 | **Re-triage** | "retriage queue", "clean queue", upgrade prompt | `python3 scripts/dispatch.py retriage --project-root .` — drops already-processed DOIs, exclude-keyword matches, and no-signal papers from queue |
-| **PDF bootstrap** | "link PDFs", "bootstrap PDFs", "organize PDFs" | `python3 scripts/pdf_utils.py bootstrap --project-root .` — scans pdfs/, provided_pdfs/, root for existing PDFs, copies to source/ with standardized names, links to results.csv by DOI. Run with `--dry-run` first. |
+| **PDF bootstrap** | "link PDFs", "bootstrap PDFs", "organize PDFs" | `python3 scripts/pdf_utils.py bootstrap --project-root .` — scans pdfs/, provided_pdfs/, root for existing PDFs, renames into pdfs/ with standardized names (Lastname-Year-Word-a.pdf), updates pdf_path in results.csv. Run with `--dry-run` first. |
 | **Explore** | "explore", "query", "show me", "how many", "which" | See 4b below |
 
 ### 4b. Data Exploration Mode (available anytime)

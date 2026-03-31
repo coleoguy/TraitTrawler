@@ -192,12 +192,15 @@ Write to `finds/` with a unique name:
 finds/{doi_safe}_{ISO_timestamp}.json
 ```
 
+**Important**: Copy `pdf_path` and `pdf_source` from the handoff metadata
+the Dealer passed to you. These link every record back to its source PDF.
+
 Full schema:
 ```json
 {
   "doi": "10.1234/example",
   "title": "Paper Title",
-  "pdf_path": "source/Smith-2003-Chrysolina-a.pdf",
+  "pdf_path": "pdfs/Smith-2003-Chrysolina-a.pdf",
   "pdf_source": "unpaywall",
   "extraction_timestamp": "2026-03-27T14:05:00Z",
   "extraction_mode": "consensus",

@@ -21,7 +21,7 @@ For EACH paper, produce exactly ONE of these outcomes:
   "authors": "Smith, J; Jones, B",
   "year": 2003,
   "journal": "Comparative Cytogenetics",
-  "pdf_path": "source/Smith-2003-Chrysolina-a.pdf",
+  "pdf_path": "pdfs/Smith-2003-Chrysolina-a.pdf",
   "pdf_source": "unpaywall",
   "text_pages": 24,
   "has_tables": true,
@@ -31,7 +31,7 @@ For EACH paper, produce exactly ONE of these outcomes:
 }
 ```
 
-**PDF naming**: Save PDFs to `source/` using the standardized format:
+**PDF naming**: Save PDFs to `pdfs/` using the standardized format:
 `Lastname-Year-RepresentativeWord-index.pdf`
 - `Lastname`: first author's last name
 - `Year`: publication year
@@ -46,7 +46,7 @@ abs_path, rel_path = build_source_path(
     project_root, authors="Smith, J; Jones, B",
     year=2003, title="Karyotype of Chrysolina fastuosa",
     doi="10.1234/example")
-# rel_path = "source/Smith-2003-Chrysolina-a.pdf"
+# rel_path = "pdfs/Smith-2003-Chrysolina-a.pdf"
 ```
 ```
 
@@ -157,11 +157,11 @@ write a failure file.
 
 ## Filename
 
-Save PDFs to `source/` using `scripts/pdf_utils.py::build_source_path()`:
+Save PDFs to `pdfs/` using `scripts/pdf_utils.py::build_source_path()`:
 ```
-source/Lastname-Year-RepresentativeWord-index.pdf
+pdfs/Lastname-Year-RepresentativeWord-index.pdf
 ```
-Example: `source/Smith-2003-Chrysolina-a.pdf`
+Example: `pdfs/Smith-2003-Chrysolina-a.pdf`
 
 **Never use `Unknown_*.pdf` or placeholder names.** If metadata is missing,
 the function falls back to `unknown-noYear-paper-a.pdf`.

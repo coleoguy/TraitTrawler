@@ -319,7 +319,7 @@ state/                   — all JSON state files (Manager-owned, agents never w
   state/dealt/            — processed handoff files
   state/session_reports/  — session_report.py JSON output
   state/needs_attention.csv
-source/                  — downloaded PDFs, standardized names (Lastname-Year-Word-index.pdf)
+pdfs/                    — all PDFs, standardized names (Lastname-Year-Word-index.pdf)
 pdfs/                    — legacy PDF location (pre-v4.4.0), organized by {family}/
 finds/                   — extraction results awaiting Writer (Dealer writes, Writer reads)
 ready_for_extraction/    — handoff files (Fetcher writes, Dealer reads)

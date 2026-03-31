@@ -114,12 +114,12 @@ def build_source_path(project_root, first_author=None, authors=None,
     The index letter (a, b, c...) avoids collisions.
 
     Returns (absolute_path, relative_path) tuple.
-    Example: ("/.../source/Smith-2003-Chrysolina-a.pdf",
-              "source/Smith-2003-Chrysolina-a.pdf")
+    Example: ("/.../pdfs/Smith-2003-Chrysolina-a.pdf",
+              "pdfs/Smith-2003-Chrysolina-a.pdf")
     """
     root = Path(project_root).resolve()
-    source_dir = root / "source"
-    source_dir.mkdir(exist_ok=True)
+    pdfs_dir = root / "pdfs"
+    pdfs_dir.mkdir(exist_ok=True)
 
     # Extract components
     if first_author:
@@ -136,17 +136,17 @@ def build_source_path(project_root, first_author=None, authors=None,
     base = f"{lastname}-{yr}-{word}"
     for letter in "abcdefghijklmnopqrstuvwxyz":
         candidate = f"{base}-{letter}.pdf"
-        full = source_dir / candidate
+        full = pdfs_dir / candidate
         if not full.exists():
-            rel = Path("source") / candidate
+            rel = Path("pdfs") / candidate
             return str(full), str(rel)
 
     # Exhausted letters — use DOI hash as tiebreaker
     import hashlib
     h = hashlib.md5((doi or title or "").encode()).hexdigest()[:6]
     candidate = f"{base}-{h}.pdf"
-    rel = Path("source") / candidate
-    full = source_dir / candidate
+    rel = Path("pdfs") / candidate
+    full = pdfs_dir / candidate
     return str(full), str(rel)
 
 
@@ -260,10 +260,10 @@ def bootstrap_pdfs(project_root, dry_run=True):
     """
     import json
     root = Path(project_root).resolve()
-    source_dir = root / "source"
-    source_dir.mkdir(exist_ok=True)
+    pdfs_dir = root / "pdfs"
+    pdfs_dir.mkdir(exist_ok=True)
 
-    # Collect all existing PDFs
+    # Collect all existing PDFs from everywhere
     pdf_files = []
     for search_dir in ["pdfs", "provided_pdfs", "provided_pdfs/done"]:
         d = root / search_dir
@@ -459,9 +459,19 @@ def bootstrap_pdfs(project_root, dry_run=True):
     unmatched = 0
     unmatched_files = []
 
+    pdfs_dir = root / "pdfs"
+    pdfs_dir.mkdir(exist_ok=True)
+
+    # Track which standardized names are already claimed
+    _existing_standardized = set()
+    for f in pdfs_dir.iterdir():
+        if f.suffix.lower() == ".pdf" and re.match(
+                r"^[A-Za-z]+-\d{4}-[A-Za-z]+-[a-z]\.pdf$", f.name):
+            _existing_standardized.add(str(f))
+
     for pdf in pdf_files:
-        # Skip if already in source/
-        if str(pdf).startswith(str(source_dir)):
+        # Skip PDFs already in pdfs/ with standardized names
+        if str(pdf) in _existing_standardized:
             continue
 
         # Strategy 1: Match by DOI from filename
@@ -506,7 +516,7 @@ def bootstrap_pdfs(project_root, dry_run=True):
                     doi = citation.get("doi", "")
 
         if meta:
-            # Build standardized path
+            # Build standardized path in pdfs/
             abs_path, rel_path = build_source_path(
                 project_root,
                 authors=meta.get("first_author") or meta.get("authors", ""),
@@ -516,11 +526,18 @@ def bootstrap_pdfs(project_root, dry_run=True):
             )
 
             if not dry_run:
-                # Copy PDF to source/ (don't move — keep originals intact)
-                shutil.copy2(str(pdf), abs_path)
+                # If PDF is already in pdfs/, rename in place; otherwise copy
+                if str(pdf.parent) == str(pdfs_dir) or str(pdf).startswith(str(pdfs_dir)):
+                    # Already in pdfs/ — rename to standardized name
+                    if str(pdf) != abs_path:
+                        shutil.copy2(str(pdf), abs_path)
+                        # Don't delete original yet — user can clean up later
+                else:
+                    # Outside pdfs/ — copy in
+                    shutil.copy2(str(pdf), abs_path)
 
-                # Update results.csv rows
-                if doi in doi_to_meta:
+                # Update results.csv rows with new pdf_path
+                if doi and doi in doi_to_meta:
                     for idx in doi_to_meta[doi]["row_indices"]:
                         all_rows[idx]["pdf_path"] = rel_path
                     linked += 1
@@ -528,10 +545,10 @@ def bootstrap_pdfs(project_root, dry_run=True):
                     copied += 1
 
                 # Mark in processed.json
-                if doi in proc_data and isinstance(proc_data[doi], dict):
+                if doi and doi in proc_data and isinstance(proc_data[doi], dict):
                     proc_data[doi]["pdf_path"] = rel_path
             else:
-                if doi in doi_to_meta:
+                if doi and doi in doi_to_meta:
                     linked += 1
                 else:
                     copied += 1

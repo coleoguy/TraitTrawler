@@ -4,6 +4,38 @@ All notable changes to TraitTrawler will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [4.4.0] — 2026-03-31
+
+### Added
+- **Dedup guard at dispatch**: `dispatch.py recommend` now checks every handoff DOI against `processed.json` AND `results.csv` before dispatching dealers. Prevents re-extraction of papers already in the database (fixes dissertation duplication bug from coleoweekend trial).
+- **Queue re-triage command**: `dispatch.py retriage` re-evaluates queued papers against current triage rules, dropping already-processed DOIs, exclude-keyword matches, and no-signal papers. Useful after upgrades or when queue has high false-positive rate.
+- **PDF standardized naming**: All PDFs stored in `pdfs/` with standardized names (`Lastname-Year-RepresentativeWord-index.pdf`). New `build_source_path()` function in `pdf_utils.py` handles naming with collision avoidance (a-z index letters).
+- **PDF bootstrap command**: `pdf_utils.py bootstrap` scans existing PDFs, extracts citation metadata from PDF headers (pdfplumber), fuzzy-matches against results.csv records, renames into `pdfs/` with standardized names, and updates `pdf_path` column. 3-strategy matching: DOI from filename → DOI from PDF text → fuzzy citation match.
+- **`pdf_path` column auto-injection**: `ensure_standard_fields()` in `session_manager.py` automatically adds `pdf_path` to `collector_config.yaml` output_fields during startup. `migrate_csv_columns()` adds the column to existing results.csv. User never touches config for this.
+- **Upgrade changelog mechanism**: `CHANGELOG` dict in `session_manager.py` provides human-readable upgrade notes when a project is opened with a newer skill version. Manager prints changes so the LLM knows what behaviors changed.
+- **Supervisor loop** (SKILL.md §2): Rewrote the main collection loop from a decision-making loop to a mechanical 4-step reflex: process → checkpoint → recommend → execute. Manager never reasons about dispatch — `recommend` makes all decisions.
+- **Data exploration mode** (SKILL.md §4b): "explore" command lets users query results.csv mid-session via python3 one-liners. Never loads CSV into context.
+- **Help command**: "help" or "commands" prints all available commands grouped by category.
+- **Claude Code hooks**: PreToolUse hook prevents Manager from calling search/extraction MCPs directly. PostToolUse hooks validate finds/ and dealer_results/ JSON files on write. Validates structure, required fields, and schema compliance. Pre-DOI papers (no DOI) accepted if they have a title.
+- **Trait-agnostic triage**: Removed hardcoded karyotype-specific exclusion keywords and journal lists from `search_and_triage.md`. Triage now uses config-driven `triage_exclude_keywords` from `collector_config.yaml` and project-specific journal notes from `guide.md`.
+
+### Changed
+- **Manager boundary enforcement hardened**: Added "When the Pipeline Stalls" section to SKILL.md. Manager MUST NOT extract data, search, fetch, create hybrid agents, or manually fix agent output — even when dealers fail. Stall response is to adjust search strategy or report to user.
+- **Compact logging format**: Dispatch blocks are 1-line, return blocks are 1-line, throughput summary every 10 papers (3 lines). Dramatic reduction in context consumption during collection.
+- **Auto-normalization in process_agent_output.py**: Automatically fixes common agent format issues — `paper_authors` (list→string), `extraction_confidence` (word→float), `source_page` (int→string) — before the Writer sees them.
+- **`source_page` soft-required**: Missing `source_page` in finds validation produces a warning, not a rejection. Pre-DOI and compilation-table papers often lack page numbers.
+- **`doi` soft-required in finds**: Moved from hard-required to recommended. Papers must have `doi` OR `title` for identification (supports pre-2000 literature without DOIs).
+- **Mid-session commands pruned**: Removed "skip", "redo last", "show trace", "consensus on last" — these were impossible to implement with background agents. Kept: "pause", "status", "explore".
+- **Dealer pdf_path recovery**: If handoff is missing `pdf_path`, Dealer looks it up in results.csv by DOI or title before failing. Handles re-extraction and QC scenarios.
+- **Fetcher naming updated**: Uses `build_source_path()` for standardized PDF names in `pdfs/`.
+- **No more combined/hybrid agents**: Explicitly prohibited in SKILL.md. Each agent type has defined input/output — no search+extract hybrids.
+- **Version bumped to 4.4.0**.
+
+### Fixed
+- **Dissertation duplication**: Dispatch dedup guard prevents re-extraction of papers already in results.csv (root cause of 4,652 duplicate records in coleoweekend trial).
+- **Agent output format violations**: PostToolUse hook catches CSV, JSONL, and non-array `records` immediately on write, before the Writer encounters them.
+- **Queue contamination**: 55%+ false positive rate in queue reduced by trait-agnostic triage improvements and re-triage command for stale queues.
+
 ## [4.3.0] — 2026-03-29
 
 ### Added

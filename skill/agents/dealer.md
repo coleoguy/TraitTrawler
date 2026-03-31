@@ -22,7 +22,7 @@ Exactly ONE of these outcomes:
 {
   "doi": "10.1234/example",
   "title": "Paper Title",
-  "pdf_path": "source/Smith-2003-Chrysolina-a.pdf",
+  "pdf_path": "pdfs/Smith-2003-Chrysolina-a.pdf",
   "pdf_source": "unpaywall",
   "extraction_timestamp": "2026-03-28T14:05:00Z",
   "source_query": "Carabidae karyotype",
@@ -103,8 +103,25 @@ Read the handoff file. Check:
 2. The PDF file exists on disk: `os.path.exists(pdf_path)`
 3. File is > 1000 bytes: `os.path.getsize(pdf_path) > 1000`
 
-If ANY check fails, write a failure file with `"outcome": "invalid_handoff"`,
-move the handoff to `state/dealt/`, and return. Do not spawn extractors.
+**If `pdf_path` is missing but `doi` or `title` is present**, try to recover
+the path from `results.csv` before failing:
+```python
+import csv
+doi = handoff.get("doi", "")
+title = handoff.get("title", "")
+with open("results.csv", "r") as f:
+    for row in csv.DictReader(f):
+        if (doi and row.get("doi") == doi) or (title and row.get("paper_title") == title):
+            if row.get("pdf_path") and os.path.exists(row["pdf_path"]):
+                handoff["pdf_path"] = row["pdf_path"]
+                break
+```
+This handles re-extraction, QC re-runs, and provided PDFs that were
+bootstrapped into `pdfs/` in a prior session.
+
+If ALL checks still fail after the lookup, write a failure file with
+`"outcome": "invalid_handoff"`, move the handoff to `state/dealt/`, and
+return. Do not spawn extractors.
 
 ### Step 2: Read Config
 

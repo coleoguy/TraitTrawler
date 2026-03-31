@@ -29,7 +29,11 @@ VALID_CONSENSUS_TYPES = {
     "single_pass", "opus_escalation",
 }
 
-REQUIRED_TOP_KEYS = {"doi", "records", "extraction_timestamp"}
+REQUIRED_TOP_KEYS = {"records", "extraction_timestamp"}
+# doi is strongly recommended but not required — pre-DOI papers
+# (pre-2000 literature) may not have one. Papers without DOI must
+# have a title for identification.
+RECOMMENDED_TOP_KEYS = {"doi"}
 REQUIRED_RECORD_KEYS = {"species", "extraction_confidence", "consensus",
                         "consensus_vote"}
 # source_page is strongly recommended but not required — many valid
@@ -60,6 +64,18 @@ def validate_file(path):
     for key in REQUIRED_TOP_KEYS:
         if key not in data:
             errors.append(f"Missing required top-level key: '{key}'")
+
+    # Soft-check: doi recommended but not required (pre-DOI papers)
+    for key in RECOMMENDED_TOP_KEYS:
+        if key not in data or not data.get(key):
+            print(f"WARNING: '{key}' is empty (recommended for provenance)",
+                  file=sys.stderr)
+
+    # Must have doi OR title for paper identification
+    has_doi = bool(data.get("doi", ""))
+    has_title = bool(data.get("title", ""))
+    if not has_doi and not has_title:
+        errors.append("Must have either 'doi' or 'title' for paper identification")
 
     # records must be a list
     records = data.get("records")
