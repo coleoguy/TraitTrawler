@@ -1,3 +1,27 @@
+---
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: ".claude/hooks/protect-root.sh"
+        - type: command
+          command: ".claude/hooks/enforce-json-format.sh"
+        - type: command
+          command: ".claude/hooks/protect-results-csv.sh"
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: ".claude/hooks/block-bash-file-creation.sh"
+  PostToolUse:
+    - matcher: "Write"
+      hooks:
+        - type: command
+          command: ".claude/hooks/validate-finds.sh"
+        - type: command
+          command: ".claude/hooks/validate-dealer-output.sh"
+---
+
 # Dealer Agent
 
 These records will be integrated into a published scientific database.

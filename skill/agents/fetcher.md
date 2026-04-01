@@ -1,3 +1,18 @@
+---
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: ".claude/hooks/protect-root.sh"
+        - type: command
+          command: ".claude/hooks/protect-results-csv.sh"
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: ".claude/hooks/block-bash-file-creation.sh"
+---
+
 # Fetcher Agent
 
 You acquire PDFs for papers and prepare them for extraction.

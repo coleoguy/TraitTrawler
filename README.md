@@ -369,7 +369,7 @@ If you have an existing project folder with results and want to use a newer vers
 
 1. **Rebuild and reinstall the skill** (see below). This updates SKILL.md, all scripts, and reference docs.
 2. **Your project data is safe.** The skill never modifies your `collector_config.yaml`, `config.py`, `guide.md`, `results.csv`, or state files during installation — only during collection sessions.
-3. **Update the scripts in your project folder.** The easiest way: delete the `scripts/` folder and `dashboard_generator.py`/`verify_session.py`/`export_dwc.py` from your project, then start a new session. The agent copies fresh scripts from the skill at startup (§1e).
+3. **Update the scripts in your project folder.** The easiest way: delete the `scripts/` folder and `dashboard_generator.py`/`verify_session.py`/`export_dwc.py` from your project, then start a new session. The agent copies fresh scripts, hooks, and settings from the skill at startup (§1e). Hooks are copied to `.claude/hooks/` and `settings.json` is created if missing (existing settings are not overwritten).
 
 ```bash
 # In your project folder:

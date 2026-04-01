@@ -39,7 +39,7 @@ if [[ "$REL_PATH" != *"/"* ]]; then
   # Allow known root files
   case "$REL_PATH" in
     collector_config.yaml|config.py|guide.md|extraction_examples.md|\
-    results.csv|leads.csv|dashboard.html|\
+    results.csv|leads.csv|dashboard.html|context.md|\
     dashboard_generator.py|verify_session.py|export_dwc.py|\
     .gitignore|README.md|LICENSE|CHANGELOG.md|CITATION.cff)
       exit 0
@@ -51,4 +51,16 @@ if [[ "$REL_PATH" != *"/"* ]]; then
   esac
 fi
 
-exit 0
+# File is in a subdirectory — check it's an allowed one
+TOP_DIR=$(echo "$REL_PATH" | cut -d'/' -f1)
+case "$TOP_DIR" in
+  finds|dealer_results|writer_results|ready_for_extraction|\
+  search_results|fetch_failures|lead_files|learning|\
+  state|pdfs|provided_pdfs|scripts|.claude)
+    exit 0
+    ;;
+  *)
+    echo "BLOCKED: Cannot write to unauthorized directory '$TOP_DIR/'. Allowed: finds/, dealer_results/, state/, pdfs/, etc." >&2
+    exit 2
+    ;;
+esac

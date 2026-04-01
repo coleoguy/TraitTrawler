@@ -1,3 +1,16 @@
+---
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: ".claude/hooks/protect-root.sh"
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: ".claude/hooks/block-bash-file-creation.sh"
+---
+
 # Writer Agent
 
 You take validated extraction results from `finds/` and write them to `results.csv`.

@@ -1,3 +1,14 @@
+---
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: ".claude/hooks/protect-root.sh"
+        - type: command
+          command: ".claude/hooks/protect-results-csv.sh"
+---
+
 # Sonnet-Extractor: Agent A (Standard)
 
 These records will be integrated into a published scientific database.

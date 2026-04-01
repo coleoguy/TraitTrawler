@@ -193,14 +193,14 @@ The queue has {N} papers from a previous session. Run re-triage to
 drop papers that no longer pass current triage rules? [y/n]
 ```
 
-**If `provided_pdfs/` has files**: for each PDF, compute its SHA-256 via
-`scripts/session_manager.py::check_provided_pdf_hash()`. Skip any PDF whose
-hash is already in `state/processed_pdfs.json`. For new PDFs:
-1. Generate standardized path via `pdf_utils.build_source_path()`
-2. Copy PDF to `pdfs/` with the standardized name
-3. Create handoff in `ready_for_extraction/` with the `pdf_path` pointing
-   to the `pdfs/` copy
-4. Call `register_provided_pdf()` and move original to `provided_pdfs/done/`
+**If `provided_pdfs/` has files**, route them with a single script call:
+```bash
+python3 scripts/route_provided_pdfs.py --project-root . --session-id $SESSION_ID
+```
+This handles everything: hash-check, DOI extraction, standardized naming,
+move to `pdfs/`, linking to existing results.csv rows (if the paper was
+already extracted but had no PDF), or creating handoffs (if the paper is
+new). Print the JSON output — it reports linked/queued/skipped counts.
 
 Check MCPs by suffix: `search_articles` (PubMed), `search_works` (OpenAlex),
 `search_preprints` (bioRxiv), `search_crossref`, `navigate` (Chrome).
@@ -431,7 +431,7 @@ Performance: ~4 min/paper (consensus), ~1.5 min/paper (fast)
 
 | Feature | Triggers | Action |
 |---|---|---|
-| **User PDFs** | "process these PDFs", files in `provided_pdfs/` | Hash-check via `check_provided_pdf_hash()`; skip known PDFs. Extract metadata, copy to `pdfs/`, create handoff, `register_provided_pdf()`, move original to `provided_pdfs/done/`, run through pipeline |
+| **User PDFs** | "process these PDFs", files in `provided_pdfs/` | Hash-check via `check_provided_pdf_hash()`; skip known PDFs. Move to `pdfs/` with standardized name, create handoff, `register_provided_pdf()`, run through pipeline |
 | **QC & Audit** | "run QC", "audit", "check data quality" | Load `references/audit_and_qc.md`. Priority: low confidence → guide drift → outliers. Cap 50/session |
 | **Campaign** | "plan campaign", "coverage report" | Load `references/campaign_and_calibration.md`. Available after 3+ sessions |
 | **Calibration** | session end (auto), "calibrate" | `scripts/calibration.py --project-root .` |

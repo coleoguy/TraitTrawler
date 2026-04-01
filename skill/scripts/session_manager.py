@@ -134,6 +134,29 @@ def copy_utility_scripts(project_root, skill_dir):
                 shutil.copy2(src, dest)
                 copied += 1
 
+    # .claude/hooks/ — copy from repo if available
+    repo_hooks = os.path.join(os.path.dirname(skill_dir), ".claude", "hooks")
+    if os.path.isdir(repo_hooks):
+        proj_hooks = os.path.join(project_root, ".claude", "hooks")
+        os.makedirs(proj_hooks, exist_ok=True)
+        for hook in os.listdir(repo_hooks):
+            if hook.endswith(".sh"):
+                src = os.path.join(repo_hooks, hook)
+                dest = os.path.join(proj_hooks, hook)
+                shutil.copy2(src, dest)
+                os.chmod(dest, 0o755)
+                copied += 1
+
+    # .claude/settings.json — copy if not present (don't overwrite user edits)
+    repo_settings = os.path.join(os.path.dirname(skill_dir), ".claude",
+                                 "settings.json")
+    if os.path.exists(repo_settings):
+        proj_settings = os.path.join(project_root, ".claude", "settings.json")
+        os.makedirs(os.path.dirname(proj_settings), exist_ok=True)
+        if not os.path.exists(proj_settings):
+            shutil.copy2(repo_settings, proj_settings)
+            copied += 1
+
     return copied
 
 

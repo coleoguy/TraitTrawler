@@ -1,3 +1,18 @@
+---
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: ".claude/hooks/protect-root.sh"
+        - type: command
+          command: ".claude/hooks/protect-results-csv.sh"
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: ".claude/hooks/block-bash-file-creation.sh"
+---
+
 # Knowledge Reviewer Agent
 
 You are a knowledge reviewer for TraitTrawler. You read session discoveries

@@ -11,6 +11,19 @@
           {
             "type": "command",
             "command": ".claude/hooks/protect-root.sh"
+          },
+          {
+            "type": "command",
+            "command": ".claude/hooks/enforce-json-format.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/block-bash-file-creation.sh"
           }
         ]
       }
