@@ -191,3 +191,33 @@ with pdfplumber.open(pdf_path) as pdf:
     has_tables = any(p.extract_tables() for p in pdf.pages[:5])
 ```
 Determine document_type: `"table-heavy"`, `"prose"`, `"catalogue"`, or `"scanned"`.
+
+## Content Verification (post-download)
+
+After saving and text extraction, verify the PDF matches the expected paper.
+This catches wrong-PDF delivery from CORE and other sources (~5% mismatch rate).
+
+```python
+import subprocess, json
+result = subprocess.run(
+    ["python3", "scripts/verify_pdf_content.py",
+     "--pdf", pdf_path,
+     "--title", paper_title,
+     "--authors", paper_authors,
+     "--doi", paper_doi],
+    capture_output=True, text=True, timeout=30)
+verification = json.loads(result.stdout) if result.returncode == 0 else {"match": True}
+```
+
+**If `verification["match"]` is False:**
+- In **API mode**: delete the saved PDF and try the next source. If all sources
+  fail content verification, write a failure file with
+  `"reason": "content_mismatch"` and include `verification["reason"]` in the
+  failure JSON.
+- In **browser mode**: write a failure file with `"reason": "content_mismatch"`.
+
+**If the script fails** (ImportError, timeout): treat as a match (don't block
+on verification failures).
+
+Include `"content_verified": true/false` in the handoff JSON so downstream
+agents know whether the PDF was verified.

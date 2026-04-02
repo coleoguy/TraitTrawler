@@ -24,7 +24,7 @@ jobs:
         run: |
           ruff check skill/scripts/ tests/ \
             --select E,F,W \
-            --ignore E501,W503 \
+            --ignore E501 \
             --exit-zero
 
       - name: Check for syntax errors

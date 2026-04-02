@@ -348,6 +348,36 @@ def validate_record(record: dict, output_fields: list,
                     action=on_fail
                 ))
 
+        elif rule_type == "suspicious_value":
+            # Flag when a field equals a specific value AND a condition
+            # field is empty. E.g., tau=24.0 with no SD is suspicious.
+            suspect_val = rule.get("value")
+            condition_field = rule.get("condition_field", "")
+            condition_empty = rule.get("condition_empty", True)
+            message = rule.get("message", f"{field}={val} is suspicious")
+
+            try:
+                num_val = float(val)
+                num_suspect = float(suspect_val) if suspect_val is not None else None
+                if num_suspect is not None and abs(num_val - num_suspect) < 0.001:
+                    # Check condition: is the condition field empty?
+                    if condition_field:
+                        cond_val = str(record.get(condition_field, "")).strip()
+                        if condition_empty and not cond_val:
+                            errors.append(ValidationError(
+                                field, num_val, "suspicious_value",
+                                message,
+                                action=on_fail
+                            ))
+                    else:
+                        errors.append(ValidationError(
+                            field, num_val, "suspicious_value",
+                            message,
+                            action=on_fail
+                        ))
+            except (ValueError, TypeError):
+                pass
+
     # 9. No unknown fields (warning only, not an error)
     # This is informational — extra fields are silently ignored by DictWriter
 
@@ -408,7 +438,7 @@ def make_dedup_key(record: dict, output_fields: list) -> tuple:
 _DOI_DEDUP_FIELDS = ("species", "2n_male", "sex_chromosome_system", "doi")
 
 
-def _make_doi_key(row_or_record: dict) -> tuple | None:
+def _make_doi_key(row_or_record: dict):
     """Create a DOI-based dedup key. Returns None if any field is empty."""
     vals = tuple(row_or_record.get(k, "") for k in _DOI_DEDUP_FIELDS)
     if all(vals):
