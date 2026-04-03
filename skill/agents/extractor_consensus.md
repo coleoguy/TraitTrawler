@@ -257,10 +257,20 @@ Full schema:
 }
 ```
 
-### Step 8: Lesson Learned (Optional)
+### Step 8: Lesson Learned (REQUIRED when triggered)
 
-If any agent encountered a notation variant, ambiguous value, or pattern
-worth noting, write to `learning/`:
+You MUST write a discovery file when ANY of these occur:
+
+1. **Any record has `consensus: "none"`** — agents disagreed, worth logging why
+2. **Agent C raised a `doubt_note`** — skeptical agent flagged something
+3. **A species not in guide.md's taxonomy notes** was extracted
+4. **A measurement method not listed in guide.md** was encountered
+5. **Confidence < 0.70** on any record — explains why extraction was uncertain
+6. **The paper used notation/terminology** not covered by guide.md
+
+If NONE of these triggers fired, skip this step.
+
+When triggered, write to `learning/`:
 
 ```
 learning/{doi_safe}_{ISO_timestamp}.json
@@ -269,12 +279,13 @@ learning/{doi_safe}_{ISO_timestamp}.json
 ```json
 {
   "doi": "10.1234/example",
-  "type": "notation_variant|ambiguity_pattern|new_taxon|extraction_pattern",
+  "type": "notation_variant|ambiguity_pattern|new_taxon|extraction_pattern|consensus_failure|low_confidence",
   "description": "Human-readable description of what was discovered",
   "proposed_rule": "Specific rule to add to guide.md",
   "affected_fields": ["field_name"],
   "source_context": "Relevant text from the paper",
-  "agents_that_noticed": ["A", "C"]
+  "agents_that_noticed": ["A", "C"],
+  "trigger": "Which trigger from the list above fired"
 }
 ```
 

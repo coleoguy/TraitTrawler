@@ -85,6 +85,11 @@ class FileLock:
             fcntl.flock(self._fd.fileno(), fcntl.LOCK_UN)
             self._fd.close()
             self._fd = None
+            # Clean up the lock file to prevent directory clutter
+            try:
+                os.remove(self.lock_path)
+            except OSError:
+                pass  # Another process may have already removed it
         return False
 
 

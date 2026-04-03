@@ -807,6 +807,24 @@ def cmd_end(args):
     state = read_project_state(root)
     result["final_state"] = state
 
+    # Count learning files produced this session
+    learning_dir = os.path.join(root, "learning")
+    learning_count = len(glob.glob(os.path.join(learning_dir, "*.json"))) if os.path.isdir(learning_dir) else 0
+    result["learning_files"] = learning_count
+
+    # Clean up stale files (lock files, empty placeholders, tmp files)
+    try:
+        from project_cleanup import scan_project, apply_cleanup
+        categories = scan_project(root)
+        # Auto-clean everything except script variants and duplicate results
+        safe_categories = {k: v for k, v in categories.items()
+                          if k not in ("script_variants", "duplicate_results")}
+        deleted, _ = apply_cleanup(safe_categories, root)
+        if deleted > 0:
+            result["cleanup"] = {"files_removed": deleted}
+    except (ImportError, Exception):
+        pass  # Cleanup is best-effort
+
     # Log session_end to run_log.jsonl
     append_jsonl(os.path.join(root, "state", "run_log.jsonl"), {
         "event": "session_end",
@@ -815,6 +833,7 @@ def cmd_end(args):
         "records_written": args.records_written,
         "records_at_end": state.get("records", 0),
         "queue_remaining": state.get("queue_depth", 0),
+        "learning_files": learning_count,
     })
 
     print(json.dumps(result, indent=2))
