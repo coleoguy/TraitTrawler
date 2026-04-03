@@ -20,12 +20,10 @@ Usage:
 
 import csv
 import fcntl
-import json
 import os
 import sys
 import tempfile
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 
@@ -107,7 +105,7 @@ def _load_confidence_word_map(project_root: str) -> dict:
 REQUIRED_FIELDS = {"species", "extraction_confidence"}
 
 # Fields that should not be empty (flag record if missing)
-SOFT_REQUIRED_FIELDS = {"paper_title", "paper_authors"}
+SOFT_REQUIRED_FIELDS = {"paper_title", "paper_authors", "pdf_path"}
 
 # Fields with known types
 FLOAT_FIELDS = {"extraction_confidence", "calibrated_confidence"}
@@ -722,11 +720,21 @@ class SchemaEnforcedWriter:
                     raise
 
         except Exception as e:
-            # Critical: never silently drop records
-            raise RuntimeError(
+            # Log the I/O failure but do NOT crash the session.
+            # The finds file remains on disk so the Writer can retry later.
+            msg = (
                 f"CSV write failed after validating {report.accepted} records. "
                 f"Error: {e}. Records NOT written — retry or investigate."
-            ) from e
+            )
+            print(f"ERROR: {msg}", file=sys.stderr)
+            report.errors.append((
+                -1,
+                ValidationError(
+                    "results.csv", str(e), "io_error", msg, action="drop"
+                )
+            ))
+            report.accepted = 0  # none actually made it to disk
+            return report
 
         # Post-write verification: ensure record count increased correctly
         if os.path.exists(self.csv_path):
@@ -756,6 +764,156 @@ class SchemaEnforcedWriter:
 # CLI
 # ---------------------------------------------------------------------------
 
+def reorder_csv_columns(project_root, dry_run=True):
+    """Reorder results.csv columns to match output_fields in config.
+
+    If the user changes column order in collector_config.yaml, this
+    rewrites results.csv with the new column order. Data is preserved.
+
+    Returns dict with old_order, new_order, and whether changes were made.
+    """
+    csv_path = os.path.join(project_root, "results.csv")
+    if not os.path.exists(csv_path):
+        return {"changed": False, "reason": "No results.csv"}
+
+    config_fields = load_output_fields(project_root)
+    if not config_fields:
+        return {"changed": False, "reason": "No output_fields in config"}
+
+    # Read current CSV
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        old_fieldnames = list(reader.fieldnames) if reader.fieldnames else []
+        rows = [dict(row) for row in reader]
+
+    if not old_fieldnames:
+        return {"changed": False, "reason": "Empty CSV"}
+
+    # Build new column order: config fields first, then any extra CSV columns
+    new_fieldnames = list(config_fields)
+    for col in old_fieldnames:
+        if col not in new_fieldnames:
+            new_fieldnames.append(col)
+
+    if new_fieldnames == old_fieldnames:
+        return {"changed": False, "reason": "Column order already matches"}
+
+    result = {
+        "changed": True,
+        "old_order": old_fieldnames[:10],
+        "new_order": new_fieldnames[:10],
+        "total_columns": len(new_fieldnames),
+        "rows": len(rows),
+    }
+
+    if dry_run:
+        result["dry_run"] = True
+        return result
+
+    # Atomic rewrite
+    import tempfile
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".csv",
+                                        dir=project_root,
+                                        prefix=".results_reorder_")
+    try:
+        with os.fdopen(tmp_fd, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=new_fieldnames,
+                                    extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(tmp_path, csv_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+    return result
+
+
+def validate_config(project_root):
+    """Validate collector_config.yaml output_fields and print report."""
+    config_path = os.path.join(project_root, "collector_config.yaml")
+    if not os.path.exists(config_path):
+        print("No collector_config.yaml found.")
+        return False
+
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"FAIL: Cannot parse config: {e}")
+        return False
+
+    output_fields = config.get("output_fields", [])
+    required_fields = config.get("required_fields", [])
+
+    print(f"Output fields: {len(output_fields)} columns defined")
+    print(f"Required fields: {required_fields}")
+    print("Column order:")
+    for i, field in enumerate(output_fields, 1):
+        markers = []
+        if field in (required_fields or []):
+            markers.append("REQUIRED")
+        if field in REQUIRED_FIELDS:
+            markers.append("HARD-REQUIRED")
+        if field in SOFT_REQUIRED_FIELDS:
+            markers.append("SOFT-REQUIRED")
+        marker_str = f"  [{', '.join(markers)}]" if markers else ""
+        print(f"  {i:3d}. {field}{marker_str}")
+
+    # Check for issues
+    errors = 0
+    core = ["species", "doi", "extraction_confidence", "pdf_path",
+            "paper_title"]
+    for field in core:
+        if field not in output_fields:
+            print(f"\n  WARNING: Core field '{field}' missing from "
+                  f"output_fields")
+            errors += 1
+
+    for field in (required_fields or []):
+        if field not in output_fields:
+            print(f"\n  ERROR: Required field '{field}' is NOT in "
+                  f"output_fields — records will fail validation")
+            errors += 1
+
+    # Check for duplicates
+    seen = set()
+    for field in output_fields:
+        if field in seen:
+            print(f"\n  WARNING: Duplicate field '{field}'")
+            errors += 1
+        seen.add(field)
+
+    # Check CSV consistency
+    csv_path = os.path.join(project_root, "results.csv")
+    if os.path.exists(csv_path):
+        with open(csv_path, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            csv_header = next(reader, [])
+        if csv_header != output_fields:
+            extra_in_csv = set(csv_header) - set(output_fields)
+            extra_in_config = set(output_fields) - set(csv_header)
+            if extra_in_csv:
+                print(f"\n  NOTE: Columns in results.csv not in config: "
+                      f"{sorted(extra_in_csv)}")
+            if extra_in_config:
+                print(f"\n  NOTE: Fields in config not yet in results.csv: "
+                      f"{sorted(extra_in_config)}")
+            if csv_header and list(csv_header) != list(output_fields):
+                order_match = set(csv_header) == set(output_fields)
+                if order_match:
+                    print("\n  NOTE: Column ORDER differs between config "
+                          "and results.csv. Run with --reorder to sync.")
+
+    if errors == 0:
+        print("\nConfig validation passed.")
+    else:
+        print(f"\n{errors} issue(s) found.")
+    return errors == 0
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(
@@ -765,7 +923,22 @@ def main():
                         help="Project root directory")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate without writing")
+    parser.add_argument("--validate-config", action="store_true",
+                        help="Validate output_fields config and show "
+                             "column order")
+    parser.add_argument("--reorder", action="store_true",
+                        help="Reorder results.csv columns to match config")
     args = parser.parse_args()
+
+    if args.validate_config:
+        validate_config(args.project_root)
+        return
+
+    if args.reorder:
+        result = reorder_csv_columns(args.project_root, dry_run=args.dry_run)
+        import json
+        print(json.dumps(result, indent=2))
+        return
 
     writer = SchemaEnforcedWriter(args.project_root)
     csv_path = os.path.join(args.project_root, "results.csv")

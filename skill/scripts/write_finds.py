@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 # Add scripts/ to path so we can import csv_writer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from csv_writer import SchemaEnforcedWriter, load_output_fields
+from csv_writer import SchemaEnforcedWriter
 from validate_finds_json import validate_file
 
 

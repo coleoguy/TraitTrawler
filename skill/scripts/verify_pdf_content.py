@@ -96,7 +96,7 @@ def verify_pdf(pdf_path, expected_title=None, expected_authors=None,
     result["extracted_doi"] = pdf_doi
 
     # Extract first substantial line as title snippet
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     for line in lines[:8]:
         if len(line) > 15 and not line.startswith("http"):
             result["extracted_title_snippet"] = line[:200]

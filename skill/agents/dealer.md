@@ -168,10 +168,50 @@ and applies majority-rule voting. Pass:
 **Fast mode**: Spawn a single **Opus** agent using `extractor_A.md` only.
 Write with `consensus: "single_pass"`, `consensus_vote: "1_NA_NA_NA"`.
 
-### Step 4: Handle Result
+### Step 4: Validate and Handle Result
 
-- **Success**: Verify finds file is valid JSON with a `records` array.
-  Move handoff to `state/dealt/`.
+When extraction completes, validate the result BEFORE accepting it.
+
+**4a. Structure check**: Verify finds file is valid JSON with a `records` array.
+
+**4b. Required field check**: For EACH record in the `records` array, verify:
+- `species` is non-empty
+- `extraction_confidence` is a float in [0.0, 1.0]
+- `pdf_path` is non-empty (copy from handoff if missing)
+- `light_condition` is non-empty (if it's in `required_fields` in config)
+- Any field listed in `required_fields` in `collector_config.yaml` is non-empty
+
+Run the validation script:
+```bash
+python3 scripts/validate_finds_json.py --file finds/{doi_safe}_{timestamp}.json
+```
+
+**4c. If validation fails — RETRY once**:
+If any record is missing a required field:
+1. Note which records and which fields failed
+2. Re-spawn a **single Opus extractor** with the original PDF + the failed
+   records and a specific prompt:
+   ```
+   The previous extraction of this paper produced records with missing
+   required fields. Please re-extract, ensuring every record has:
+   {list of missing fields with their requirements}
+
+   Previous extraction produced these records that need fixing:
+   {JSON of failed records}
+   ```
+3. Merge the retry results with any records that passed validation
+4. If retry still fails, write valid records to `finds/` and log
+   failed records to `dealer_results/{doi_safe}_incomplete.json` with
+   `"outcome": "incomplete"` and the list of missing fields
+
+Do NOT drop valid records just because some records failed. Write what
+you have — partial data is better than no data.
+
+**4d. Outcomes**:
+- **Success** (all records valid): Write to `finds/`. Move handoff to `state/dealt/`.
+- **Partial success** (some valid, some failed after retry): Write valid records
+  to `finds/`. Write failed records to `dealer_results/` with `"outcome": "incomplete"`.
+  Move handoff.
 - **No data**: Write no-data file to `dealer_results/`. Move handoff.
 - **No consensus**: Escalate to single Opus agent. If Opus confidence >= 0.7,
   write to finds with `consensus: "opus_escalation"`, `consensus_vote: "0_0_0_1"`.

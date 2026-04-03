@@ -32,8 +32,7 @@ import subprocess
 import sys
 import time
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 from state_utils import (
@@ -314,6 +313,101 @@ def ensure_standard_fields(project_root):
             return []
 
     return added
+
+
+def validate_output_fields(project_root):
+    """Validate that output_fields in collector_config.yaml is well-formed.
+
+    Checks:
+    1. output_fields exists and is non-empty
+    2. All required_fields are present in output_fields
+    3. Core provenance fields (species, doi, extraction_confidence, pdf_path)
+       are present
+    4. No duplicate field names
+    5. If results.csv exists, its columns match output_fields (warns on drift)
+
+    Returns dict with:
+        ok: bool - all checks passed
+        warnings: list of str - non-fatal issues
+        errors: list of str - fatal issues that should block startup
+    """
+    config_path = os.path.join(project_root, "collector_config.yaml")
+    result = {"ok": True, "warnings": [], "errors": []}
+
+    if not os.path.exists(config_path):
+        result["warnings"].append("No collector_config.yaml found")
+        return result
+
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+    except (ImportError, Exception) as e:
+        result["errors"].append(f"Cannot parse collector_config.yaml: {e}")
+        result["ok"] = False
+        return result
+
+    output_fields = config.get("output_fields", [])
+    if not output_fields:
+        result["errors"].append(
+            "output_fields is empty or missing in collector_config.yaml")
+        result["ok"] = False
+        return result
+
+    # Check for duplicates
+    seen = set()
+    duplicates = []
+    for field in output_fields:
+        if field in seen:
+            duplicates.append(field)
+        seen.add(field)
+    if duplicates:
+        result["warnings"].append(
+            f"Duplicate fields in output_fields: {duplicates}")
+
+    # Check required_fields are in output_fields
+    required = config.get("required_fields", [])
+    for field in required:
+        if field not in output_fields:
+            result["errors"].append(
+                f"Required field '{field}' is in required_fields but "
+                f"missing from output_fields — records will fail validation")
+            result["ok"] = False
+
+    # Check core provenance fields are present
+    core_fields = ["species", "doi", "extraction_confidence", "pdf_path",
+                   "paper_title", "paper_year"]
+    missing_core = [f for f in core_fields if f not in output_fields]
+    if missing_core:
+        result["warnings"].append(
+            f"Recommended core fields missing from output_fields: "
+            f"{missing_core}")
+
+    # Check results.csv column consistency
+    csv_path = os.path.join(project_root, "results.csv")
+    if os.path.exists(csv_path):
+        try:
+            import csv
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                csv_header = next(reader, [])
+            if csv_header:
+                config_set = set(output_fields)
+                csv_set = set(csv_header)
+                in_csv_not_config = csv_set - config_set
+                in_config_not_csv = config_set - csv_set
+                if in_csv_not_config:
+                    result["warnings"].append(
+                        f"Columns in results.csv but not in output_fields: "
+                        f"{sorted(in_csv_not_config)}")
+                if in_config_not_csv:
+                    result["warnings"].append(
+                        f"Fields in output_fields but not in results.csv "
+                        f"(will be added): {sorted(in_config_not_csv)}")
+        except Exception:
+            pass
+
+    return result
 
 
 def migrate_csv_columns(project_root):
@@ -724,7 +818,14 @@ def cmd_start(args):
     if injected_fields:
         result["config_fields_added"] = injected_fields
 
-    # 6c. Migrate CSV columns (add new output_fields to existing results.csv)
+    # 6c. Validate output_fields configuration
+    field_validation = validate_output_fields(root)
+    if not field_validation["ok"]:
+        result["config_errors"] = field_validation["errors"]
+    if field_validation["warnings"]:
+        result["config_warnings"] = field_validation["warnings"]
+
+    # 6d. Migrate CSV columns (add new output_fields to existing results.csv)
     new_columns = migrate_csv_columns(root)
     if new_columns:
         result["csv_columns_added"] = new_columns

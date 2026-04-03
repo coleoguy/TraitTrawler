@@ -11,7 +11,6 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -191,7 +190,7 @@ def main():
         if total == 0:
             print("\nProject is clean!")
         else:
-            print(f"\nRun with --apply to delete these files.")
+            print("\nRun with --apply to delete these files.")
             if not args.include_scripts:
                 n_scripts = len(categories.get("script_variants", []))
                 if n_scripts:

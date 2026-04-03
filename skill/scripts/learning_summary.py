@@ -14,7 +14,6 @@ import json
 import os
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
 from pathlib import Path
 
 
@@ -120,7 +119,7 @@ def check_guide_growth(project_root):
         content = f.read()
 
     lines = content.split("\n")
-    sections = [l for l in lines if l.startswith("## ")]
+    sections = [ln for ln in lines if ln.startswith("## ")]
 
     return {
         "exists": True,
@@ -176,7 +175,6 @@ def generate_summary(project_root):
     print("-" * 40)
     for sid in sorted(sessions.keys()):
         s = sessions[sid]
-        start = s["start"] or "?"
         agents = s["agents_dispatched"]
         papers = s["papers_processed"]
         events = dict(s["events"])

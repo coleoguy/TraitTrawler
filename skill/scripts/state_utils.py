@@ -33,8 +33,7 @@ import shutil
 import sys
 import tempfile
 import time
-from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 
 # ---------------------------------------------------------------------------
