@@ -38,7 +38,7 @@ def now_iso():
 
 
 # Fields that are internal to the consensus process — strip before CSV write
-INTERNAL_FIELDS = {"agent_values", "doubt_note", "enumeration_inventory_size"}
+INTERNAL_FIELDS = {"agent_values", "enumeration_inventory_size"}
 
 
 def load_config(project_root):

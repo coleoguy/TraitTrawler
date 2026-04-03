@@ -142,8 +142,9 @@ For each aligned record, vote on each field:
   "no issues"), reduce confidence by an additional -0.05
 
 **Agent C's `doubt_note` field**: This field is unique to the Skeptical agent.
-Use it to inform confidence adjustments and flag decisions. Do NOT include
-`doubt_note` in the final output — it is internal to the consensus process.
+Use it to inform confidence adjustments and flag decisions. Preserve
+`doubt_note` in the final output so downstream users can see why confidence
+was adjusted. Condense it to one sentence if the original is verbose.
 
 **Consensus vote string**: For each record, generate a `consensus_vote` string
 that encodes per-agent agreement on the primary trait field(s). Format:

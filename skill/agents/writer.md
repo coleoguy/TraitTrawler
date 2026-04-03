@@ -55,8 +55,8 @@ This script processes all `finds/*.json` files (oldest first) through:
 2. **Taxonomy resolution** — calls `taxonomy_resolver.py` per unique species
    (synonym resolution, family/genus backfill, fuzzy matching, GBIF caching)
 3. **Confidence calibration** — applies isotonic model if available (10+ obs)
-4. **Internal field stripping** — removes `agent_values`, `doubt_note`,
-   `enumeration_inventory_size`
+4. **Internal field stripping** — removes `agent_values`,
+   `enumeration_inventory_size` (keeps `doubt_note` for provenance)
 5. **Validation + dedup + atomic write** — via `csv_writer.py`
    SchemaEnforcedWriter (hard rules, project rules, dedup, row count
    verification, rejected records → `state/needs_attention.csv`)

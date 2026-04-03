@@ -120,7 +120,7 @@ def _cache_is_fresh(entry):
     if not lookup_date:
         return False
     try:
-        from datetime import datetime, timedelta
+        from datetime import datetime
         cached_date = datetime.strptime(lookup_date, "%Y-%m-%d")
         return (datetime.now() - cached_date).days < CACHE_TTL_DAYS
     except (ValueError, TypeError):
@@ -188,6 +188,14 @@ def resolve_species(species_name, kingdom, cache, offline=False):
 
     match_type = result["match_type"]
     status = result["status"]
+
+    if match.get("error"):
+        print(f"WARNING: GBIF lookup failed for '{species_name}': "
+              f"{match['error']}. Using unresolved name.",
+              file=sys.stderr)
+        result["action"] = "flag_gbif_error"
+        result["note"] = f"GBIF API error: {match['error']}"
+        return result
 
     if match_type == "NONE":
         result["action"] = "flag_not_found"

@@ -926,6 +926,15 @@ def cmd_end(args):
     except (ImportError, Exception):
         pass  # Cleanup is best-effort
 
+    # Count needs_attention records
+    na_path = os.path.join(root, "state", "needs_attention.csv")
+    needs_attention_count = 0
+    if os.path.exists(na_path):
+        with open(na_path, "r") as f:
+            needs_attention_count = max(0, sum(1 for _ in f) - 1)
+    if needs_attention_count > 0:
+        result["needs_attention"] = needs_attention_count
+
     # Log session_end to run_log.jsonl
     append_jsonl(os.path.join(root, "state", "run_log.jsonl"), {
         "event": "session_end",
@@ -935,6 +944,7 @@ def cmd_end(args):
         "records_at_end": state.get("records", 0),
         "queue_remaining": state.get("queue_depth", 0),
         "learning_files": learning_count,
+        "needs_attention": needs_attention_count,
     })
 
     print(json.dumps(result, indent=2))

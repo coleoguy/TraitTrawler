@@ -168,6 +168,11 @@ and applies majority-rule voting. Pass:
 **Fast mode**: Spawn a single **Opus** agent using `extractor_A.md` only.
 Write with `consensus: "single_pass"`, `consensus_vote: "1_NA_NA_NA"`.
 
+**Timeout handling**: If the extractor agent does not return within 10
+minutes, treat it as a failure. Write a failure file to `dealer_results/`
+with `"outcome": "timeout"` and move the handoff to `state/dealt/`. Do
+NOT leave the paper stuck in `ready_for_extraction/`.
+
 ### Step 4: Validate and Handle Result
 
 When extraction completes, validate the result BEFORE accepting it.
