@@ -167,6 +167,9 @@ and applies majority-rule voting. Pass:
 
 **Fast mode**: Spawn a single **Opus** agent using `extractor_A.md` only.
 Write with `consensus: "single_pass"`, `consensus_vote: "1_NA_NA_NA"`.
+Pass the same context as consensus mode including `guide.md` and recent
+`learning/*.json` files so the agent can detect novel patterns and write
+discovery files.
 
 **Timeout handling**: If the extractor agent does not return within 10
 minutes, treat it as a failure. Write a failure file to `dealer_results/`

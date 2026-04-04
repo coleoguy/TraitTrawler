@@ -284,7 +284,8 @@ def process_finds(project_root, session_id):
         fname = os.path.basename(fpath)
 
         # Step 1: Validate structure
-        ok, validation_errors = validate_file(fpath)
+        config_path = os.path.join(project_root, "collector_config.yaml")
+        ok, validation_errors = validate_file(fpath, config_path=config_path)
         if not ok:
             errors.append({
                 "file": fname,
@@ -364,6 +365,10 @@ def process_finds(project_root, session_id):
                 rec["pdf_source"] = data.get("pdf_source", "")
             if not rec.get("pdf_path"):
                 rec["pdf_path"] = data.get("pdf_path", "")
+            if not rec.get("pdf_path"):
+                print(f"WARNING: Record for '{rec.get('species', '?')}' in "
+                      f"{fname} has no pdf_path — provenance broken",
+                      file=sys.stderr)
 
         # Step 7: Write via SchemaEnforcedWriter (handles validation,
         # dedup, atomic write, post-write verification)

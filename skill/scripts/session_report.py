@@ -15,10 +15,8 @@ import argparse
 import csv
 import json
 import os
-import sys
 from collections import defaultdict
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
 
 
 def read_jsonl(path, session_id=None):
@@ -97,7 +95,6 @@ def generate_report(project_root, session_id=None, as_json=False):
 
     # --- Session Timeline ---
     session_starts = [e for e in run_log if e.get("event") == "session_start"]
-    session_ends = [e for e in run_log if e.get("event") == "session_end"]
 
     first_ts = None
     last_ts = None
@@ -112,7 +109,6 @@ def generate_report(project_root, session_id=None, as_json=False):
     session_duration = (last_ts - first_ts) if (first_ts and last_ts) else None
 
     # --- Agent Performance ---
-    dispatched = [e for e in run_log if e.get("event") == "agent_dispatched"]
     returned = [e for e in run_log if e.get("event") == "agent_returned"]
     validations_failed = [e for e in run_log if e.get("event") == "validation_failed"]
 
@@ -182,6 +178,28 @@ def generate_report(project_root, session_id=None, as_json=False):
         else:
             outcome_counts["malformed_entry"] += 1
 
+    # --- Triage Accuracy ---
+    # Cross-reference triage predictions with extraction outcomes
+    triage_outcomes = defaultdict(lambda: {"extracted": 0, "no_data": 0, "other": 0})
+    for doi, data in processed.items():
+        if not isinstance(data, dict):
+            continue
+        triage = data.get("triage")
+        if not triage:
+            continue
+        outcome = data.get("outcome", "")
+        records = data.get("records", 0)
+        if outcome == "triage_rejected":
+            continue  # these never went to extraction
+        if records and int(records) > 0:
+            triage_outcomes[triage]["extracted"] += 1
+        elif outcome in ("no_data", "no_tau_data", "no_primary_data",
+                         "no_freerunning_tau_data", "no_constant_period_data",
+                         "no_tau_data_found"):
+            triage_outcomes[triage]["no_data"] += 1
+        else:
+            triage_outcomes[triage]["other"] += 1
+
     # --- Throughput ---
     papers_extracted = agent_counts.get("dealer", 0)
     duration_hours = session_duration.total_seconds() / 3600 if session_duration else 0
@@ -231,6 +249,14 @@ def generate_report(project_root, session_id=None, as_json=False):
              "details": e.get("details")}
             for e in validations_failed
         ],
+        "triage_accuracy": {
+            t: {
+                "yield_pct": round(100 * v["extracted"] / (v["extracted"] + v["no_data"]), 1)
+                if (v["extracted"] + v["no_data"]) > 0 else None,
+                **v
+            }
+            for t, v in triage_outcomes.items()
+        },
         "outcomes": dict(outcome_counts),
         "database": {
             "results_csv_rows": results_rows,
@@ -261,7 +287,7 @@ def generate_report(project_root, session_id=None, as_json=False):
     lines = []
     s = report["session"]
     lines.append(f"{'='*60}")
-    lines.append(f"  TraitTrawler Session Report")
+    lines.append("  TraitTrawler Session Report")
     lines.append(f"{'='*60}")
     lines.append(f"  Session:   {s['id']}")
     lines.append(f"  Duration:  {s['duration_minutes']} min" if s['duration_minutes'] else "  Duration:  unknown")
@@ -269,7 +295,7 @@ def generate_report(project_root, session_id=None, as_json=False):
     lines.append("")
 
     t = report["throughput"]
-    lines.append(f"── Throughput ─────────────────────────────────")
+    lines.append("── Throughput ─────────────────────────────────")
     lines.append(f"  Papers processed:    {t['papers_processed']}")
     lines.append(f"  Records extracted:   {t['records_extracted']} ({t['records_per_paper']} per paper)")
     lines.append(f"  Papers/hour:         {t['papers_per_hour']}")
@@ -277,20 +303,20 @@ def generate_report(project_root, session_id=None, as_json=False):
     lines.append("")
 
     sr = report["search"]
-    lines.append(f"── Search ─────────────────────────────────────")
+    lines.append("── Search ─────────────────────────────────────")
     lines.append(f"  Queries completed:   {sr['queries_completed']}")
     lines.append(f"  Papers queued:       {sr['papers_queued']}")
     lines.append(f"  Single-source queries: {sr['queries_single_source']}"
                  + (" ⚠️" if sr['queries_single_source'] > 0 else ""))
     if sr["source_contribution"]:
-        lines.append(f"  Source contribution:")
+        lines.append("  Source contribution:")
         for src, count in sorted(sr["source_contribution"].items(),
                                   key=lambda x: -x[1]):
             lines.append(f"    {src:12s} {count:>6d} papers")
     lines.append("")
 
     f = report["fetch"]
-    lines.append(f"── Fetch ──────────────────────────────────────")
+    lines.append("── Fetch ──────────────────────────────────────")
     lines.append(f"  Attempts:            {f['total_attempts']}")
     lines.append(f"  Successes:           {f['total_successes']} ({f['yield_pct']}%)")
     lines.append(f"  Browser attempts:      {f['browser_attempts']}"
@@ -298,7 +324,7 @@ def generate_report(project_root, session_id=None, as_json=False):
     lines.append(f"  Browser successes:     {f['browser_successes']}")
     lines.append(f"  Leads (unfetched):   {f['leads_total']}")
     if f["source_breakdown"]:
-        lines.append(f"  Source breakdown:")
+        lines.append("  Source breakdown:")
         for src, stats in sorted(f["source_breakdown"].items(),
                                   key=lambda x: -x[1].get("successes", 0)):
             att = stats.get("attempts", 0)
@@ -308,17 +334,17 @@ def generate_report(project_root, session_id=None, as_json=False):
     lines.append("")
 
     e = report["extraction"]
-    lines.append(f"── Extraction ─────────────────────────────────")
+    lines.append("── Extraction ─────────────────────────────────")
     lines.append(f"  Papers with data:    {e['papers_with_data']}")
     lines.append(f"  Papers no data:      {e['papers_no_data']}")
     lines.append(f"  Total records:       {e['total_records']}")
     if e["consensus_types"]:
-        lines.append(f"  Consensus breakdown:")
+        lines.append("  Consensus breakdown:")
         for ct, count in sorted(e["consensus_types"].items(), key=lambda x: -x[1]):
             lines.append(f"    {ct:18s} {count:>4d}")
     lines.append("")
 
-    lines.append(f"── Agent Performance ──────────────────────────")
+    lines.append("── Agent Performance ──────────────────────────")
     for agent_type in ["searcher", "fetcher", "dealer", "writer"]:
         ap = report["agent_performance"][agent_type]
         if ap["calls"] == 0:
@@ -339,15 +365,39 @@ def generate_report(project_root, session_id=None, as_json=False):
             lines.append(f"  [{detail['agent']}] {detail['check']}: {detail['details']}")
         lines.append("")
 
+    ta = report["triage_accuracy"]
+    if ta:
+        lines.append("── Triage Accuracy ────────────────────────────")
+        for triage_val in ["likely", "uncertain", "unlikely"]:
+            if triage_val not in ta:
+                continue
+            v = ta[triage_val]
+            total = v["extracted"] + v["no_data"]
+            if total == 0:
+                continue
+            yield_pct = v["yield_pct"]
+            lines.append(f"  {triage_val:12s}  {v['extracted']:>4d} extracted, "
+                         f"{v['no_data']:>4d} no data  "
+                         f"(yield {yield_pct:.0f}%)")
+        total_extracted = sum(v["extracted"] for v in ta.values())
+        total_no_data = sum(v["no_data"] for v in ta.values())
+        if total_extracted + total_no_data > 0:
+            false_pos = total_no_data
+            total = total_extracted + total_no_data
+            lines.append(f"  {'overall':12s}  {total_extracted:>4d}/{total:<4d} "
+                         f"({round(100*total_extracted/total):.0f}% yield, "
+                         f"{false_pos} false positives)")
+        lines.append("")
+
     oc = report["outcomes"]
     if oc:
-        lines.append(f"── Outcome Distribution ────────────────────────")
+        lines.append("── Outcome Distribution ────────────────────────")
         for outcome, count in sorted(oc.items(), key=lambda x: -x[1]):
             lines.append(f"  {outcome:25s} {count:>5d}")
         lines.append("")
 
     db = report["database"]
-    lines.append(f"── Database ───────────────────────────────────")
+    lines.append("── Database ───────────────────────────────────")
     lines.append(f"  results.csv rows:    {db['results_csv_rows']}")
     lines.append(f"  leads.csv rows:      {db['leads_csv_rows']}")
     lines.append(f"  processed DOIs:      {db['processed_dois']}")

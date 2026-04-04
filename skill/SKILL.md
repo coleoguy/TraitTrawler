@@ -77,8 +77,11 @@ start extracting yourself. Instead:
    (fetch problem)? Data exists but extractors missed it (prompt problem)?
 2. **Adjust search strategy**: Spawn a Searcher with narrower keywords,
    different taxa, or citation chaining from known high-yield papers.
-3. **Improve triage**: Tighten `triage_keywords` in config if false
-   positive rate exceeds 30%.
+3. **Improve triage**: Check the "Triage Accuracy" section of the session
+   report. If yield for "likely" papers drops below 70%, triage keywords
+   are too broad — tell the user which keywords are generating false
+   positives and suggest removals. If "uncertain" papers yield above 50%,
+   suggest promoting recurring title patterns to triage keywords.
 4. **Report to user**: "N papers processed, 0 with data. The queue
    appears contaminated with off-topic papers. Recommend: [specific action]."
 5. **Ask for provided PDFs**: The user may have PDFs from paywalled sources

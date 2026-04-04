@@ -21,6 +21,7 @@ Usage:
 import csv
 import fcntl
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime
@@ -658,11 +659,13 @@ class SchemaEnforcedWriter:
                         ec_lower, "0.65")
 
             # Sanitize: replace embedded newlines/carriage returns with spaces
-            # This prevents column-offset corruption from verbatim text fields
+            # and strip HTML tags to prevent CSV column-offset corruption
             sanitized = {}
             for k, v in record.items():
                 if isinstance(v, str):
-                    sanitized[k] = v.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+                    v = v.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+                    v = re.sub(r"<[^>]+>", "", v)  # strip HTML tags
+                    sanitized[k] = v.strip()
                 else:
                     sanitized[k] = v
             rows_to_write.append(sanitized)

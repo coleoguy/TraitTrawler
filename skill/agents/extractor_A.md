@@ -57,3 +57,33 @@ Count them.
 **Pass 2 — Extract**: For each species, extract the complete record from
 the table. After extraction, verify: does your record count match the
 species count from Pass 1? If not, find the missing records.
+
+## Lesson Learned (REQUIRED when triggered)
+
+After extraction, check whether ANY of these occurred:
+
+1. **A species not in guide.md's taxonomy notes** was extracted
+2. **A measurement method not listed in guide.md** was encountered
+3. **Confidence < 0.70** on any record
+4. **The paper used notation or terminology** not covered by guide.md
+5. **A value seemed ambiguous** — multiple plausible interpretations existed
+
+If ANY trigger fired, write a discovery file to `learning/`:
+
+```
+learning/{doi_safe}_{ISO_timestamp}.json
+```
+
+```json
+{
+  "doi": "10.1234/example",
+  "type": "notation_variant|ambiguity_pattern|new_taxon|extraction_pattern|low_confidence",
+  "description": "Human-readable description of what was discovered",
+  "proposed_rule": "Specific rule to add to guide.md",
+  "affected_fields": ["field_name"],
+  "source_context": "Relevant text from the paper",
+  "trigger": "Which trigger from the list above fired"
+}
+```
+
+If NONE of these triggers fired, skip this step.

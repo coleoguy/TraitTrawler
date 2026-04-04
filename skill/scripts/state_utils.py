@@ -318,6 +318,12 @@ def update_processed(state_dir: str, doi: str, entry: dict) -> None:
     path = os.path.join(state_dir, "processed.json")
     with FileLock(path):
         processed = safe_read_json(path, default={})
+        existing = processed.get(doi, {})
+        # Preserve triage fields from earlier queue entry so we can
+        # measure triage accuracy after extraction completes.
+        for keep in ("triage", "triage_confidence"):
+            if keep in existing and keep not in entry:
+                entry[keep] = existing[keep]
         processed[doi] = entry
         safe_write_json(path, processed)
 

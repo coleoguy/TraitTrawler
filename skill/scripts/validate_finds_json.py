@@ -43,9 +43,23 @@ REQUIRED_RECORD_KEYS = {"species", "extraction_confidence", "consensus",
 SOFT_REQUIRED_RECORD_KEYS = {"source_page"}
 
 
-def validate_file(path):
+def _load_required_fields(config_path):
+    """Load required_fields from collector_config.yaml if available."""
+    if not config_path or not os.path.exists(config_path):
+        return []
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        return cfg.get("required_fields", [])
+    except Exception:
+        return []
+
+
+def validate_file(path, config_path=None):
     """Validate a single finds JSON file. Returns (ok, errors) tuple."""
     errors = []
+    project_required = _load_required_fields(config_path)
 
     # Parse JSON
     try:
@@ -125,6 +139,13 @@ def validate_file(path):
                 print(f"WARNING: {prefix}: '{key}' is empty (recommended "
                       f"but not required)", file=sys.stderr)
 
+        # Project-specific required fields from collector_config.yaml
+        for key in project_required:
+            val = rec.get(key)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                errors.append(f"{prefix}: missing project-required field "
+                              f"'{key}' (from collector_config.yaml)")
+
         # extraction_confidence must be float in [0, 1]
         ec = rec.get("extraction_confidence")
         if ec is not None:
@@ -163,6 +184,8 @@ def main():
     )
     parser.add_argument("--file", help="Single file to validate")
     parser.add_argument("--dir", help="Directory of files to validate")
+    parser.add_argument("--config", help="Path to collector_config.yaml "
+                        "(enables project-specific required_fields check)")
     args = parser.parse_args()
 
     files = []
@@ -176,7 +199,7 @@ def main():
     results = []
     all_ok = True
     for fpath in files:
-        ok, errs = validate_file(fpath)
+        ok, errs = validate_file(fpath, config_path=args.config)
         if not ok:
             all_ok = False
         results.append({
