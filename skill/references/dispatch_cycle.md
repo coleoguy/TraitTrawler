@@ -61,16 +61,19 @@ decisions and user reporting.
 
 ## Agent Spawn Templates
 
+**CRITICAL — context conservation**: NEVER paste agent .md file contents
+into Agent() prompts. Sub-agents have Read tool access and read their own
+spec from disk. The Manager passes ONLY the task-specific parameters
+(project root, handoff file, mode, etc.). This saves thousands of tokens
+per spawn and dramatically extends session lifespan.
+
 ### Searcher (background, continuous)
 
-Read `${CLAUDE_SKILL_DIR}/agents/searcher.md`. Spawn with `run_in_background=true`.
-
 ```
-Agent(model=sonnet, run_in_background=true, prompt="{searcher.md content}\n\nSEARCH QUERIES:\n{next 20 from config.py}\n\nALREADY SEEN DOIs:\n{doi list from processed.json via one-liner}\n\nPROJECT ROOT:\n{cwd}")
+Agent(model=sonnet, run_in_background=true, prompt="You are a TraitTrawler Searcher agent.\nRead your full instructions from: scripts/../agents/searcher.md (use Read tool on the CLAUDE_SKILL_DIR path, or find it via: python3 -c \"import os; print(os.path.join(os.environ.get('CLAUDE_SKILL_DIR','skill'), 'agents', 'searcher.md'))\")\n\nSEARCH QUERIES:\n{next 20 from config.py}\n\nALREADY SEEN DOIs:\n{doi list}\n\nPROJECT ROOT: {cwd}")
 ```
 
-**Batch size: 20 queries per Searcher.** The slim spec (97 lines) leaves
-ample context for processing more queries per spawn.
+**Batch size: 20 queries per Searcher.**
 
 Pass the already-seen DOI list as a simple text list (one per line), NOT
 the full processed.json. Generate it:
@@ -82,55 +85,43 @@ python3 -c "import json; [print(k) for k in json.load(open('state/processed.json
 ```bash
 python3 scripts/process_agent_output.py --action search_results --project-root .
 ```
-This returns a JSON summary: `{files, queries, new_to_queue, rejected, source_counts, sources_hit, validation}`.
-Use the summary for your decision log block and run_log event. The script
-handles all state updates (queue.json, search_log.json, processed.json,
-source_stats.json) and deletes the processed files.
+Returns: `{files, queries, new_to_queue, rejected, source_counts, sources_hit, validation}`.
 
 **Exhaustion**: Stop re-spawning when all queries in config.py have been run.
 
 ### Fetcher (background, dual-track)
 
-Read `${CLAUDE_SKILL_DIR}/agents/fetcher.md`. The Fetcher runs in two
-parallel tracks — **API** (fast, for OA papers) and **Browser** (slower,
-for paywalled papers). Both can run simultaneously.
+Two parallel tracks — **API** (fast, OA) and **Browser** (slower, paywalled).
 
-**DOI prefix routing** — classify papers using `dispatch.py`:
+**DOI prefix routing**:
 ```bash
 python3 scripts/dispatch.py route-fetch --project-root . \
     --api-batch-size 8 --browser-batch-size 3
 ```
-Returns JSON with `api_batch` and `browser_batch` arrays, classified by
-DOI prefix (OA-likely vs paywalled publishers).
 
 **Spawn two Fetchers in parallel** (both background):
 ```
-# API Fetcher — 5-8 OA-likely papers, no browser needed
-Agent(model=sonnet, run_in_background=true, prompt="{fetcher.md}\n\nFETCH MODE: api\n\nPAPERS TO FETCH:\n{api_batch}\n\nCONTACT EMAIL: {contact_email}\n\nPROJECT ROOT:\n{cwd}")
+Agent(model=sonnet, run_in_background=true, prompt="You are a TraitTrawler Fetcher agent.\nRead your full instructions from the fetcher.md file in the skill agents directory.\n\nFETCH MODE: api\nPAPERS TO FETCH:\n{api_batch}\nCONTACT EMAIL: {contact_email}\nPROJECT ROOT: {cwd}")
 
-# Browser Fetcher — 3 paywalled papers, uses Claude in Chrome
-Agent(model=sonnet, run_in_background=true, prompt="{fetcher.md}\n\nFETCH MODE: browser\n\nPAPERS TO FETCH:\n{browser_batch}\n\nPROJECT ROOT:\n{cwd}")
+Agent(model=sonnet, run_in_background=true, prompt="You are a TraitTrawler Fetcher agent.\nRead your full instructions from the fetcher.md file in the skill agents directory.\n\nFETCH MODE: browser\nPAPERS TO FETCH:\n{browser_batch}\nPROJECT ROOT: {cwd}")
 ```
 
-**On return** (either Fetcher): Process output via scripts:
+**On return**: Process output via scripts:
 ```bash
 python3 scripts/process_agent_output.py --action fetch_failures --project-root .
 python3 -c "import json,glob,sys; sys.path.insert(0,'scripts'); from state_utils import remove_from_queue; [remove_from_queue('state', json.load(open(f)).get('doi','')) for f in glob.glob('ready_for_extraction/*.json')]"
 python3 scripts/process_agent_output.py --action fetch_successes --project-root .
 ```
 
-If the API Fetcher produced failure files, **route those papers to the next
-browser batch** (they failed OA but may work via institutional access).
+Route API failures to next browser batch.
 
 **Exhaustion**: Stop re-spawning when queue.json is empty AND no Searcher running.
 
 ### Dealer (background, up to max_concurrent_dealers)
 
-Read `${CLAUDE_SKILL_DIR}/agents/dealer.md`. Spawn for each handoff file.
-Use the `handoff_files` list from `recommend` output to pick which files
-to dispatch — this prevents double-dispatching the same file.
+Use the `handoff_files` list from `recommend` to pick files.
 
-**Always register the handoff filename** in the dispatch payload:
+**Register the handoff filename**:
 ```bash
 AGENT_ID=$(python3 scripts/dispatch.py start --project-root . \
     --session-id $SESSION_ID --agent-type dealer \
@@ -138,29 +129,24 @@ AGENT_ID=$(python3 scripts/dispatch.py start --project-root . \
 ```
 
 ```
-Agent(model=sonnet, run_in_background=true, prompt="{dealer.md content}\n\nHANDOFF FILE PATH:\nready_for_extraction/{filename}\n\nPROJECT ROOT:\n{cwd}\n\nEXTRACTION MODE: {consensus|fast}")
+Agent(model=sonnet, run_in_background=true, prompt="You are a TraitTrawler Dealer agent.\nRead your full instructions from the dealer.md file in the skill agents directory.\n\nHANDOFF FILE PATH: ready_for_extraction/{filename}\nPROJECT ROOT: {cwd}\nEXTRACTION MODE: {consensus|fast}")
 ```
 
-**On return**: Process output via scripts (never read agent files into context):
+**On return**: Process output via scripts:
 ```bash
-# Process no-data/failed results → processed.json
 python3 scripts/process_agent_output.py --action dealer_results --project-root .
-# Count and register extracted papers (doesn't delete finds — Writer does that)
 python3 scripts/process_agent_output.py --action finds --project-root .
 ```
-The dealer_results script returns: `{files, no_data, failed, invalid, validation: {produced_output, all_failed}}`.
-The finds script returns: `{files, total_records, papers: [{doi, records, file}], validation: {has_records, empty_papers}}`.
 
 **Exhaustion**: Stop re-spawning when ready_for_extraction/ is empty AND
 no Fetcher running.
 
 ### Writer (foreground, serialized)
 
-Read `${CLAUDE_SKILL_DIR}/agents/writer.md`. Spawn whenever finds/ has files.
-Run in foreground — **never spawn concurrent Writers**.
+Spawn whenever finds/ has files. **Never spawn concurrent Writers.**
 
 ```
-Agent(model=sonnet, prompt="{writer.md content}\n\nPROJECT ROOT:\n{current working directory}\n\nSESSION ID: {session_id}")
+Agent(model=sonnet, prompt="You are a TraitTrawler Writer agent.\nRead your full instructions from the writer.md file in the skill agents directory.\n\nPROJECT ROOT: {cwd}\nSESSION ID: {session_id}")
 ```
 
 Spawn the Writer:
@@ -172,7 +158,6 @@ Spawn the Writer:
 ```bash
 python3 scripts/process_agent_output.py --action writer_results --project-root .
 ```
-Returns: `{files, records_written, records_rejected, records_flagged, records_duplicate, errors, validation: {has_writes, has_errors, high_reject_rate}}`.
 
 ---
 
@@ -210,18 +195,9 @@ commands:
 
 After each Dealer+Writer cycle:
 
-1. **Update usage tracker**: For each agent call that returned, estimate tokens:
-
-   | Call type | Est. input tokens | Est. output tokens |
-   |---|---|---|
-   | Searcher (5-10 queries) | ~3,000 | ~1,500 |
-   | Fetcher (1 paper) | ~500 | ~300 |
-   | Dealer+Extractor consensus (1 paper) | ~(800 × pages + 2,000) × 3 | ~(500 × records) × 3 |
-   | Dealer+Extractor fast/Opus (1 paper) | ~(800 × pages + 2,000) | ~(500 × records) |
-   | Opus escalation from consensus (1 paper) | ~(800 × pages + 2,000) | ~(500 × records) |
-   | Writer (N finds files) | ~2,000 | ~500 |
-
-   Accumulate into `usage` and the appropriate tier in `est_*_by_tier`.
+1. **Do NOT track or print token estimates.** Token counting wastes
+   Manager context and produces nothing actionable. The session will
+   naturally end when context fills or the target is reached.
 
 2. **Do NOT print per-paper progress lines.** The throughput block every
    10 papers (above) is sufficient. Per-paper lines waste context.
@@ -287,7 +263,7 @@ first to fully complete or fail before retrying.
 
 **General retry policy**:
 - Maximum 1 automatic retry per agent call
-- Track failures in session usage: `usage["agent_errors"] += 1`
+- Track failure count mentally (do NOT maintain a usage dict)
 - If 3+ agent errors occur in a session, warn the user and ask whether
   to continue
 - All errors logged to `state/run_log.jsonl`
@@ -377,8 +353,9 @@ These strategies prevent context exhaustion in long sessions:
    The Extractor Consensus agent reads the PDF directly from the file path.
    The Manager only sees the return summary (records count, outcome, confidence).
 
-4. **Re-read agent .md files** when spawning — they're the source of truth.
-   If context compacts, re-read the relevant agent spec before the next spawn.
+4. **Never read agent .md files** into Manager context. Sub-agents have
+   Read tool access and load their own specs from disk. The Manager only
+   passes task-specific parameters (handoff file, project root, mode).
 
 5. **Folder-based self-checkpointing**: files in `finds/`,
    `ready_for_extraction/`, `learning/` persist across sessions and context

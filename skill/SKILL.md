@@ -57,6 +57,9 @@ what to do next, spawn agents, review results, and manage knowledge evolution.
 - **Create combined/hybrid agents** — never spawn an agent that both
   searches for papers AND extracts data. Each agent type has one job.
   The pipeline stages (search → fetch → deal → write) exist for a reason.
+- **Read agent .md files** (`searcher.md`, `fetcher.md`, `dealer.md`,
+  `writer.md`, etc.) into your context. Sub-agents read their own specs
+  from disk. You pass only task parameters in the Agent() prompt.
 - **Read full contents of** `results.csv`, `processed.json`, `queue.json`,
   `search_log.json`, or `guide.md` into your context — use lightweight
   one-liners (wc -l, grep -c, python3 -c) for counts only
@@ -115,6 +118,11 @@ the conversation so the user can monitor pipeline health. See
 **Skill directory**: `${CLAUDE_SKILL_DIR}`
 **Agent specs**: `${CLAUDE_SKILL_DIR}/agents/` (one .md per agent type)
 **Project root**: the current working directory
+
+**CRITICAL — context conservation**: NEVER read agent .md files into your
+context. When spawning sub-agents, pass only task-specific parameters
+(project root, handoff file, mode). Sub-agents read their own spec from
+disk using the Read tool. This saves thousands of tokens per spawn.
 
 ---
 
@@ -354,15 +362,18 @@ stopping. Never leave half-extracted records.
    python3 scripts/process_agent_output.py --action consolidate_leads --project-root .
    ```
 
-3. **Knowledge review**: If `learning/` has files, spawn a Reviewer agent:
+3. **Knowledge review**: Check if `learning/` has files:
+   ```bash
+   ls learning/*.json 2>/dev/null | wc -l
    ```
-   Agent(model=sonnet, prompt="{reviewer.md content}\n\nPROJECT ROOT:\n{cwd}\n\nGUIDE PATH:\nguide.md")
+   If count > 0, spawn a Reviewer agent (do NOT read reviewer.md — the
+   agent reads its own spec from disk):
+   ```
+   Agent(model=sonnet, prompt="You are a TraitTrawler Knowledge Reviewer agent.\nRead your full instructions from the reviewer.md file in the skill agents directory.\n\nPROJECT ROOT: {cwd}\nGUIDE PATH: guide.md")
    ```
    The Reviewer returns JSON with `routine` (proposed diffs) and `structural`
    (proposed amendments). Present each proposal to the user for approval/rejection.
    Archive decisions to `state/discoveries.jsonl` with `applied: true/false`.
-   For detail on the review protocol, see
-   `${CLAUDE_SKILL_DIR}/references/knowledge_and_transfer.md`.
 
 4. **Run session teardown** — handles verify, QC, calibration, per-query
    yield analysis, dashboard regeneration, and session_end logging:
@@ -382,8 +393,9 @@ stopping. Never leave half-extracted records.
 
 5. **Print session summary** with: session_id, papers processed, records
    added, source breakdown, leads, flagged, database totals, queue/queries
-   remaining, discoveries. Include a **Usage** block: model calls by tier,
-   pages read.
+   remaining, discoveries, triage accuracy (from session report), and
+   needs_attention count. Do NOT track or report token estimates — this
+   wastes Manager context.
 
 **Core principle for knowledge evolution**: the agent proposes, the human
 decides. Never silently edit `guide.md`, `extraction_examples.md`, or

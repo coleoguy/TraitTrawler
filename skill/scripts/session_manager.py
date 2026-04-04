@@ -194,6 +194,7 @@ def ensure_directories(project_root):
     dirs = [
         "state/extraction_traces", "state/snapshots", "state/dealt",
         "state/session_reports",
+        "backups",
         "finds", "ready_for_extraction", "search_results",
         "fetch_failures", "dealer_results", "writer_results", "lead_files",
         "learning", "provided_pdfs", "provided_pdfs/done",
@@ -203,7 +204,12 @@ def ensure_directories(project_root):
 
 
 def backup_state(project_root, session_id):
-    """Create timestamped backups of critical state files."""
+    """Create timestamped backups of critical state files.
+
+    Two backup locations:
+    - state/snapshots/ — rolling window of 10 (for quick recovery)
+    - backups/ — permanent archive of results.csv at each session start
+    """
     snapshots = os.path.join(project_root, "state", "snapshots")
     os.makedirs(snapshots, exist_ok=True)
 
@@ -226,6 +232,15 @@ def backup_state(project_root, session_id):
             os.remove(old)
         except OSError:
             pass
+
+    # Permanent backup of results.csv in backups/ (never pruned)
+    backup_dir = os.path.join(project_root, "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    results_src = os.path.join(project_root, "results.csv")
+    if os.path.exists(results_src):
+        backup_dst = os.path.join(backup_dir, f"results_{ts}.csv")
+        shutil.copy2(results_src, backup_dst)
+        backed_up.append(f"backups/results_{ts}.csv")
 
     return backed_up
 
