@@ -36,14 +36,13 @@ The remaining seed papers are used for guide.md learning below.
 
 ## Calibration Extraction
 
-Process each seed paper through the full v4 pipeline:
-1. Spawn **Sonnet-Fetcher** to acquire the PDF
-2. Spawn **Sonnet-Dealer** to coordinate extraction (use whatever
-   `extraction_mode` the user chose — consensus or fast)
-3. Spawn **Sonnet-Writer** to validate and write to results.csv
+Process each seed paper through the full pipeline:
+1. Spawn **Fetcher** to acquire the PDF
+2. Spawn **Extractor** to extract records
+3. Run **Auditor** to verify, then `scrub.py` and `write_finds.py`
 
-During calibration, instruct the Dealer to be aggressive about discovery
-logging:
+During calibration, instruct the Extractor to be aggressive about
+discovery logging:
 - Log **every** notation variant, terminology, and extraction pattern to
   `learning/` — even things that seem obvious
 - Note document structure: Where does trait data typically appear? Tables?

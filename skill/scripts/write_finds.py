@@ -6,9 +6,7 @@ Processes finds/ JSON files through: parse → taxonomy resolution →
 confidence calibration → field stripping → validation + dedup + write
 (via csv_writer.py) → verify → cleanup → summary.
 
-Replaces the prose instructions in writer.md with deterministic logic.
-The Writer agent calls this script instead of re-implementing the
-pipeline each spawn.
+The Manager calls this script directly (no agent spawn needed).
 
 Usage:
     python3 scripts/write_finds.py --project-root . --session-id 20260328T142904
@@ -23,6 +21,8 @@ import json
 import os
 import subprocess
 import sys
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone
 
 # Add scripts/ to path so we can import csv_writer
@@ -37,8 +37,128 @@ def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# Fields that are internal to the consensus process — strip before CSV write
+def _archive_file(path):
+    """Move a processed file to deprecated/ in its parent directory."""
+    parent = os.path.dirname(path)
+    dep_dir = os.path.join(parent, "deprecated")
+    os.makedirs(dep_dir, exist_ok=True)
+    dest = os.path.join(dep_dir, os.path.basename(path))
+    try:
+        os.rename(path, dest)
+    except OSError:
+        try:
+            import shutil
+            shutil.move(path, dest)
+        except (OSError, PermissionError):
+            pass
+
+
+# Internal fields — strip before CSV write
 INTERNAL_FIELDS = {"agent_values", "enumeration_inventory_size"}
+
+# Metadata fields that Crossref can backfill
+_METADATA_FIELDS = {"paper_authors", "paper_title", "paper_year",
+                     "first_author", "paper_journal"}
+
+_CROSSREF_CACHE = {}  # doi → metadata dict (per-run cache)
+
+
+def _crossref_lookup(doi):
+    """Fetch metadata for a single DOI from Crossref. Returns dict or None."""
+    if doi in _CROSSREF_CACHE:
+        return _CROSSREF_CACHE[doi]
+
+    url = f"https://api.crossref.org/works/{urllib.request.quote(doi, safe='')}"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "TraitTrawler/4.4 (mailto:coleoguy@gmail.com)",
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        msg = data.get("message", {})
+        authors_raw = msg.get("author", [])
+        authors = []
+        first = ""
+        for a in authors_raw:
+            name = f"{a.get('given', '')} {a.get('family', '')}".strip()
+            if name:
+                authors.append(name)
+                if not first:
+                    first = a.get("family", name)
+
+        title_list = msg.get("title", [])
+        title = title_list[0] if title_list else ""
+
+        year = None
+        for date_field in ("published-print", "published-online",
+                           "issued", "created"):
+            parts = (msg.get(date_field, {}).get("date-parts") or [[]])[0]
+            if parts and parts[0]:
+                year = parts[0]
+                break
+
+        journal_list = msg.get("container-title", [])
+        journal = journal_list[0] if journal_list else ""
+
+        result = {
+            "paper_authors": "; ".join(authors) if authors else "",
+            "first_author": first,
+            "paper_title": title,
+            "paper_year": year,
+            "paper_journal": journal,
+        }
+        _CROSSREF_CACHE[doi] = result
+        return result
+    except (urllib.error.URLError, urllib.error.HTTPError,
+            json.JSONDecodeError, OSError, KeyError):
+        _CROSSREF_CACHE[doi] = None
+        return None
+
+
+def backfill_metadata(records):
+    """Backfill missing paper metadata from Crossref for records with DOIs.
+
+    Only queries Crossref for DOIs where at least one metadata field is empty.
+    Returns count of records updated.
+    """
+    updated = 0
+    dois_needing_lookup = set()
+
+    for rec in records:
+        doi = str(rec.get("doi", "")).strip()
+        if not doi:
+            continue
+        missing = [f for f in _METADATA_FIELDS
+                   if not str(rec.get(f, "")).strip()]
+        if missing:
+            dois_needing_lookup.add(doi)
+
+    if not dois_needing_lookup:
+        return 0
+
+    # Batch lookup (one HTTP call per unique DOI)
+    lookup = {}
+    for doi in dois_needing_lookup:
+        result = _crossref_lookup(doi)
+        if result:
+            lookup[doi] = result
+
+    # Apply to records
+    for rec in records:
+        doi = str(rec.get("doi", "")).strip()
+        if doi not in lookup:
+            continue
+        meta = lookup[doi]
+        filled = False
+        for field in _METADATA_FIELDS:
+            if not str(rec.get(field, "")).strip() and meta.get(field):
+                rec[field] = meta[field]
+                filled = True
+        if filled:
+            updated += 1
+
+    return updated
 
 
 def load_config(project_root):
@@ -234,7 +354,8 @@ def process_finds(project_root, session_id):
     results_dir = os.path.join(project_root, "writer_results")
     os.makedirs(results_dir, exist_ok=True)
 
-    # Collect finds files, oldest first
+    # Collect finds files, oldest first.
+    # Glob('*.json') naturally skips the deprecated/ subdirectory.
     pattern = os.path.join(finds_dir, "*.json")
     files = sorted(glob.glob(pattern))
 
@@ -246,6 +367,7 @@ def process_finds(project_root, session_id):
             "records_flagged": 0,
             "records_duplicate": 0,
             "taxonomy_resolved": 0,
+            "metadata_backfilled": 0,
             "errors": [],
         }
         json.dump(summary, sys.stdout, indent=2)
@@ -269,6 +391,24 @@ def process_finds(project_root, session_id):
         except (json.JSONDecodeError, OSError):
             pass
 
+    # Snapshot results.csv before writing (rolling window of 3)
+    results_csv = os.path.join(project_root, "results.csv")
+    if os.path.exists(results_csv) and os.path.getsize(results_csv) > 0:
+        snap_dir = os.path.join(project_root, "state", "snapshots")
+        os.makedirs(snap_dir, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        snap_path = os.path.join(snap_dir, f"results_prewrite_{ts}.csv")
+        try:
+            import shutil
+            shutil.copy2(results_csv, snap_path)
+            # Keep only last 3 pre-write snapshots
+            prewrite_snaps = sorted(glob.glob(
+                os.path.join(snap_dir, "results_prewrite_*.csv")))
+            for old in prewrite_snaps[:-3]:
+                os.remove(old)
+        except OSError:
+            pass
+
     # Initialize the schema-enforced writer
     writer = SchemaEnforcedWriter(project_root)
 
@@ -277,6 +417,7 @@ def process_finds(project_root, session_id):
     total_flagged = 0
     total_duplicate = 0
     total_taxonomy = 0
+    total_backfilled = 0
     errors = []
     files_processed = 0
 
@@ -309,12 +450,9 @@ def process_finds(project_root, session_id):
 
         records = data.get("records", [])
         if not records:
-            # Valid file but no records — clean up
+            # Valid file but no records — archive
             files_processed += 1
-            try:
-                os.remove(fpath)
-            except OSError:
-                pass
+            _archive_file(fpath)
             continue
 
         # Step 3: Taxonomy resolution
@@ -370,6 +508,10 @@ def process_finds(project_root, session_id):
                       f"{fname} has no pdf_path — provenance broken",
                       file=sys.stderr)
 
+        # Step 6b: Backfill missing metadata from Crossref
+        backfilled = backfill_metadata(records)
+        total_backfilled += backfilled
+
         # Step 7: Write via SchemaEnforcedWriter (handles validation,
         # dedup, atomic write, post-write verification)
         try:
@@ -397,16 +539,9 @@ def process_finds(project_root, session_id):
             # Don't delete on write failure
             continue
 
-        # Step 8: Cleanup on success
+        # Step 8: Archive on success
         files_processed += 1
-        try:
-            os.remove(fpath)
-        except OSError as e:
-            errors.append({
-                "file": fname,
-                "stage": "cleanup",
-                "details": f"Could not delete: {e}",
-            })
+        _archive_file(fpath)
 
     # Write summary
     summary = {
@@ -416,6 +551,7 @@ def process_finds(project_root, session_id):
         "records_flagged": total_flagged,
         "records_duplicate": total_duplicate,
         "taxonomy_resolved": total_taxonomy,
+        "metadata_backfilled": total_backfilled,
         "errors": errors,
     }
 
@@ -429,6 +565,51 @@ def process_finds(project_root, session_id):
 
     json.dump(summary, sys.stdout, indent=2)
     print()
+
+    # v5: Run inline QC after writing (auto-fix, audit queue, human queue)
+    if total_written > 0:
+        inline_qc_script = os.path.join(project_root, "scripts",
+                                         "inline_qc.py")
+        if os.path.exists(inline_qc_script):
+            try:
+                subprocess.run(
+                    [sys.executable, inline_qc_script,
+                     "--project-root", project_root,
+                     "--session-id", session_id or ""],
+                    timeout=120, capture_output=True, text=True,
+                )
+            except (subprocess.TimeoutExpired, OSError) as e:
+                print(f"WARNING: inline_qc.py failed: {e}",
+                      file=sys.stderr)
+
+        # v5: Auto-calibration trigger (every 20 records)
+        cal_meta_path = os.path.join(project_root, "state",
+                                      "calibration_meta.json")
+        try:
+            if os.path.exists(cal_meta_path):
+                with open(cal_meta_path, "r") as f:
+                    cal_meta = json.load(f)
+            else:
+                cal_meta = {"records_since_last": 0}
+            cal_meta["records_since_last"] = (
+                cal_meta.get("records_since_last", 0) + total_written)
+            if cal_meta["records_since_last"] >= 20:
+                cal_script = os.path.join(project_root, "scripts",
+                                           "calibration.py")
+                if os.path.exists(cal_script):
+                    subprocess.run(
+                        [sys.executable, cal_script,
+                         "--project-root", project_root],
+                        timeout=60, capture_output=True, text=True,
+                    )
+                    cal_meta["records_since_last"] = 0
+                    cal_meta["last_calibration"] = now_iso()
+            with open(cal_meta_path, "w") as f:
+                json.dump(cal_meta, f, indent=2)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"WARNING: calibration trigger failed: {e}",
+                  file=sys.stderr)
+
     return summary
 
 

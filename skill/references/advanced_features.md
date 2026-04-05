@@ -63,7 +63,7 @@ filesystem-safe naming).
       "confidence_rationale": "Full text, explicit values in table, methods section describes technique → 0.92"
     }
   ],
-  "consensus_traces": null
+  "verification": "confirmed"
 }
 ```
 
@@ -461,10 +461,10 @@ Between each paper in the main loop (§3b), check for user input signals:
 
 - "skip" or "next" → skip the current paper, mark as processed with
   `"outcome": "user_skipped"`
-- "redo" or "redo last" → re-extract the previous paper
 - "pause" → stop after the current paper, don't end the session
-- "show trace" → display the chain-of-thought trace for the last record
-- "consensus on last" → trigger consensus extraction for the last paper
+- "status" → print pipeline state
+- "review" → show next item from human review queue
+- "explore [question]" → query data with python one-liners
 
 ### 27c. Live confidence updates
 

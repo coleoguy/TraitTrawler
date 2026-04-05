@@ -42,12 +42,94 @@ def _hash_pdf(path):
     return h.hexdigest()
 
 
+def _crossref_lookup(doi):
+    """Query Crossref for clean metadata given a DOI. Returns dict or None."""
+    import urllib.request
+    import urllib.error
+    try:
+        url = f"https://api.crossref.org/works/{urllib.request.quote(doi, safe='')}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "TraitTrawler/5.0 (mailto:traittrawler@example.com)"
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        item = data.get("message", {})
+        meta = {"doi": doi}
+        # Title
+        titles = item.get("title", [])
+        if titles:
+            meta["title"] = titles[0]
+        # Authors
+        authors = item.get("author", [])
+        if authors:
+            parts = []
+            for a in authors:
+                family = a.get("family", "")
+                given = a.get("given", "")
+                if family:
+                    parts.append(f"{family}, {given}" if given else family)
+            meta["authors"] = "; ".join(parts)
+        # Year
+        for date_field in ("published-print", "published-online",
+                           "issued", "created"):
+            dp = item.get(date_field, {}).get("date-parts", [[]])
+            if dp and dp[0] and dp[0][0]:
+                meta["year"] = str(dp[0][0])
+                break
+        # Journal
+        containers = item.get("container-title", [])
+        if containers:
+            meta["journal"] = containers[0]
+        return meta
+    except Exception:
+        return None
+
+
+def _extract_meta_from_filename(filename):
+    """Try to extract author and year from the original filename.
+
+    Common patterns: smith1951.pdf, dutrillaux2013.pdf, angus2020.pdf,
+    cabral-de-mello2011.pdf, Galian-1995-Heredity.pdf
+    """
+    stem = os.path.splitext(filename)[0]
+    # Remove common prefixes/suffixes
+    stem = re.sub(r'\s*\(\d+\)\s*$', '', stem)  # " (1)" duplicates
+    stem = re.sub(r'^[\d._]+', '', stem)  # leading DOI-like numbers
+
+    meta = {}
+
+    # Pattern: name followed by 4-digit year
+    m = re.match(r'^([a-zA-Z][a-zA-Z_-]+?)\s*[-_]?\s*((?:19|20)\d{2})', stem)
+    if m:
+        author_part = m.group(1).strip('-_ ')
+        meta["authors"] = author_part.replace('_', ' ').replace('-', ' ').title()
+        meta["year"] = m.group(2)
+        return meta
+
+    # Pattern: Year-Author or Author-Year-Journal
+    parts = re.split(r'[-_]', stem)
+    for p in parts:
+        if re.match(r'^(19|20)\d{2}$', p):
+            meta["year"] = p
+        elif re.match(r'^[A-Z][a-z]{2,}$', p) and "authors" not in meta:
+            meta["authors"] = p
+
+    return meta if meta else {}
+
+
 def _extract_doi_from_pdf(pdf_path):
-    """Read first 2 pages, extract DOI if embedded."""
+    """Extract DOI and metadata from a PDF.
+
+    Strategy:
+    1. Scan PDF text for DOI
+    2. If DOI found → query Crossref for clean metadata (preferred)
+    3. If Crossref fails or no DOI → try filename-based extraction
+    4. Last resort → parse PDF text (unreliable)
+    """
     try:
         import pdfplumber
     except ImportError:
-        return None, {}
+        return None, _extract_meta_from_filename(os.path.basename(pdf_path))
 
     try:
         with pdfplumber.open(str(pdf_path)) as pdf:
@@ -56,39 +138,54 @@ def _extract_doi_from_pdf(pdf_path):
                 t = page.extract_text()
                 if t:
                     text += t + "\n"
-        if not text.strip():
-            return None, {}
+    except Exception:
+        return None, _extract_meta_from_filename(os.path.basename(pdf_path))
 
-        meta = {}
+    if not text.strip():
+        return None, _extract_meta_from_filename(os.path.basename(pdf_path))
 
-        # DOI
-        doi_match = re.search(
-            r"(?:doi[:\s]*|https?://doi\.org/)(10\.\d{4,5}/[^\s,;\"']+)",
-            text[:3000], re.IGNORECASE)
-        if doi_match:
-            meta["doi"] = doi_match.group(1).rstrip(".")
+    meta = {}
 
-        # Title (first substantial line)
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-        for line in lines[:5]:
-            if len(line) > 10 and not line.startswith("http"):
-                meta["title"] = line
-                break
+    # Step 1: Find DOI in PDF text
+    doi_match = re.search(
+        r"(?:doi[:\s]*|https?://doi\.org/)(10\.\d{4,5}/[^\s,;\"']+)",
+        text[:5000], re.IGNORECASE)
+    if doi_match:
+        doi = doi_match.group(1).rstrip(".")
+        meta["doi"] = doi
 
-        # Year
+        # Step 2: Crossref lookup (clean, reliable metadata)
+        cr = _crossref_lookup(doi)
+        if cr:
+            meta.update(cr)
+            return doi, meta
+
+    # Step 3: Try filename-based extraction
+    fn_meta = _extract_meta_from_filename(os.path.basename(pdf_path))
+    if fn_meta:
+        for k, v in fn_meta.items():
+            if k not in meta:
+                meta[k] = v
+
+    # Step 4: PDF text fallback (only for fields still missing)
+    if "year" not in meta:
         year_match = re.search(r"\b(19\d{2}|20[0-2]\d)\b", text[:2000])
         if year_match:
             meta["year"] = year_match.group(1)
 
-        # Authors
+    # Only try PDF text for title/authors if we have nothing else
+    if "title" not in meta and "authors" not in meta:
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        # Title: skip short lines, headers, dates, URLs
         for line in lines[:8]:
-            if re.search(r"[A-Z][a-z]+,?\s+[A-Z]\.?", line):
-                meta["authors"] = line
+            if (len(line) > 20 and not line.startswith("http")
+                    and not re.match(r'^(Received|Accepted|Published|Vol\.|©)',
+                                     line, re.IGNORECASE)
+                    and not re.match(r'^\d', line)):
+                meta["title"] = line[:200]
                 break
 
-        return meta.get("doi"), meta
-    except Exception:
-        return None, {}
+    return meta.get("doi"), meta
 
 
 def route_provided_pdfs(project_root, session_id=None):
@@ -113,8 +210,8 @@ def route_provided_pdfs(project_root, session_id=None):
             pdf_files.append(f)
 
     if not pdf_files:
-        return {"found": 0, "skipped_hash": 0, "linked": 0,
-                "queued": 0, "skipped_existing": 0}
+        return {"found": 0, "skipped_hash": 0, "skipped_processed": 0,
+                "linked": 0, "queued": 0, "skipped_existing": 0}
 
     # Load hash registry
     registry_path = state_dir / "processed_pdfs.json"
@@ -145,7 +242,11 @@ def route_provided_pdfs(project_root, session_id=None):
         else:
             fieldnames.append("pdf_path")
 
+    # Load processed.json for pre-extraction dedup
+    processed = safe_read_json(str(state_dir / "processed.json"), default={})
+
     skipped_hash = 0
+    skipped_processed = 0
     linked = 0
     queued = 0
     skipped_existing = 0
@@ -161,6 +262,26 @@ def route_provided_pdfs(project_root, session_id=None):
         # 2. Extract DOI from PDF
         doi, meta = _extract_doi_from_pdf(pdf)
 
+        # 2b. Check processed.json BEFORE extraction (catches papers
+        #     already extracted in prior sessions, including no-data)
+        already_done = False
+        if doi and doi in processed:
+            prior = processed[doi]
+            if isinstance(prior, dict) and prior.get("outcome") in (
+                    "extracted", "no_data", "imported", "triage_rejected",
+                    "lead_needs_fulltext"):
+                already_done = True
+        if not already_done:
+            title = (meta.get("title", "") or "").strip()
+            if title:
+                title_key = f"title:{title[:120]}"
+                if title_key in processed:
+                    prior = processed[title_key]
+                    if isinstance(prior, dict) and prior.get("outcome") in (
+                            "extracted", "no_data", "imported",
+                            "triage_rejected"):
+                        already_done = True
+
         # 3. Build standardized path
         abs_path, rel_path = build_source_path(
             project_root,
@@ -170,8 +291,30 @@ def route_provided_pdfs(project_root, session_id=None):
             doi=doi,
         )
 
-        # 4. Move PDF to pdfs/
+        # 4. Move PDF to pdfs/ (always — even if skipping extraction,
+        #    the user's PDF should be in the standardized library)
         shutil.move(str(pdf), abs_path)
+
+        # 4b. If already processed, register hash and skip handoff
+        if already_done:
+            skipped_processed += 1
+            registry[digest] = {
+                "filename": pdf.name,
+                "standardized": rel_path,
+                "doi": doi or "",
+                "outcome": "skipped_already_processed",
+                "session_id": session_id or "",
+                "processed_at": now_iso(),
+            }
+            append_jsonl(str(log_path), {
+                "event": "provided_pdf_routed",
+                "original": pdf.name,
+                "standardized": rel_path,
+                "doi": doi or "",
+                "outcome": "skipped_already_processed",
+                "timestamp": now_iso(),
+            })
+            continue
 
         # 5. Check DOI in results.csv
         outcome = "queued_for_extraction"
@@ -247,6 +390,7 @@ def route_provided_pdfs(project_root, session_id=None):
     return {
         "found": len(pdf_files),
         "skipped_hash": skipped_hash,
+        "skipped_processed": skipped_processed,
         "linked": linked,
         "queued": queued,
         "skipped_existing": skipped_existing,

@@ -177,7 +177,7 @@ The Searcher should note journal-level yield patterns in its output so
 the Manager can update `guide.md` over time.
 
 **Triage quality target**: False positive rate should stay below 30%.
-If more than 30% of papers dispatched to dealers return `no_data`, the
+If more than 30% of papers dispatched to extractors return `no_data`, the
 search queries or triage rules need tightening. The Manager should report
 this metric and suggest adjustments.
 

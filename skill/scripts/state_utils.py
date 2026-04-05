@@ -319,6 +319,8 @@ def update_processed(state_dir: str, doi: str, entry: dict) -> None:
     with FileLock(path):
         processed = safe_read_json(path, default={})
         existing = processed.get(doi, {})
+        if not isinstance(existing, dict):
+            existing = {}
         # Preserve triage fields from earlier queue entry so we can
         # measure triage accuracy after extraction completes.
         for keep in ("triage", "triage_confidence"):
@@ -363,12 +365,32 @@ def add_to_queue(state_dir: str, papers: list) -> int:
     path = os.path.join(state_dir, "queue.json")
     with FileLock(path):
         queue = safe_read_json(path, default=[])
-        existing_dois = {item.get("doi") for item in queue}
+        # Build dedup keys: DOI when available, title-based key otherwise
+        existing_keys = set()
+        for item in queue:
+            doi = (item.get("doi") or "")
+            if isinstance(doi, str) and doi.strip():
+                existing_keys.add(doi.strip())
+            else:
+                title = (item.get("title") or "").strip()
+                if title:
+                    existing_keys.add(f"title:{title[:120].lower()}")
         added = 0
         for paper in papers:
-            if paper.get("doi") and paper["doi"] not in existing_dois:
+            doi = (paper.get("doi") or "")
+            doi = doi.strip() if isinstance(doi, str) else ""
+            title = (paper.get("title") or "").strip()
+
+            # Must have DOI or title for identification
+            if not doi and not title:
+                continue
+
+            key = doi if doi else f"title:{title[:120].lower()}"
+            if key not in existing_keys:
+                # Normalize: ensure doi is a string, never None
+                paper["doi"] = doi
                 queue.append(paper)
-                existing_dois.add(paper["doi"])
+                existing_keys.add(key)
                 added += 1
         safe_write_json(path, queue)
     return added
@@ -470,7 +492,6 @@ def check_state_integrity(project_root: str) -> dict:
         "search_log.json": dict,
         "taxonomy_cache.json": dict,
         "source_stats.json": dict,
-        "consensus_stats.json": dict,
     }
 
     for filename, expected_type in expected_files.items():
@@ -557,7 +578,6 @@ def main():
                     "search_log.json": {},
                     "taxonomy_cache.json": {},
                     "source_stats.json": {},
-                    "consensus_stats.json": {},
                 }
                 for filename, default in defaults.items():
                     path = os.path.join(state_dir, filename)

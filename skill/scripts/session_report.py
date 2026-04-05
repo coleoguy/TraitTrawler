@@ -155,7 +155,7 @@ def generate_report(project_root, session_id=None, as_json=False):
     # --- Extraction Analysis ---
     extraction_events = [e for e in run_log
                          if e.get("event") == "agent_returned"
-                         and e.get("agent_type") == "dealer"]
+                         and e.get("agent_type") in ("dealer", "extractor")]
     total_records_extracted = 0
     consensus_types = defaultdict(int)
     no_data_count = 0
@@ -201,7 +201,7 @@ def generate_report(project_root, session_id=None, as_json=False):
             triage_outcomes[triage]["other"] += 1
 
     # --- Throughput ---
-    papers_extracted = agent_counts.get("dealer", 0)
+    papers_extracted = agent_counts.get("extractor", 0) or agent_counts.get("dealer", 0)
     duration_hours = session_duration.total_seconds() / 3600 if session_duration else 0
     papers_per_hour = papers_extracted / duration_hours if duration_hours > 0 else 0
     records_per_hour = total_records_extracted / duration_hours if duration_hours > 0 else 0
@@ -266,7 +266,7 @@ def generate_report(project_root, session_id=None, as_json=False):
     }
 
     # Agent duration stats
-    for agent_type in ["searcher", "fetcher", "dealer", "writer"]:
+    for agent_type in ["searcher", "fetcher", "extractor", "auditor"]:
         durations = agent_durations.get(agent_type, [])
         total = agent_counts.get(agent_type, 0)
         successes = agent_successes.get(agent_type, 0)
@@ -345,7 +345,7 @@ def generate_report(project_root, session_id=None, as_json=False):
     lines.append("")
 
     lines.append("── Agent Performance ──────────────────────────")
-    for agent_type in ["searcher", "fetcher", "dealer", "writer"]:
+    for agent_type in ["searcher", "fetcher", "extractor", "auditor"]:
         ap = report["agent_performance"][agent_type]
         if ap["calls"] == 0:
             continue

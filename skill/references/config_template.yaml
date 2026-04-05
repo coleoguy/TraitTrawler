@@ -42,19 +42,13 @@ batch_size: 20
 # Print a rolling progress update every N papers.
 report_every: 5
 
-# --- v4 Extraction pipeline ---
-# "consensus" (default): 3 Sonnet agents per paper with majority-rule voting.
-#   Best accuracy. ~3x extraction token cost per paper.
-# "fast": 1 Sonnet agent per paper, no voting. Use for exploratory runs,
-#   well-understood traits, or when budget is tight.
-extraction_mode: consensus
+# Extraction mode. v5 always uses extract + Auditor verification.
+extraction_mode: extract_verify
 
-# How many papers to extract in parallel. Each Dealer handles one paper.
-# In consensus mode, each Dealer spawns 3 extraction agents, so peak
-# concurrent agents = max_concurrent_dealers * 3.
+# How many papers to extract in parallel. Each Extractor handles one paper.
 # Increase to 3-4 if extraction is the bottleneck; set to 1 for debugging.
 concurrency:
-  max_concurrent_dealers: 2
+  max_concurrent_extractors: 2
 
 taxonomy_api: "gbif"
 
@@ -101,23 +95,16 @@ output_fields:
   - pdf_url
   - notes
   - processed_date
-  # --- Calibration & consensus ---
+  # --- Calibration & verification ---
   - calibrated_confidence
   - consensus
-  - extraction_trace_id
+  - consensus_vote
+  - verification
+  - verification_notes
   # --- Audit tracking ---
   - audit_status
   - audit_session
   - audit_prior_values
-
-# --- Model routing (v4) ---
-# v4 uses a simpler two-tier model: Opus manages, Sonnet works.
-# Opus escalation happens automatically when Sonnet consensus fails.
-# You generally don't need to change these defaults.
-# model_routing:
-#   manager: opus         # Coordinator (this is the skill's default model)
-#   sub_processes: sonnet  # All pipeline agents (search, fetch, extract, write)
-#   escalation: opus       # Triggered when consensus fails on a paper
 
 # --- Audit mode (optional) ---
 # Self-cleaning: re-examines low-confidence, statistically anomalous, and
@@ -206,15 +193,9 @@ taxonomy_resolution: true
 #     max: 200000
 #     on_fail: flag
 
-# --- Consensus extraction (v4) ---
-# In v4, consensus is controlled by extraction_mode above (consensus/fast).
-# When extraction_mode is "consensus", ALL papers get 3-agent voting.
-# When extraction_mode is "fast", papers get single-agent extraction.
-# The user chooses the mode at session start.
-# These settings fine-tune consensus behavior:
-# consensus_config:
-#   opus_escalation: true         # Escalate to Opus when Sonnet consensus fails
-#   opus_confidence_threshold: 0.7 # Opus result accepted if mean confidence >= this
+# --- Legacy consensus settings (v4, no longer used) ---
+# v5 uses extract + mandatory Auditor verification for all papers.
+# These settings are ignored but preserved for backward compatibility.
 
 # --- Confidence calibration (optional, §19) ---
 # Post-hoc calibration transforms raw confidence heuristics into

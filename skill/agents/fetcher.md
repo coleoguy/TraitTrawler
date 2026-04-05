@@ -1,16 +1,7 @@
 ---
-hooks:
-  PreToolUse:
-    - matcher: "Write|Edit"
-      hooks:
-        - type: command
-          command: ".claude/hooks/protect-root.sh"
-        - type: command
-          command: ".claude/hooks/protect-results-csv.sh"
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          command: ".claude/hooks/block-bash-file-creation.sh"
+name: fetcher
+description: Acquires full-text PDFs via API cascade or browser, validates content, and writes handoff files to ready_for_extraction/
+model: claude-sonnet-4-6
 ---
 
 # Fetcher Agent

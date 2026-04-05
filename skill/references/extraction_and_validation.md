@@ -342,8 +342,8 @@ extraction should be triggered:
    - Resolve by field-level voting
    - Update records with consensus results
 
-See [consensus_extraction.md](references/consensus_extraction.md) §21 for
-the full three-pass protocol and resolution rules.
+v5 uses extract-once + mandatory Auditor verification instead of the
+legacy three-pass consensus protocol.
 
 ### 7e-4. Confidence calibration application (§19)
 
@@ -629,8 +629,8 @@ EXTRACTION RULES:
 5. Every record MUST have a non-empty family field. If not in the paper,
    look up the genus via GBIF (or state/taxonomy_cache.json).
 
-Pipeline: Fetch PDF (§5) → Extract records (§7) → Taxonomy check (§16) →
-Validate (§7f) → Write via scripts/csv_writer.py (§8)
+Pipeline: Fetch PDF (§5) → Extract records (§7) → Scrub finds (Scrubber) →
+Taxonomy check (§16) → Validate (§7f) → Write via scripts/csv_writer.py (§8)
 
 Return a JSON summary: {"records_added": N, "flags": N, "errors": [...],
   "doi": "...", "pdf_source": "...", "outcome": "extracted|lead_needs_fulltext|failed"}

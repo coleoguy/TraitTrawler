@@ -4,6 +4,47 @@ All notable changes to TraitTrawler will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.1.0] — 2026-04-04
+
+### Fixed
+- **Double-write bug**: `write_finds.py` now tracks successfully written files in `state/written_finds.json`. Files that can't be deleted (macOS sandbox permissions) are skipped on re-run instead of re-appending all records. This caused the coleoweekend session to inflate from 7,019 to 13,308 records.
+- **QC queue duplication**: `inline_qc.py` appended duplicate entries every run because it re-scanned all of results.csv without checking for existing entries. Both `append_audit_queue` and `append_human_review_queue` now deduplicate by composite key before appending. Coleoweekend had 6,960 human review rows but only 1,084 unique.
+- **Cross-paper conflict O(n^2) explosion**: Conflict detection generated C(k,2) entries for k distinct values per species. Now collapses to ONE entry per species+field with all values listed. Numeric fields (2n, n) get a tolerance band (±2 for 2n, ±1 for n) so B-chromosome polymorphism and counting ambiguity are auto-skipped.
+- **processed.json crash on bool values**: `state_utils.py update_processed` crashed when existing entry was `True` instead of a dict. Now guards with `isinstance` check.
+- **flag_for_review type leak**: `scrub.py` now coerces non-boolean values (integers leaking from trait fields) to `"False"` before csv_writer sees them.
+- **Pre-extraction duplicate waste**: `route_provided_pdfs.py` now checks `processed.json` by DOI and title before creating handoffs. Papers already extracted in prior sessions are skipped at routing time (zero extraction cost). Extractor Step 0 also checks as a safety net.
+
+### Added
+- **Pre-write snapshots**: `write_finds.py` snapshots results.csv before every append to `state/snapshots/results_prewrite_{timestamp}.csv` (rolling window of 3). Enables recovery from bad writes without losing an entire session.
+- **`--deduplicate` flag**: `inline_qc.py --deduplicate` one-time cleanup of existing bloated queues.
+- **Intraspecific variation detection**: Cross-paper conflicts with >50% spread flag for human review; smaller spreads from multiple high-confidence papers are recognized as legitimate biological variation and auto-noted instead of queued.
+
+## [5.0.0] — 2026-04-04
+
+### Added
+- **Auditor agent**: Mandatory double-entry verification of ALL extracted records against cited source pages. Every record gets two independent looks before reaching results.csv.
+- **Extract + Verify architecture**: Replaces 3-agent consensus voting. Single Extractor + Auditor verification at ~45% of the token cost with better error detection.
+- **5 new scripts**: `scrub.py` (deterministic normalization), `inline_qc.py` (3-tier post-write QC), `coverage_tracker.py` (Chao1 richness), `review_discoveries.py` (auto-apply routine discoveries to guide.md), `bootstrap.py` (derive v5 state from existing data).
+- **Automatic bootstrap**: `session_manager.py` auto-detects v4 projects and runs `bootstrap.py` to migrate calibration models, coverage baselines, triage intelligence, taxonomy cache, and search history. No manual migration needed.
+- **Continuous learning**: Routine discoveries (notation variants, new journals) auto-applied to guide.md during collection. Structural discoveries queued for human review at session end.
+- **Crossref metadata backfill**: `write_finds.py` auto-fills missing paper_authors, title, year, journal from Crossref API.
+- **Inline 3-tier QC**: Auto-fix (~50%) → audit queue (~40%) → human review (<5%). Runs after every write.
+- **Skill frontmatter**: SKILL.md and all agent specs now have proper frontmatter (name, description, model, effort) per Anthropic best practices.
+
+### Changed
+- **4-agent pipeline**: Searcher, Fetcher, Extractor, Auditor. Eliminated Dealer, Extractor Consensus (A/B/C), Scrubber, Reviewer, Writer.
+- **SKILL.md rewritten**: 568 → 228 lines. Pure state-machine loop. Manager delegates all decisions to `dispatch.py recommend`.
+- **Zero sub-agent hooks**: All hooks removed from agent frontmatter. Validation moved into scripts and agent procedures. Saves ~685K tokens/session.
+- **dispatch.py**: Renamed dealer→extractor throughout. Added `verify_and_write` action, pipeline_state.json checkpoint, coverage metrics.
+- **process_agent_output.py**: Unified `process_extractor_results` replaces separate `process_dealer_results` and `process_finds`.
+- **csv_writer.py**: `paper_authors` and `pdf_path` changed from flag to warn action (notes without setting flag_for_review).
+- **session_manager.py**: `--dealers` → `--extractors`, `dealer_results/` → `extractor_results/`.
+
+### Removed
+- `agents/dealer.md`, `extractor_consensus.md`, `extractor_A.md`, `extractor_B.md`, `extractor_C.md`, `scrubber.md`, `reviewer.md`, `writer.md`
+- `references/consensus_extraction.md`, `references/extractor_common.md`
+- `.claude/hooks/validate-finds.sh`, `validate-dealer-output.sh`, `enforce-json-format.sh`
+
 ## [4.4.0] — 2026-03-31
 
 ### Added

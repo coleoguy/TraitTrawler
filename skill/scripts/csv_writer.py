@@ -106,7 +106,12 @@ def _load_confidence_word_map(project_root: str) -> dict:
 REQUIRED_FIELDS = {"species", "extraction_confidence"}
 
 # Fields that should not be empty (flag record if missing)
-SOFT_REQUIRED_FIELDS = {"paper_title", "paper_authors", "pdf_path"}
+SOFT_REQUIRED_FIELDS = {"paper_title"}
+
+# Fields that should not be empty (warn in notes but do NOT flag for review)
+# These are provenance metadata — missing values are common and recoverable
+# via Crossref backfill, so flagging every record is counterproductive.
+WARN_FIELDS = {"paper_authors", "pdf_path"}
 
 # Fields with known types
 FLOAT_FIELDS = {"extraction_confidence", "calibrated_confidence"}
@@ -178,6 +183,18 @@ def validate_record(record: dict, output_fields: list,
                     field, val, "soft_required",
                     f"Field '{field}' is empty — extract from paper header",
                     action="flag"
+                ))
+
+    # 1c. Warn fields (note in record but do NOT flag for review — these are
+    # provenance metadata that can be backfilled from Crossref later)
+    for field in WARN_FIELDS:
+        if field in output_fields:
+            val = record.get(field, "")
+            if val is None or str(val).strip() == "":
+                errors.append(ValidationError(
+                    field, val, "warn",
+                    f"Field '{field}' is empty — may be backfilled from Crossref",
+                    action="warn"
                 ))
 
     # 2. Must have doi or paper_title
@@ -504,7 +521,7 @@ class SchemaEnforcedWriter:
                               errors: list) -> None:
         """Save a rejected record to state/needs_attention.csv.
 
-        Records that fail hard validation still contain consensus-extracted
+        Records that fail hard validation still contain extracted
         data that may be recoverable after manual review or guide updates.
         This prevents silent data loss from the extraction pipeline.
         """
@@ -596,20 +613,21 @@ class SchemaEnforcedWriter:
             errors = validate_record(record, self.output_fields,
                                      self.validation_rules)
 
-            # Separate drop errors from flag errors
+            # Separate drop, flag, and warn errors
             drop_errors = [e for e in errors if e.action == "drop"]
             flag_errors = [e for e in errors if e.action == "flag"]
+            warn_errors = [e for e in errors if e.action == "warn"]
 
             if drop_errors:
                 report.rejected += 1
                 for e in drop_errors:
                     report.errors.append((i, e))
                 # Preserve rejected records in needs_attention.csv so
-                # consensus-extracted data is never silently lost
+                # extracted data is never silently lost
                 self._save_rejected_record(record, drop_errors)
                 continue
 
-            # Apply flags
+            # Apply flags (set flag_for_review = True)
             if flag_errors:
                 record["flag_for_review"] = "True"
                 reasons = "; ".join(e.message for e in flag_errors)
@@ -619,6 +637,16 @@ class SchemaEnforcedWriter:
                 )
                 report.flagged += 1
                 for e in flag_errors:
+                    report.errors.append((i, e))
+
+            # Apply warns (note in record but do NOT flag for review)
+            if warn_errors:
+                reasons = "; ".join(e.message for e in warn_errors)
+                existing_notes = record.get("notes", "") or ""
+                record["notes"] = (
+                    f"{existing_notes}; NOTE: {reasons}".strip("; ")
+                )
+                for e in warn_errors:
                     report.errors.append((i, e))
 
             # Dedup check (primary: species + all trait values)

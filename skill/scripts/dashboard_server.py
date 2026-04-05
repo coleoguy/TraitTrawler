@@ -343,7 +343,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <div class="command-bar">
   <h2>Send Command to Agent</h2>
-  <div class="hint">Commands: skip, pause, redo last, show trace, run QC, consensus on last, stop</div>
+  <div class="hint">Commands: pause, status, explore, review, run QC, stop</div>
   <div class="command-row">
     <input type="text" id="cmd-input" placeholder="Type a command..." autocomplete="off">
     <button id="cmd-send">Send</button>

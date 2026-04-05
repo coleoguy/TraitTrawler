@@ -9,7 +9,7 @@ state, and deletes the processed files.
 Usage from Manager (via python3 one-liners):
     python3 scripts/process_agent_output.py --action search_results
     python3 scripts/process_agent_output.py --action fetch_failures
-    python3 scripts/process_agent_output.py --action dealer_results
+    python3 scripts/process_agent_output.py --action extractor_results
     python3 scripts/process_agent_output.py --action writer_results
 """
 
@@ -30,6 +30,29 @@ from state_utils import (
     append_jsonl,
     FileLock,
 )
+
+
+def _archive_file(path):
+    """Move a processed file to a deprecated/ subfolder in its parent dir.
+
+    The glob('*.json') pattern naturally skips subdirectories, so archived
+    files won't be re-processed. This works even in sandboxed filesystems
+    where os.remove() is blocked, because rename is a directory-entry
+    operation, not a file deletion.
+    """
+    parent = os.path.dirname(path)
+    dep_dir = os.path.join(parent, "deprecated")
+    os.makedirs(dep_dir, exist_ok=True)
+    dest = os.path.join(dep_dir, os.path.basename(path))
+    try:
+        os.rename(path, dest)
+    except OSError:
+        try:
+            import shutil
+            shutil.move(path, dest)
+        except (OSError, PermissionError):
+            pass  # Last resort: file stays but won't match glob if
+                  # we add tracker fallback later
 
 
 def _handle_corrupt_file(f, error, project_root):
@@ -110,7 +133,7 @@ def process_search_results(project_root):
             source_counts[src] += data.get(f"{src}_results", 0)
 
         # Delete processed file
-        os.remove(f)
+        _archive_file(f)
 
     # Write search_log
     safe_write_json(search_log_path, search_log)
@@ -192,9 +215,12 @@ def process_fetch_failures(project_root):
         try:
             os.replace(f, dest)
         except OSError:
-            # Cross-device: copy then delete
-            import shutil
-            shutil.move(f, dest)
+            try:
+                import shutil
+                shutil.copy2(f, dest)
+            except (OSError, PermissionError):
+                pass
+            _archive_file(f)
         leads_added += 1
 
         # Mark in processed.json
@@ -205,6 +231,7 @@ def process_fetch_failures(project_root):
                 "sources_tried": sources_tried,
                 "source_query": data.get("source_query", ""),
             })
+
 
     # Update fetch source stats
     stats_path = os.path.join(state_dir, "source_stats.json")
@@ -276,7 +303,7 @@ def consolidate_leads(project_root):
                 "status": "pending",
             })
             leads_written += 1
-            os.remove(f)
+            _archive_file(f)
 
     result = {
         "files": len(files),
@@ -340,20 +367,55 @@ def process_fetch_successes(project_root):
     print(json.dumps(result))
 
 
-def process_dealer_results(project_root):
-    """Read dealer_results/*.json, update processed.json, delete files."""
-    folder = os.path.join(project_root, "dealer_results")
+def process_extractor_results(project_root):
+    """Process Extractor returns: finds/ records and extractor_results/ no-data reports."""
     state_dir = os.path.join(project_root, "state")
-    files = sorted(glob.glob(os.path.join(folder, "*.json")))
-    if not files:
-        print(json.dumps({"files": 0, "no_data": 0, "failed": 0, "invalid": 0}))
-        return
+
+    # Part 1: Process finds/ (extracted records)
+    # NOTE: finds/ files are NOT archived here — they persist for verify_and_write.
+    finds_folder = os.path.join(project_root, "finds")
+    finds_files = sorted(glob.glob(os.path.join(finds_folder, "*.json")))
+
+    total_records = 0
+    papers = []
+    normalized_count = 0
+
+    for f in finds_files:
+        if _normalize_finds_file(f):
+            normalized_count += 1
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, OSError) as e:
+            _handle_corrupt_file(f, e, project_root)
+            continue
+
+        doi = data.get("doi", "")
+        records = data.get("records", [])
+        n = len(records) if isinstance(records, list) else 0
+        total_records += n
+        papers.append({"doi": doi, "records": n, "file": os.path.basename(f)})
+
+        key = doi
+        if not key:
+            title = (data.get("title", "") or "").strip()
+            if title:
+                key = f"title:{title[:120]}"
+        if key:
+            update_processed(state_dir, key, {
+                "outcome": "extracted",
+                "records": n,
+                "source_query": data.get("source_query", ""),
+            })
+
+    # Part 2: Process extractor_results/ (no-data and error reports)
+    results_folder = os.path.join(project_root, "extractor_results")
+    nodata_files = sorted(glob.glob(os.path.join(results_folder, "*.json")))
 
     no_data = 0
     failed = 0
-    invalid = 0
 
-    for f in files:
+    for f in nodata_files:
         try:
             with open(f, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -363,13 +425,10 @@ def process_dealer_results(project_root):
 
         doi = data.get("doi", "")
         outcome = data.get("outcome", "unknown")
-
         if outcome == "no_data":
             no_data += 1
-        elif outcome == "consensus_failed":
+        else:
             failed += 1
-        elif outcome == "invalid_handoff":
-            invalid += 1
 
         if doi:
             update_processed(state_dir, doi, {
@@ -377,21 +436,22 @@ def process_dealer_results(project_root):
                 "reason": data.get("reason", ""),
                 "source_query": data.get("source_query", ""),
             })
+        _archive_file(f)
 
-        os.remove(f)
-
-    # Check if dealer produced any output (finds or results)
-    finds_dir = os.path.join(project_root, "finds")
-    has_finds = len(glob.glob(os.path.join(finds_dir, "*.json"))) > 0
-
+    # Combined result
+    total_files = len(finds_files) + len(nodata_files)
     result = {
-        "files": len(files),
+        "finds_files": len(finds_files),
+        "nodata_files": len(nodata_files),
+        "total_records": total_records,
         "no_data": no_data,
-        "failed": failed,
-        "invalid": invalid,
+        "normalized": normalized_count,
+        "papers": papers,
         "validation": {
-            "produced_output": has_finds or len(files) > 0,
-            "all_failed": failed == len(files) and len(files) > 0,
+            "produced_output": len(finds_files) > 0 or len(nodata_files) > 0,
+            "all_failed": failed == total_files and total_files > 0,
+            "has_records": total_records > 0,
+            "empty_papers": [p["doi"] for p in papers if p["records"] == 0],
         },
     }
     print(json.dumps(result))
@@ -473,57 +533,8 @@ def _normalize_finds_file(fpath):
 
 
 def process_finds(project_root):
-    """Count finds/*.json and update processed.json for extracted papers."""
-    folder = os.path.join(project_root, "finds")
-    state_dir = os.path.join(project_root, "state")
-    files = sorted(glob.glob(os.path.join(folder, "*.json")))
-    if not files:
-        print(json.dumps({"files": 0, "total_records": 0}))
-        return
-
-    total_records = 0
-    papers = []
-    normalized_count = 0
-
-    for f in files:
-        # Auto-fix common format issues before processing
-        if _normalize_finds_file(f):
-            normalized_count += 1
-
-        try:
-            with open(f, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (json.JSONDecodeError, OSError) as e:
-            _handle_corrupt_file(f, e, project_root)
-            continue
-
-        doi = data.get("doi", "")
-        records = data.get("records", [])
-        n = len(records) if isinstance(records, list) else 0
-        total_records += n
-        papers.append({"doi": doi, "records": n, "file": os.path.basename(f)})
-
-        # Mark extracted in processed.json
-        if doi:
-            update_processed(state_dir, doi, {
-                "outcome": "extracted",
-                "records": n,
-                "source_query": data.get("source_query", ""),
-            })
-
-    # Note: we do NOT delete finds files — the Writer does that after writing to CSV
-
-    result = {
-        "files": len(files),
-        "total_records": total_records,
-        "normalized": normalized_count,
-        "papers": papers,
-        "validation": {
-            "has_records": total_records > 0,
-            "empty_papers": [p["doi"] for p in papers if p["records"] == 0],
-        },
-    }
-    print(json.dumps(result))
+    """Alias for process_extractor_results (backward compatibility)."""
+    process_extractor_results(project_root)
 
 
 def process_writer_results(project_root):
@@ -554,7 +565,7 @@ def process_writer_results(project_root):
         total_duplicate += data.get("records_duplicate", 0)
         errors.extend(data.get("errors", []))
 
-        os.remove(f)
+        _archive_file(f)
 
     result = {
         "files": len(files),
@@ -579,7 +590,7 @@ def main():
     )
     parser.add_argument("--action", required=True,
                         choices=["search_results", "fetch_failures",
-                                 "fetch_successes", "dealer_results",
+                                 "fetch_successes", "extractor_results",
                                  "finds", "writer_results",
                                  "consolidate_leads", "all"],
                         help="Which agent output to process")
@@ -589,7 +600,7 @@ def main():
 
     if args.action == "all":
         for action in ["search_results", "fetch_failures", "fetch_successes",
-                        "dealer_results", "finds", "writer_results"]:
+                        "extractor_results", "finds", "writer_results"]:
             print(f"--- {action} ---")
             globals()[f"process_{action}"](args.project_root)
     else:

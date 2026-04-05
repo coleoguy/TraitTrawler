@@ -11,7 +11,7 @@ Usage:
         --project-root . \
         --skill-dir /path/to/skill \
         --session-id 20260328T142904 \
-        --mode consensus --target 20 --dealers 5
+        --target 20 --extractors 5
 
     # End a session (all teardown tasks):
     python3 scripts/session_manager.py end \
@@ -111,6 +111,21 @@ def copy_utility_scripts(project_root, skill_dir):
         return 0
 
     copied = 0
+    skipped = 0
+
+    def _safe_copy(src, dest):
+        """Copy file, handling sandbox/read-only filesystem gracefully."""
+        nonlocal copied, skipped
+        try:
+            shutil.copy2(src, dest)
+            copied += 1
+        except (OSError, PermissionError):
+            # Sandbox won't allow overwrite — file from prior session is fine
+            if os.path.exists(dest):
+                skipped += 1
+            else:
+                print(f"WARNING: Cannot copy {src} to {dest}",
+                      file=sys.stderr)
 
     # Root-level scripts
     for script in ["dashboard_generator.py", "verify_session.py",
@@ -118,8 +133,7 @@ def copy_utility_scripts(project_root, skill_dir):
         dest = os.path.join(project_root, script)
         src = os.path.join(skill_dir, script)
         if os.path.exists(src):
-            shutil.copy2(src, dest)
-            copied += 1
+            _safe_copy(src, dest)
 
     # scripts/ directory
     scripts_dir = os.path.join(project_root, "scripts")
@@ -130,8 +144,7 @@ def copy_utility_scripts(project_root, skill_dir):
             if script.endswith(".py"):
                 dest = os.path.join(scripts_dir, script)
                 src = os.path.join(skill_scripts, script)
-                shutil.copy2(src, dest)
-                copied += 1
+                _safe_copy(src, dest)
 
     # .claude/hooks/ — copy from repo if available
     repo_hooks = os.path.join(os.path.dirname(skill_dir), ".claude", "hooks")
@@ -142,9 +155,11 @@ def copy_utility_scripts(project_root, skill_dir):
             if hook.endswith(".sh"):
                 src = os.path.join(repo_hooks, hook)
                 dest = os.path.join(proj_hooks, hook)
-                shutil.copy2(src, dest)
-                os.chmod(dest, 0o755)
-                copied += 1
+                _safe_copy(src, dest)
+                try:
+                    os.chmod(dest, 0o755)
+                except (OSError, PermissionError):
+                    pass
 
     # .claude/settings.json — copy if not present (don't overwrite user edits)
     repo_settings = os.path.join(os.path.dirname(skill_dir), ".claude",
@@ -153,9 +168,11 @@ def copy_utility_scripts(project_root, skill_dir):
         proj_settings = os.path.join(project_root, ".claude", "settings.json")
         os.makedirs(os.path.dirname(proj_settings), exist_ok=True)
         if not os.path.exists(proj_settings):
-            shutil.copy2(repo_settings, proj_settings)
-            copied += 1
+            _safe_copy(repo_settings, proj_settings)
 
+    if skipped:
+        print(f"Note: {skipped} file(s) already exist and could not be "
+              f"overwritten (sandbox filesystem)", file=sys.stderr)
     return copied
 
 
@@ -196,7 +213,7 @@ def ensure_directories(project_root):
         "state/session_reports",
         "backups",
         "finds", "ready_for_extraction", "search_results",
-        "fetch_failures", "dealer_results", "writer_results", "lead_files",
+        "fetch_failures", "extractor_results", "writer_results", "lead_files",
         "learning", "provided_pdfs", "provided_pdfs/done",
     ]
     for d in dirs:
@@ -674,14 +691,14 @@ def read_project_state(project_root):
 
     # Pipeline folder counts
     for folder in ["finds", "ready_for_extraction", "search_results",
-                    "fetch_failures", "dealer_results", "provided_pdfs"]:
+                    "fetch_failures", "extractor_results", "provided_pdfs"]:
         pattern = os.path.join(project_root, folder, "*")
         state[f"{folder}_pending"] = len(glob.glob(pattern))
 
     return state
 
 
-def write_snapshot(project_root, session_id, mode, target, dealers,
+def write_snapshot(project_root, session_id, mode, target, extractors,
                    guide_md5, config_md5):
     """Write reproducibility snapshot."""
     snapshot_dir = os.path.join(project_root, "state", "snapshots")
@@ -692,7 +709,7 @@ def write_snapshot(project_root, session_id, mode, target, dealers,
         "config_py_md5": config_md5,
         "skill_version": SKILL_VERSION,
         "extraction_mode": mode,
-        "max_concurrent_dealers": dealers,
+        "max_concurrent_extractors": extractors,
         "target": target,
         "started_at": now_iso(),
     }
@@ -880,7 +897,7 @@ def cmd_start(args):
     config_md5 = state.get("config_py_md5", "")
     write_snapshot(
         root, args.session_id, args.mode, args.target,
-        args.dealers, guide_md5, config_md5,
+        args.extractors, guide_md5, config_md5,
     )
 
     # 12. Clear dispatch state for new session
@@ -896,7 +913,7 @@ def cmd_start(args):
         "session_id": args.session_id,
         "extraction_mode": args.mode,
         "target": args.target,
-        "max_concurrent_dealers": args.dealers,
+        "max_concurrent_extractors": args.extractors,
         "records_at_start": state.get("records", 0),
         "queue_depth": queue_info.get("total", 0),
         "guide_md5": guide_md5,
@@ -977,10 +994,10 @@ def main():
     p_start.add_argument("--skill-dir", default="",
                          help="Path to skill directory (for copying scripts)")
     p_start.add_argument("--session-id", required=True)
-    p_start.add_argument("--mode", default="consensus",
-                         choices=["consensus", "fast"])
+    p_start.add_argument("--mode", default="extract_verify",
+                         help="Extraction mode (v5: always extract_verify)")
     p_start.add_argument("--target", default="20")
-    p_start.add_argument("--dealers", type=int, default=5)
+    p_start.add_argument("--extractors", type=int, default=5)
     p_start.add_argument("--force", action="store_true",
                          help="Force re-initialization even if session exists")
 

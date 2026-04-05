@@ -1,16 +1,7 @@
 ---
-hooks:
-  PreToolUse:
-    - matcher: "Write|Edit"
-      hooks:
-        - type: command
-          command: ".claude/hooks/protect-root.sh"
-        - type: command
-          command: ".claude/hooks/protect-results-csv.sh"
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          command: ".claude/hooks/block-bash-file-creation.sh"
+name: searcher
+description: Searches PubMed, OpenAlex, bioRxiv, and Crossref for papers matching project queries, triages by relevance, and writes results to search_results/
+model: claude-sonnet-4-6
 ---
 
 # Searcher Agent

@@ -62,10 +62,13 @@ existing rows.
 |---|---|---|
 | `calibrated_confidence` | float | Post-hoc calibrated probability (0.0–1.0) using isotonic regression on benchmark data. Empty when calibration model not yet available (<10 observations). Unlike `extraction_confidence` (heuristic), this is empirically validated: a value of 0.85 means records at this level are correct ~85% of the time. |
 
-### Consensus extraction (added by §21)
+### Extraction & verification
 | Field | Type | Notes |
 |---|---|---|
-| `consensus_agreement` | string | Result of multi-agent consensus extraction: `full` (all passes agree), `partial` (some fields differ, resolved by voting), `disputed` (major disagreement, flagged for review), `pass2_only` (record found only by enumeration pass). Empty if consensus not triggered. |
+| `consensus` | string | Extraction mode: `single_pass` (v5 default). Legacy values: `full`, `majority`. |
+| `consensus_vote` | string | Vote pattern: `1_NA_NA_NA` (v5 default). Legacy patterns from multi-agent voting. |
+| `verification` | string | Auditor result: `confirmed`, `corrected`, `ambiguous`, `auditor_added`. Empty if not yet audited. |
+| `verification_notes` | string | Auditor explanation when record was corrected or ambiguous. |
 
 ### Chain-of-thought trace (added by §22)
 | Field | Type | Notes |

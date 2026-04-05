@@ -124,11 +124,10 @@ to wait until every question is answered — generate what you can and refine.
 
 - **`collector_config.yaml`** from template at
   `${CLAUDE_SKILL_DIR}/references/config_template.yaml`
-  - Set `extraction_mode: consensus` (default)
-  - Ask the user how many concurrent dealers to run. Explain that each
-    dealer handles one paper at a time, and in consensus mode each spawns
-    3 extraction agents, so peak concurrent agents = N × 3. Set
-    `concurrency: {max_concurrent_dealers: <user's answer>}`.
+  - Set `extraction_mode: extract_verify` (default)
+  - Ask the user how many concurrent extractors to run. Each Extractor
+    handles one paper at a time. Set
+    `concurrency: {max_concurrent_extractors: <user's answer>}`.
   - Populate trait-specific fields from the schema you built
   - Set `required_fields` based on among/within-species decision
 
@@ -153,8 +152,7 @@ to wait until every question is answered — generate what you can and refine.
 - Empty state files: `processed.json` (`{}`), `queue.json` (`[]`),
   `search_log.json` (`{}`), `run_log.jsonl` (empty), `discoveries.jsonl`
   (empty), `taxonomy_cache.json` (`{}`), `calibration_data.jsonl` (empty),
-  `triage_outcomes.jsonl` (empty), `source_stats.json` (`{}`),
-  `consensus_stats.json` (`{}`)
+  `triage_outcomes.jsonl` (empty), `source_stats.json` (`{}`)
 
 ---
 

@@ -145,7 +145,7 @@ Interpretation:
 
 ### Application
 
-The Writer agent applies calibration automatically (see `writer.md` Step 3).
+write_finds.py applies calibration automatically during the write pipeline.
 - Raw score stays in `extraction_confidence`
 - Calibrated score goes in `calibrated_confidence`
 - Skip if < 10 calibration observations

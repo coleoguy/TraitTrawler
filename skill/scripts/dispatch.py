@@ -162,11 +162,11 @@ def dispatch_status(project_root):
         except Exception:
             pass
 
-    # Claimed handoff files (active dealer payloads)
+    # Claimed handoff files (active extractor payloads)
     claimed = {
         entry.get("payload", {}).get("handoff_file", "")
         for entry in active.values()
-        if entry.get("type") == "dealer"
+        if entry.get("type") == "extractor"
     } - {""}
 
     result = {
@@ -174,8 +174,7 @@ def dispatch_status(project_root):
         "api_fetcher_active": type_counts.get("api_fetcher", 0) > 0
                               or type_counts.get("fetcher", 0) > 0,
         "browser_fetcher_active": type_counts.get("browser_fetcher", 0) > 0,
-        "dealers_active": type_counts.get("dealer", 0),
-        "writer_active": type_counts.get("writer", 0) > 0,
+        "extractors_active": type_counts.get("extractor", 0),
         "queue": queue_depth,
         "ready": count_files("ready_for_extraction"),
         "finds": count_files("finds"),
@@ -258,18 +257,19 @@ def cleanup_stale(project_root, max_age_minutes=30):
 
 
 def claimed_files(project_root):
-    """Return set of handoff filenames currently assigned to active dealers."""
+    """Return set of handoff filenames currently assigned to active extractors."""
     state = safe_read_json(_state_path(project_root),
                            default={"active_agents": {}})
     return {
         entry.get("payload", {}).get("handoff_file", "")
         for entry in state.get("active_agents", {}).values()
-        if entry.get("type") == "dealer"
+        if entry.get("type") == "extractor"
     } - {""}
 
 
 def dispatch_checkpoint(project_root, papers_processed,
-                        searcher_exhausted, session_target):
+                        searcher_exhausted, session_target,
+                        session_id=None):
     """Save volatile Manager state to dispatch_state.json.
 
     These values normally live in the Manager's LLM context. Checkpointing
@@ -281,17 +281,72 @@ def dispatch_checkpoint(project_root, papers_processed,
             "active_agents": {},
             "session_counts": {},
         })
-        state["manager_checkpoint"] = {
+        ckpt = {
             "papers_processed": papers_processed,
             "searcher_exhausted": searcher_exhausted,
             "session_target": session_target,
             "updated_at": now_iso(),
         }
+        if session_id is not None:
+            ckpt["session_id"] = session_id
+        elif "manager_checkpoint" in state:
+            # Preserve existing session_id if not explicitly passed
+            prev_id = state["manager_checkpoint"].get("session_id")
+            if prev_id:
+                ckpt["session_id"] = prev_id
+        state["manager_checkpoint"] = ckpt
         safe_write_json(path, state)
+
+    # Also update pipeline_state.json (v5 single source of truth)
+    ps_path = os.path.join(project_root, "state", "pipeline_state.json")
+    ps = safe_read_json(ps_path, default={})
+    ps["papers_processed"] = papers_processed
+    ps["searcher_exhausted"] = searcher_exhausted
+    ps["session_target"] = session_target
+    ps["last_checkpoint"] = now_iso()
+    if session_id is not None:
+        ps["session_id"] = session_id
+    # Load coverage if available
+    cov_path = os.path.join(project_root, "state", "coverage_tracker.json")
+    if os.path.exists(cov_path):
+        try:
+            cov = safe_read_json(cov_path, default={})
+            ps["coverage"] = {
+                "s_obs": cov.get("s_obs", 0),
+                "chao1": cov.get("chao1", 0),
+                "completeness": cov.get("completeness", 0),
+            }
+        except Exception:
+            pass
+    # Count audit/human queue depths
+    aq_path = os.path.join(project_root, "state", "audit_queue.json")
+    if os.path.exists(aq_path):
+        aq = safe_read_json(aq_path, default=[])
+        ps["audit_queue_depth"] = len(aq) if isinstance(aq, list) else 0
+    hrq_path = os.path.join(project_root, "state", "human_review_queue.csv")
+    if os.path.exists(hrq_path):
+        try:
+            import csv as csv_mod
+            with open(hrq_path, "r", encoding="utf-8") as f:
+                reader = csv_mod.DictReader(f)
+                pending = sum(1 for r in reader
+                              if r.get("status", "pending") == "pending")
+            ps["human_review_depth"] = pending
+        except Exception:
+            pass
+    # Count records in results.csv
+    results_path = os.path.join(project_root, "results.csv")
+    if os.path.exists(results_path):
+        try:
+            with open(results_path, "r", encoding="utf-8") as f:
+                ps["records_written"] = sum(1 for _ in f) - 1  # minus header
+        except Exception:
+            pass
+    safe_write_json(ps_path, ps)
 
 
 def recommend(project_root, searcher_exhausted=None,
-              max_concurrent_dealers=5, session_target=None,
+              max_concurrent_extractors=5, session_target=None,
               papers_processed=None):
     """Recommend next dispatch actions based on current pipeline state.
 
@@ -335,15 +390,14 @@ def recommend(project_root, searcher_exhausted=None,
             "reason": "paywalled papers or fetch failures need browser",
         })
 
-    # Dealers — exclude files already claimed by active dealers AND
-    # papers whose DOI is already in processed.json (prevents re-extraction
-    # of papers that were already successfully extracted in prior sessions,
-    # e.g. user-provided PDFs or dissertations processed via different paths)
+    # Extractors — exclude files already claimed by active extractors AND
+    # papers whose DOI (or title) is already in processed.json (prevents
+    # re-extraction of papers already extracted in prior sessions)
     claimed = claimed_files(project_root)
     ready_files = glob.glob(
         os.path.join(project_root, "ready_for_extraction", "*.json"))
 
-    # Load processed DOIs for dedup guard
+    # Load processed keys for dedup guard (DOIs + title:... keys)
     processed_path = os.path.join(project_root, "state", "processed.json")
     processed_dois = set()
     if os.path.exists(processed_path):
@@ -378,7 +432,7 @@ def recommend(project_root, searcher_exhausted=None,
         basename = os.path.basename(f)
         if basename in claimed:
             continue
-        # Check if this handoff's DOI is already processed
+        # Check if this handoff's DOI (or title) is already processed
         try:
             with open(f, "r", encoding="utf-8") as fh:
                 handoff = json.load(fh)
@@ -386,25 +440,31 @@ def recommend(project_root, searcher_exhausted=None,
             if doi and doi in processed_dois:
                 skipped_already_processed += 1
                 continue
+            # Fallback: check title-based key for papers without DOI
+            if not doi:
+                title = (handoff.get("title", "") or "").strip()
+                if title and f"title:{title[:120]}" in processed_dois:
+                    skipped_already_processed += 1
+                    continue
         except (json.JSONDecodeError, OSError):
-            pass  # let the dealer handle corrupt handoffs
+            pass  # let the extractor handle corrupt handoffs
         unclaimed.append(basename)
 
-    dealer_slots = max_concurrent_dealers - status["dealers_active"]
-    if dealer_slots > 0 and unclaimed:
-        to_spawn = min(dealer_slots, len(unclaimed))
+    extractor_slots = max_concurrent_extractors - status["extractors_active"]
+    if extractor_slots > 0 and unclaimed:
+        to_spawn = min(extractor_slots, len(unclaimed))
         reason = (f"{len(unclaimed)} unclaimed papers ready, "
-                  f"{dealer_slots} slots open")
+                  f"{extractor_slots} slots open")
         if skipped_already_processed:
             reason += (f" ({skipped_already_processed} skipped — "
                        f"DOI already in processed/results)")
         actions.append({
-            "action": "spawn_dealers",
+            "action": "spawn_extractors",
             "count": to_spawn,
             "handoff_files": unclaimed[:to_spawn],
             "reason": reason,
         })
-    elif skipped_already_processed and dealer_slots > 0:
+    elif skipped_already_processed and extractor_slots > 0:
         # All ready papers were already processed — report this
         actions.append({
             "action": "info",
@@ -413,11 +473,11 @@ def recommend(project_root, searcher_exhausted=None,
                        f"skipping to prevent duplicate extraction"),
         })
 
-    # Writer
-    if (not status["writer_active"] and status["finds"] > 0
-            and (status["dealers_active"] == 0 or status["finds"] >= 3)):
+    # Scrub + Write (Scrubber normalizes finds, then write_finds.py writes)
+    if (status["finds"] > 0
+            and (status["extractors_active"] == 0 or status["finds"] >= 3)):
         actions.append({
-            "action": "spawn_writer",
+            "action": "verify_and_write",
             "reason": f"{status['finds']} finds ready",
         })
 
@@ -430,8 +490,7 @@ def recommend(project_root, searcher_exhausted=None,
         and not status["searcher_active"]
         and not status["api_fetcher_active"]
         and not status["browser_fetcher_active"]
-        and status["dealers_active"] == 0
-        and not status["writer_active"]
+        and status["extractors_active"] == 0
     )
 
     # Target reached
@@ -444,6 +503,14 @@ def recommend(project_root, searcher_exhausted=None,
         "reason": ("all streams exhausted" if all_exhausted
                    else "target reached" if target_reached
                    else "work remaining"),
+        "papers_processed": papers_processed,
+        "status_summary": {
+            "q": status["queue"],
+            "rdy": status["ready"],
+            "finds": status["finds"],
+            "extractors": status["extractors_active"],
+            "stale": len(status.get("stale_agents", [])),
+        },
         "status": status,
     }
 
@@ -642,9 +709,11 @@ def main():
     p_rec.add_argument("--project-root", default=".")
     p_rec.add_argument("--searcher-exhausted", action="store_true",
                        default=None)
-    p_rec.add_argument("--max-concurrent-dealers", type=int, default=5)
+    p_rec.add_argument("--max-concurrent-extractors", type=int, default=5)
     p_rec.add_argument("--session-target", default=None)
     p_rec.add_argument("--papers-processed", type=int, default=None)
+    p_rec.add_argument("--compact", action="store_true",
+                       help="Omit full status dict (saves Manager context)")
 
     # checkpoint
     p_ckpt = sub.add_parser("checkpoint",
@@ -653,6 +722,7 @@ def main():
     p_ckpt.add_argument("--papers-processed", type=int, required=True)
     p_ckpt.add_argument("--searcher-exhausted", action="store_true")
     p_ckpt.add_argument("--session-target", default=None)
+    p_ckpt.add_argument("--session-id", default=None)
 
     # cleanup-stale
     p_cleanup = sub.add_parser("cleanup-stale",
@@ -709,10 +779,12 @@ def main():
         result = recommend(
             args.project_root,
             searcher_exhausted=se,
-            max_concurrent_dealers=args.max_concurrent_dealers,
+            max_concurrent_extractors=args.max_concurrent_extractors,
             session_target=args.session_target,
             papers_processed=args.papers_processed,
         )
+        if args.compact:
+            result.pop("status", None)
         print(json.dumps(result, indent=2))
 
     elif args.command == "checkpoint":
@@ -721,6 +793,7 @@ def main():
             papers_processed=args.papers_processed,
             searcher_exhausted=args.searcher_exhausted,
             session_target=args.session_target,
+            session_id=args.session_id,
         )
         print(json.dumps({"status": "ok"}))
 

@@ -24,7 +24,7 @@
 
 ---
 
-Point TraitTrawler at a taxon and a trait. It searches PubMed, OpenAlex, bioRxiv, and Crossref; retrieves full-text PDFs (including paywalled papers through your library proxy); extracts structured records via 3-agent consensus voting; resolves taxonomy against GBIF; and writes validated, provenance-tagged rows to a CSV — session after session, picking up exactly where it left off. No API keys. No Python environment. No setup scripts.
+Point TraitTrawler at a taxon and a trait. It searches PubMed, OpenAlex, bioRxiv, and Crossref; retrieves full-text PDFs (including paywalled papers through your library proxy); extracts structured records with mandatory double-entry verification; resolves taxonomy against GBIF; and writes validated, provenance-tagged rows to a CSV — session after session, picking up exactly where it left off. No API keys. No Python environment. No setup scripts.
 
 The skill is fully taxon- and trait-agnostic: the same agent that builds a Coleoptera karyotype database works for avian body mass, plant phenology, or parasite host ranges. It handles both among-species data (one value per species across many species) and within-species data (population-level observations for a single species).
 
@@ -35,15 +35,16 @@ The skill is fully taxon- and trait-agnostic: the same agent that builds a Coleo
 | Capability | TraitTrawler | Elicit / Consensus | Manual curation |
 |:-----------|:------------:|:------------------:|:---------------:|
 | Full-text extraction into structured fields | ✓ | — | ✓ |
-| **3-agent consensus extraction** | ✓ | — | — |
+| **Extract + mandatory Auditor verification** | ✓ | — | — |
 | Paywalled PDF retrieval via proxy | ✓ | — | ✓ |
 | Schema-enforced writes with validation rules | ✓ | — | — |
 | Bidirectional citation chaining | ✓ | partial | — |
 | GBIF taxonomy resolution + synonym collapse | ✓ | — | sometimes |
 | **Self-improving domain knowledge** | ✓ | — | — |
 | **Adaptive triage learning** | ✓ | — | — |
-| Statistical QC (Chao1, Grubbs, calibration) | ✓ | — | — |
+| Inline 3-tier QC (Chao1, Grubbs, calibration) | ✓ | — | — |
 | Multi-agent pipeline with concurrent extraction | ✓ | — | — |
+| **Automatic bootstrap from existing data** | ✓ | — | — |
 | Compilation table handling (attributed extraction) | ✓ | — | sometimes |
 | Darwin Core Archive export (GBIF-ready) | ✓ | — | — |
 | Full provenance on every record | ✓ | — | — |
@@ -56,17 +57,9 @@ TraitTrawler improves as it works. Three independent learning systems run contin
 
 ### 1. Self-improving domain knowledge
 
-Every session, the agent logs notation variants, new taxa, ambiguity patterns, and validation gaps it encounters to `state/discoveries.jsonl`. At session end it proposes specific, diff-formatted amendments to `guide.md`:
+Every session, agents log notation variants, new taxa, ambiguity patterns, and validation gaps to `learning/`. The `review_discoveries.py` script classifies each discovery as routine or structural. Routine discoveries (new notation variants, new journals, prolific authors) are auto-applied to `guide.md` immediately — no human approval needed. Structural discoveries (new extraction rules, taxonomic revisions) are queued for human review at session end.
 
-```
-Discovery: "2n=46+B" notation (B chromosomes) not covered by current guide.
-Proposed amendment to guide.md §3.1:
-+ B chromosomes (supernumerary): record as diploid_number=46, note="B chromosomes present (46+B)".
-  Seen in: Smith 2019, Kozlov 2021, Ferreira 2023.
-Accept? [y/n/edit]
-```
-
-The user approves or rejects each change. Over multiple sessions, `guide.md` grows into a collaboratively curated knowledge base that encodes everything the literature actually says about notation, edge cases, and taxonomic scope — far exceeding what any researcher could anticipate at setup time. All amendments are logged for full reproducibility.
+Over multiple sessions, `guide.md` grows into a collaboratively curated knowledge base that encodes everything the literature actually says about notation, edge cases, and taxonomic scope — far exceeding what any researcher could anticipate at setup time. All amendments are logged for full reproducibility.
 
 ### 2. Adaptive triage
 
@@ -116,16 +109,17 @@ We validated TraitTrawler against a manually curated Coleoptera karyotype databa
   <img src="docs/traittrawler_pipeline.png" alt="TraitTrawler pipeline" width="900">
 </p>
 
-TraitTrawler v4 uses a **multi-agent pipeline** where an Opus Manager coordinates dedicated Sonnet sub-processes. Agents communicate via filesystem folders — nothing is deleted until the downstream consumer verifies its work. All shared state files use file locking (`fcntl.flock`) for safe concurrent access between background agents.
+TraitTrawler v5 uses a **4-agent pipeline** where an Opus Manager coordinates dedicated Sonnet sub-processes. Agents communicate via filesystem folders — nothing is deleted until the downstream consumer verifies its work. All shared state files use file locking (`fcntl.flock`) for safe concurrent access between background agents. The Manager is a pure state-machine loop (~200 lines) that delegates all decisions to `dispatch.py`.
 
 Each session the pipeline:
 
 1. **Searches** (Sonnet-Searcher) — runs unrun queries from `config.py` across PubMed, OpenAlex, bioRxiv, and Crossref. Triages each paper as likely, uncertain, or unlikely. Once keyword searches are exhausted, it chains through references of high-confidence papers bidirectionally.
 2. **Fetches** (Sonnet-Fetcher) — retrieves full text through a cascade: Unpaywall → OpenAlex → Europe PMC → Semantic Scholar → CORE → your institutional proxy (via Chrome). Writes a handoff file to `ready_for_extraction/` for each acquired PDF. Papers that can't be obtained go to `leads.csv`.
-3. **Extracts** (Sonnet-Dealer + Sonnet-Extractor) — by default, 3 independent Sonnet agents extract each paper with different strategies (standard, enumeration-first, skeptical) and results are reconciled by majority-rule voting. If consensus fails, an Opus agent is spawned as a tiebreaker. Compilation tables are extracted with attribution to the original source. Results are written to `finds/`.
-4. **Writes** (Sonnet-Writer) — the sole agent that touches `results.csv`. Resolves taxonomy against GBIF, applies confidence calibration, validates against schema rules, deduplicates, and appends with atomic writes. Only after verified write does it delete the source file from `finds/`.
+3. **Extracts** (Sonnet-Extractor) — reads the paper, extracts all structured records, self-validates, and writes to `finds/`. One agent per paper, with confidence scoring and source-page citation for every record.
+4. **Verifies** (Sonnet-Auditor) — mandatory double-entry verification of ALL records. The Auditor reads only the cited source pages (1-2 pages per record, not the entire paper) and confirms, corrects, or flags each value. Records where extraction and verification agree get high confidence; disagreements get lower confidence with explanations; genuinely ambiguous cases route to a human review queue.
+5. **Writes** — a deterministic script pipeline (`scrub.py` → `write_finds.py` → `inline_qc.py`) resolves taxonomy against GBIF, applies confidence calibration, validates against schema rules, deduplicates, and appends to `results.csv` with atomic writes. A 3-tier inline QC system auto-fixes ~50% of issues, routes ~40% to the Auditor, and sends <5% to the human review queue.
 
-A fast mode (single agent, no voting) is available for exploratory runs. The Manager tracks token usage per tier and reports efficiency metrics at session end.
+Duplicate papers are caught at two levels: at routing time (checked against `processed.json` before extraction begins) and at write time (CSV deduplication). Results.csv is snapshotted before every write for instant rollback. The system runs autonomously for hours without human checkpoints. Session state is continuously checkpointed to `pipeline_state.json`, so context compaction or crashes lose zero progress.
 
 ---
 
@@ -159,11 +153,11 @@ A fast mode (single agent, no voting) is available for exploratory runs. The Man
 
 After setup, the agent runs a calibration phase: it processes 3-5 seed papers to learn real notation conventions and table formats for your trait, then seeds the queue from those papers' citations.
 
-### Option C — Bootstrap from an existing CSV
+### Option C — Bootstrap from existing data
 
 1. **Install the skill** (same as step 4 above).
-2. **Drop your existing CSV** (headers-only or populated) into a new folder and open it in Cowork.
-3. **Say "let's collect some data."** The wizard detects the CSV, infers your schema and settings, and asks only the questions it can't answer from the data. If the CSV has 20+ records, calibration is skipped entirely. You're collecting within 2 minutes.
+2. **Drop your existing CSV** (and as much of the `state/` folder and `pdfs/` as you have) into a new folder and open it in Cowork.
+3. **Say "let's collect some data."** The system auto-detects existing data and runs `bootstrap.py` to derive calibration models, coverage baselines, triage intelligence, and domain knowledge from your data. The more you bring (results.csv + pdfs/ + state/), the stronger the bootstrap. You're collecting within 2 minutes with calibrated confidence from record one.
 
 ### Authenticating your library proxy
 
@@ -175,11 +169,10 @@ Log into your institution's library portal in Chrome before starting a session. 
 
 When you start a session, the Manager checks dependencies, copies utility scripts, clears any backlog from prior sessions, syncs `processed.json` against `results.csv` (so hot-started projects don't re-fetch known papers), and prints a status report. It then confirms three settings (parsing as many as possible from your invocation message):
 
-1. **Extraction mode** — `consensus` (3-agent voting, best accuracy) or `fast` (single agent, ~3x faster). Consensus is the default.
-2. **Session target** — paper count, time estimate, or preset ("quick pass" ~10, "standard" 20, "long session" 50+, "until exhausted").
-3. **Concurrency** — max concurrent dealers (papers extracted in parallel). Each dealer spawns 3 agents in consensus mode, so peak agents = N × 3.
+1. **Session target** — paper count or "until exhausted" (default: 20).
+2. **Mode** — `consensus` (extract + verify, best accuracy) or `fast` (single pass). Consensus is the default.
 
-After configuration, the Manager drives the pipeline autonomously — you never need to say "now search" or "now fetch". Say "20 papers, consensus, 2 dealers" and watch it go. Stop anytime by telling the agent to stop. All state is saved continuously — the folder-based architecture means files in `finds/` and `ready_for_extraction/` persist across sessions. A mid-session crash loses nothing.
+After configuration, the Manager drives the pipeline autonomously — you never need to say "now search" or "now fetch". Say "50 papers" and watch it go. Stop anytime by telling the agent to stop. All state is saved continuously — the folder-based architecture means files in `finds/` and `ready_for_extraction/` persist across sessions. A mid-session crash loses nothing.
 
 **The dashboard.** The agent generates `dashboard.html`, updated at session start, every 2 papers, and session end. Double-click it to open in any browser — it auto-refreshes every 60 seconds. Fully self-contained with no external dependencies.
 
@@ -201,7 +194,7 @@ After configuration, the Manager drives the pipeline autonomously — you never 
 
 ### results.csv
 
-One row per observation per paper. For among-species projects, this is typically one row per species per paper; for within-species projects, one row per population or individual per paper. Fields are defined by your `collector_config.yaml`. Every record carries `extraction_confidence` (0.0-1.0), `consensus` (full/majority/single_pass/opus_escalation), `consensus_vote` (per-agent agreement pattern like `1_1_0_NA` — Agent A agreed, Agent B agreed, Agent C disagreed, Opus not used), `flag_for_review`, `doi`, `source_page`, `source_context` (verbatim text the record came from), and `extraction_reasoning`. Data from compilation tables is tagged `source_type: "compilation"` with the original reference noted. Records that fail validation are preserved in `state/needs_attention.csv` rather than silently dropped.
+One row per observation per paper. For among-species projects, this is typically one row per species per paper; for within-species projects, one row per population or individual per paper. Fields are defined by your `collector_config.yaml`. Every record carries `extraction_confidence` (0.0-1.0, calibrated), `verification` (confirmed/corrected/ambiguous — from the Auditor), `flag_for_review`, `doi`, `source_page`, `source_context` (verbatim text the record came from), and `extraction_reasoning`. Data from compilation tables is tagged `source_type: "compilation"` with the original reference noted. Records that fail validation are preserved in `state/human_review_queue.csv` rather than silently dropped.
 
 ### leads.csv
 
@@ -211,23 +204,25 @@ Papers identified as relevant but without obtainable full text. The agent no lon
 
 Session state that enables resumption across sessions: `processed.json`, `queue.json`, `search_log.json`, `discoveries.jsonl`, `triage_outcomes.jsonl`, `source_stats.json`, `taxonomy_cache.json`. You should never need to edit these directly.
 
-The v4 pipeline also uses folder-based queues for inter-agent communication:
-- `source/` — standardized PDF library (`Lastname-Year-Word-a.pdf`); every record links here via `pdf_path`
-- `ready_for_extraction/` — PDFs waiting for extraction (Fetcher → Dealer)
-- `finds/` — extraction results waiting for CSV write (Extractor → Writer)
-- `learning/` — lessons learned from extraction (Extractor → Manager)
+The pipeline uses folder-based queues for inter-agent communication:
+- `pdfs/` — standardized PDF library (`Lastname-Year-Word-a.pdf`); every record links here via `pdf_path`
+- `ready_for_extraction/` — PDFs waiting for extraction (Fetcher → Extractor)
+- `finds/` — extraction results awaiting verification and CSV write (Extractor → Auditor → write pipeline)
+- `learning/` — discoveries from extraction (Extractor → review_discoveries.py)
 - `provided_pdfs/` — user-supplied PDFs to process
 
 These folders self-checkpoint: if a session ends mid-pipeline, the next session picks up the backlog automatically.
 
 ### Statistical QC
 
-At session end, `scripts/statistical_qc.py` generates:
-- **Species accumulation curves** with Chao1 richness estimates (how close are you to completeness?)
-- **Outlier detection** via Grubbs' test (continuous traits) and modal-frequency analysis (discrete)
-- **Confidence distribution** analysis and near-duplicate flagging
+**Inline QC** runs automatically after every write via `inline_qc.py`:
+- **Tier 1** — auto-fix: missing taxonomy (GBIF), missing metadata (Crossref), numeric cleanup (~50%)
+- **Tier 2** — audit queue: low confidence, statistical outliers (Grubbs), cross-paper conflicts (~40%)
+- **Tier 3** — human review: genuinely ambiguous cases, large cross-paper discrepancies (<5%)
 
-Results are saved as `qc_report.html` and `qc_summary.json`. Ask "run QC" or "how's the data looking" at any time.
+Cross-paper conflicts use tolerance-based filtering — small numeric differences (±1-2 for chromosome counts) are recognized as expected intraspecific variation and auto-noted rather than queued.
+
+**Statistical QC** at session end via `scripts/statistical_qc.py` generates species accumulation curves with Chao1 richness estimates, outlier detection via Grubbs' test, and confidence distribution analysis. Results saved as `qc_report.html` and `qc_summary.json`. Ask "run QC" or "how's the data looking" at any time.
 
 ### Campaign planning
 
@@ -281,37 +276,35 @@ TraitTrawler/
 │   └── sample_results.csv        # Example output (5 records)
 │
 ├── skill/                        # Skill source (taxon-agnostic)
-│   ├── SKILL.md                  # Opus Manager specification (v4.4)
-│   ├── agents/                   # Per-agent specs (v4 multi-agent pipeline)
+│   ├── SKILL.md                  # Opus Manager specification (v5)
+│   ├── agents/                   # Per-agent specs (4-agent pipeline)
 │   │   ├── searcher.md           # Search APIs, triage, citation chaining
 │   │   ├── fetcher.md            # PDF acquisition, OA cascade
-│   │   ├── dealer.md             # Extraction coordination, Opus escalation
-│   │   ├── extractor_A.md        # Standard extraction strategy
-│   │   ├── extractor_B.md        # Enumeration-first strategy
-│   │   ├── extractor_C.md        # Skeptical extraction strategy
-│   │   ├── extractor_consensus.md # 3-agent voting orchestrator
-│   │   ├── writer.md             # Taxonomy, validation, CSV writing
-│   │   └── reviewer.md           # Discovery classification, guide.md proposals
+│   │   ├── extractor.md          # Single-pass extraction, self-validation
+│   │   └── auditor.md            # Mandatory double-entry verification
 │   ├── dashboard_generator.py    # Generates dashboard.html
 │   ├── verify_session.py         # Post-batch deterministic verification
 │   ├── export_dwc.py             # Darwin Core Archive export
 │   ├── scripts/                  # Utility scripts (executed, not read)
+│   │   ├── dispatch.py           # State machine: checkpoint, recommend, cleanup
+│   │   ├── session_manager.py    # Session lifecycle, bootstrap detection
+│   │   ├── process_agent_output.py  # Agent output processing, auto-normalization
+│   │   ├── write_finds.py        # Validation, Crossref backfill, CSV writing
+│   │   ├── scrub.py              # Deterministic finds/ JSON normalization
+│   │   ├── inline_qc.py          # 3-tier post-write QC (auto-fix/audit/human)
+│   │   ├── coverage_tracker.py   # Chao1 richness, accumulation curves
+│   │   ├── review_discoveries.py # Auto-apply routine discoveries to guide.md
+│   │   ├── bootstrap.py          # Derive v5 state from existing data
 │   │   ├── csv_writer.py         # Schema-enforced CSV writes (atomic)
-│   │   ├── api_utils.py          # Retry/backoff + per-API rate limiting
-│   │   ├── state_utils.py        # Atomic state file management
-│   │   ├── statistical_qc.py     # Chao1, Grubbs outlier detection, QC plots
-│   │   ├── taxonomy_resolver.py  # GBIF Backbone Taxonomy API resolver
 │   │   ├── calibration.py        # Isotonic regression confidence calibration
+│   │   ├── taxonomy_resolver.py  # GBIF Backbone Taxonomy API resolver
+│   │   ├── statistical_qc.py     # Grubbs outlier detection, QC plots
+│   │   ├── validate_finds_json.py   # Finds JSON schema validation
+│   │   ├── pdf_utils.py          # PDF path construction, standardized naming
+│   │   ├── state_utils.py        # Atomic state file management
+│   │   ├── api_utils.py          # Retry/backoff + per-API rate limiting
 │   │   ├── benchmark.py          # Precision/recall/F1 per field
 │   │   ├── knowledge_graph_export.py  # JSON-LD provenance export
-│   │   ├── reproduce.py          # Reproducibility verification
-│   │   ├── pdf_utils.py          # PDF path construction, bootstrap, standardized naming
-│   │   ├── dispatch.py           # Agent dispatch tracker, recommend, retriage
-│   │   ├── process_agent_output.py  # Agent output processing, auto-normalization
-│   │   ├── session_manager.py    # Session lifecycle, upgrades, state management
-│   │   ├── write_finds.py        # End-to-end Writer pipeline
-│   │   ├── validate_finds_json.py   # Finds JSON schema validation
-│   │   ├── test_harness.py       # Synthetic data generator for testing
 │   │   └── dashboard_server.py   # Optional live dashboard with SSE updates
 │   └── references/               # On-demand reference files
 │       ├── setup_wizard.md       # First-run setup + calibration
@@ -322,21 +315,20 @@ TraitTrawler/
 │       ├── config_template.yaml  # Project config template
 │       ├── calibration.md        # Calibration phase details
 │       ├── csv_schema.md         # Field definitions
-│       ├── dispatch_cycle.md     # Agent spawn templates, logging formats
-│       ├── extractor_common.md   # Shared extraction rules (inlined to A/B/C)
+│       ├── dispatch_cycle.md     # Agent spawn templates, failure handling
 │       └── knowledge_evolution.md # Discovery types, logging format
 │
 ├── .claude/
-│   └── hooks/                   # Claude Code hooks (agent guardrails)
-│       ├── block-manager-extraction.sh  # Prevents Manager from calling search/extraction MCPs
-│       ├── validate-finds.sh    # Validates finds/ JSON on write
-│       └── validate-dealer-output.sh    # Validates dealer_results/ JSON on write
+│   └── hooks/                   # Claude Code hooks (Manager-only guardrails)
+│       ├── protect-results-csv.sh  # Prevents direct writes to results.csv
+│       ├── protect-root.sh         # Prevents file creation in project root
+│       └── block-bash-file-creation.sh  # Prevents ad-hoc file creation via Bash
 │
 ├── tests/
 │   ├── test_verify_and_export.py     # Verification + DwC export tests (8 tests)
 │   └── test_v4_pipeline_flow.py      # V4 folder-based pipeline tests (12 tests)
 ├── evals/                        # Skill evaluation suite
-├── ARCHITECTURE_v4.md            # Multi-agent architecture specification
+├── ARCHITECTURE_v4.md            # Legacy v4 architecture (historical reference)
 ├── .github/workflows/ci.yml
 ├── CHANGELOG.md
 ├── CITATION.cff
@@ -363,27 +355,18 @@ TraitTrawler/
 
 GitHub's **"Cite this repository"** button (top right) uses [`CITATION.cff`](CITATION.cff).
 
-## Upgrading an existing project
+## Upgrading from v4
 
-If you have an existing project folder with results and want to use a newer version of the skill:
+If you have an existing v4 project folder:
 
-1. **Rebuild and reinstall the skill** (see below). This updates SKILL.md, all scripts, and reference docs.
-2. **Your project data is safe.** The skill never modifies your `collector_config.yaml`, `config.py`, `guide.md`, `results.csv`, or state files during installation — only during collection sessions.
-3. **Update the scripts in your project folder.** The easiest way: delete the `scripts/` folder and `dashboard_generator.py`/`verify_session.py`/`export_dwc.py` from your project, then start a new session. The agent copies fresh scripts, hooks, and settings from the skill at startup (§1e). Hooks are copied to `.claude/hooks/` and `settings.json` is created if missing (existing settings are not overwritten).
+1. **Rebuild and reinstall the skill** (see below).
+2. **Your project data is safe.** Bring your entire project folder — especially `results.csv`, `pdfs/`, and the `state/` directory.
+3. **Start a new session.** The system auto-detects the v4 project and runs `bootstrap.py` to migrate all learning state (calibration models, triage intelligence, coverage baselines, taxonomy cache, search history) to v5 format. No manual migration needed.
 
-```bash
-# In your project folder:
-rm -rf scripts/ dashboard_generator.py verify_session.py export_dwc.py
-# Then start a new session — the agent will copy fresh scripts automatically
-```
-
-Alternatively, copy them manually from the repository:
-```bash
-cp /path/to/TraitTrawler/skill/dashboard_generator.py .
-cp /path/to/TraitTrawler/skill/verify_session.py .
-cp /path/to/TraitTrawler/skill/export_dwc.py .
-cp -r /path/to/TraitTrawler/skill/scripts/ scripts/
-```
+The more of your v4 state you bring, the better the bootstrap:
+- `results.csv` alone → minimal (re-examines no-data papers, no calibration)
+- `results.csv` + `pdfs/` → basic (can generate extraction examples)
+- Full project folder → complete (all accumulated intelligence preserved)
 
 ---
 

@@ -35,12 +35,14 @@ skip the paper.
 
 **Symptom:** JSON files accumulate in `finds/` and are never written to CSV.
 
-**Cause:** The Writer agent failed or the Manager didn't spawn the Writer
-after extraction. The Manager's backlog check handles this at next startup.
+**Cause:** write_finds.py failed or the Manager didn't run the scrub+write
+pipeline after extraction. The Manager's backlog check handles this at
+next startup.
 
 **Fix:** Manually trigger: "process the finds folder". The Manager spawns
-a Writer to clear the backlog. If a specific file fails repeatedly, check
-its JSON for schema issues.
+the Scrubber to normalize the files, then runs write_finds.py to clear the
+backlog. The Scrubber fixes most schema issues (field names, missing
+metadata, notation variants) automatically.
 
 ### Unpaywall / OpenAlex return no PDF URL
 
@@ -138,8 +140,8 @@ results.csv successfully but the subsequent processed.json / search_log.json
 writes are incomplete — typically because the agent's generated code updates
 them in a separate step that silently fails or is skipped after an error.
 
-**Fix:** In v4, the Writer agent verifies results.csv after every write and
-updates processed.json as part of its pipeline (see `agents/writer.md`).
+**Fix:** In v4, write_finds.py verifies results.csv after every write and
+updates processed.json as part of its pipeline.
 The Manager also runs `verify_session.py` at session start to catch any
 remaining desync. If you discover desync, run verify_session.py manually.
 
@@ -302,21 +304,20 @@ the backlog automatically (section 1e).
 misinterpreting unusual notation). Consensus voting produces a confident
 but incorrect result.
 
-**Cause:** Systematic errors where all agents share a blind spot. Consensus
-catches random errors but not shared misconceptions.
+**Cause:** Systematic errors where the Extractor has a blind spot.
 
-**Fix:** This is what the Opus escalation path is for — when consensus fails,
-the Dealer spawns an Opus agent. But if consensus SUCCEEDS with wrong values,
-the error is only caught by audit mode or user correction. Use "correction:"
-to trigger mid-session correction, which updates guide.md and re-extracts
-affected papers.
+**Fix:** The Auditor catches most of these by independently verifying
+each value against the source page. If both Extractor and Auditor share
+the same misconception, the error is caught by inline QC (cross-paper
+conflict detection) or user correction. Use "correction:" to update
+guide.md and prevent the error in future extractions.
 
 ### Agent spawn overhead too high (v4)
 
 **Symptom:** Small sessions (5-10 papers) feel slow due to agent startup.
 
 **Cause:** Each Agent tool invocation has overhead. The v4 pipeline spawns
-Searcher + Fetcher + Dealer + Extractor(x3) + Writer per paper.
+Searcher + Fetcher + Dealer + Extractor(x3) + Scrubber per paper.
 
 **Fix:** Use `fast` extraction mode for small exploratory sessions. This
 reduces extraction agents from 3 to 1 per paper. For very small sessions,

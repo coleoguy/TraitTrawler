@@ -210,8 +210,8 @@ Between each paper in the main loop, check for user input signals:
 - "skip" or "next" → skip current paper, mark `"outcome": "user_skipped"`
 - "redo" or "redo last" → re-extract previous paper
 - "pause" → stop after current paper without ending session
-- "show trace" → display chain-of-thought trace for last record (§22)
-- "consensus on last" → trigger consensus extraction for last paper (§21)
+- "status" → print pipeline state
+- "review" → show next item from human review queue
 
 After each paper, print a one-line confidence trend:
 ```
@@ -482,8 +482,7 @@ At session end, also:
    See [benchmarking.md](references/benchmarking.md) §20e.
 5. Run the domain knowledge review (§14) if discoveries were logged.
    See [knowledge_evolution.md](references/knowledge_evolution.md).
-6. Print consensus extraction summary if consensus was triggered this session.
-   See [consensus_extraction.md](references/consensus_extraction.md) §21d.
+6. Print extraction and verification summary (Auditor results).
 7. Print tool effectiveness analysis from source_stats.json.
    See [advanced_features.md](references/advanced_features.md) §24d.
 8. Run cross-paper conflict detection:
@@ -618,8 +617,8 @@ if os.path.exists(cmd_path):
         open(cmd_path, "w").close()
 ```
 
-Supported commands: `skip`, `pause`, `redo last`, `show trace`,
-`run QC`, `consensus on last`, `stop`.
+Supported commands: `pause`, `status`, `explore`, `review`,
+`run QC`, `stop`.
 
 ### What the static dashboard shows
 
