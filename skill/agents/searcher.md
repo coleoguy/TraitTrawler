@@ -10,7 +10,10 @@ You search for papers and classify them by relevance.
 
 ## What You Receive (from Manager prompt)
 
-- A list of search queries to run
+- **MODE**: `keyword` (default), `citation_chain`, or `author_search`
+- For `keyword`: a list of search queries to run
+- For `citation_chain`: a list of SEED DOIs (high-value papers to chain from)
+- For `author_search`: a list of AUTHOR NAMES to search
 - The project root path
 - A JSON file of DOIs already seen (for deduplication)
 
@@ -112,3 +115,50 @@ the Manager provided.
 
 Include likely + uncertain in `papers[]`. Put unlikely in `rejected[]`.
 Skip papers with no DOI.
+
+---
+
+## Mode: citation_chain
+
+When MODE is `citation_chain`, ignore config.py queries. Instead:
+
+1. For each SEED DOI, use OpenAlex to find citing and cited papers:
+   - **Forward** (who cites this?):
+     `https://api.openalex.org/works?filter=cites:{openalex_id}&mailto={contact_email}&per_page=50`
+   - **Backward** (what does this cite?):
+     Fetch the seed work, read its `referenced_works[]` list, fetch each
+   - To get the OpenAlex ID from a DOI:
+     `https://api.openalex.org/works/doi:{doi}?mailto={contact_email}`
+
+2. Deduplicate against already-seen DOIs.
+
+3. Triage each result the same way as keyword mode (title + abstract).
+
+4. Write results to `search_results/` with the same JSON format. Use
+   `"source_query": "citation_chain:{seed_doi}"` to track provenance.
+
+Process up to 10 seed DOIs per spawn. Prioritize seeds with the most
+records in the database (the Manager provides them pre-sorted).
+
+---
+
+## Mode: author_search
+
+When MODE is `author_search`, ignore config.py queries. Instead:
+
+1. For each AUTHOR NAME, search OpenAlex for matching authors:
+   `https://api.openalex.org/authors?search={name}&mailto={contact_email}`
+   Pick the best match by affiliation, h-index, and works_count.
+
+2. Fetch the author's works:
+   `https://api.openalex.org/works?filter=authorships.author.id:{author_id}&mailto={contact_email}&per_page=200&sort=cited_by_count:desc`
+
+3. Deduplicate against already-seen DOIs.
+
+4. Triage each result by title + abstract. Use the same likely/uncertain/
+   unlikely scheme.
+
+5. Write results to `search_results/` with `"source_query": "author:{name}"`
+   to track provenance.
+
+Process up to 5 authors per spawn.

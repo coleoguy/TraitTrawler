@@ -17,6 +17,57 @@ SEARCH QUERIES:\n{next 20 from config.py}\nALREADY SEEN DOIs:\n{doi list}\nPROJE
 Batch size: 20 queries. Generate DOI list:
 `python3 -c "import json; [print(k) for k in json.load(open('state/processed.json')).keys()]"`
 
+**Exhaustion**: Stop keyword Searcher when all queries in config.py have run.
+Then activate Phase 2.
+
+### Searcher Phase 2: Citation Chaining (background)
+
+Trigger when keyword searches are exhausted (all queries run, <5% yield on
+last 20). No user prompt needed — just spawn it.
+
+Pick seed DOIs — top 10 papers by record count from processed.json:
+```bash
+python3 -c "
+import json
+proc = json.load(open('state/processed.json'))
+ranked = sorted(proc.items(), key=lambda x: x[1].get('records',0), reverse=True)
+for doi, v in ranked[:10]:
+    print(doi)
+"
+```
+
+```
+Agent(model=sonnet, run_in_background=true, prompt="You are a TraitTrawler Searcher agent.
+Read your full instructions from the searcher.md file in the skill agents directory.
+MODE: citation_chain\nSEED DOIS:\n{seed_dois}\nALREADY SEEN DOIs:\n{doi list}\nPROJECT ROOT: {cwd}")
+```
+
+Process return the same way as keyword Searcher. Re-spawn with next 10
+seeds if the first batch finds new papers. Stop when yield < 5%.
+
+### Searcher Phase 3: Author Search (background)
+
+Trigger when citation chaining yield drops below 5%, OR guide.md has a
+"Prolific Authors" section.
+
+Extract author list from guide.md (one grep, not a full file read):
+```bash
+python3 -c "
+import re
+with open('guide.md') as f: text = f.read()
+m = re.search(r'Prolific Authors\n\n(.+)', text)
+if m: print(m.group(1))
+"
+```
+
+```
+Agent(model=sonnet, run_in_background=true, prompt="You are a TraitTrawler Searcher agent.
+Read your full instructions from the searcher.md file in the skill agents directory.
+MODE: author_search\nAUTHOR NAMES:\n{author_list}\nALREADY SEEN DOIs:\n{doi list}\nPROJECT ROOT: {cwd}")
+```
+
+Process return the same way. Spawn once per session (don't re-spawn).
+
 ### Fetcher (background, dual-track)
 Route DOIs then spawn two Fetchers in parallel (both background):
 ```bash

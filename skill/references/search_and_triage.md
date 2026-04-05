@@ -55,13 +55,17 @@ timestamp to `search_log.json`. Skip queries already in `search_log.json`.
 
 ## 3b. Smart Citation Chaining
 
-When all keyword searches from `config.py` are exhausted and the queue is empty,
-or when the user requests it ("chain citations", "follow references"), offer:
+Trigger citation chaining when ANY of:
+- All keyword queries exhausted AND new_to_queue rate < 5% for last 20 queries
+  (keyword searches are dried up — don't wait for the queue to empty)
+- User requests it ("chain citations", "follow references")
+- Queue has < 10 papers remaining
 
-```
-All {N} keyword searches complete. Want me to follow citations from
-high-confidence papers for additional leads? [y/n]
-```
+Do NOT wait for the queue to be empty. A full queue means we found papers
+to process, not that search is done. Keyword exhaustion alone is sufficient.
+
+When triggered, the Manager spawns a Searcher in `citation_chain` mode
+(see dispatch_cycle.md). No user prompt needed — just do it.
 
 ### Bidirectional chaining
 

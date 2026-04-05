@@ -109,7 +109,9 @@ python3 scripts/dispatch.py recommend --compact --project-root .
 
 | Action | What to do |
 |---|---|
-| `spawn_searcher` | Searcher agent (background) |
+| `spawn_searcher` | Searcher agent (background) — keyword mode |
+| `spawn_citation_searcher` | Searcher agent (background) — citation_chain mode |
+| `spawn_author_searcher` | Searcher agent (background) — author_search mode |
 | `spawn_api_fetcher` | API Fetcher agent (background) |
 | `spawn_browser_fetcher` | Browser Fetcher agent (background) |
 | `spawn_extractors` | N Extractor agents (background), one per `handoff_file` |
@@ -157,7 +159,19 @@ When session target reached or user stops:
    ```bash
    python3 scripts/process_agent_output.py --action consolidate_leads --project-root .
    ```
-3. Run session teardown:
+3. **Review learning files** (if `learning/*.json` exists):
+   - Count: `ls learning/*.json 2>/dev/null | wc -l`
+   - If > 0, read `references/knowledge_and_transfer.md` for the full workflow
+   - For each file: read JSON, classify type, propose guide.md amendment
+   - **Skip** `new_taxon` type (individual species are normal extraction)
+   - **Skip** if `proposed_rule` duplicates existing guide.md content
+   - **Routine** (notation_variant, terminology): propose one-line guide.md add
+   - **Structural** (validation_gap, extraction_pattern): present diff, ask user
+   - Apply accepted changes to guide.md via Edit tool
+   - Log each to `state/discoveries.jsonl` with `applied: true/false`
+   - Move processed files to `state/dealt/learning/`
+   - Print: `learning: N reviewed, M applied to guide.md, K skipped`
+4. Run session teardown:
    ```bash
    python3 scripts/session_manager.py end \
        --project-root . \
@@ -165,7 +179,7 @@ When session target reached or user stops:
        --papers-processed N \
        --records-written N
    ```
-4. Print session summary: papers processed, records added, source breakdown,
+5. Print session summary: papers processed, records added, source breakdown,
    database totals, queue remaining, triage accuracy
 
 ---
@@ -188,7 +202,8 @@ Do NOT pause to solicit commands. Keep the loop running.
 
 - Session target reached
 - User says stop or pause
-- All streams exhausted: searches done AND queue empty AND no agents in-flight
+- All streams exhausted: all search phases done (keywords + citation chain +
+  author search) AND queue empty AND no agents in-flight
 - 10,000 total records in results.csv
 
 When searches are exhausted but queue/extraction work remains, keep running.
@@ -238,4 +253,6 @@ Load only when the user asks. Never pre-load during collection.
 | Audit & QC | `references/audit_and_qc.md` |
 | Campaign planning | `references/campaign_and_calibration.md` |
 | Calibration | `references/calibration.md` |
+| Search & triage | `references/search_and_triage.md` |
+| Knowledge evolution | `references/knowledge_and_transfer.md` |
 | Troubleshooting | `references/troubleshooting.md` |

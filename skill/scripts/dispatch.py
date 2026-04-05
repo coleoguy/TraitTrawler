@@ -269,7 +269,9 @@ def claimed_files(project_root):
 
 def dispatch_checkpoint(project_root, papers_processed,
                         searcher_exhausted, session_target,
-                        session_id=None):
+                        session_id=None,
+                        citation_chain_exhausted=None,
+                        author_search_exhausted=None):
     """Save volatile Manager state to dispatch_state.json.
 
     These values normally live in the Manager's LLM context. Checkpointing
@@ -281,9 +283,19 @@ def dispatch_checkpoint(project_root, papers_processed,
             "active_agents": {},
             "session_counts": {},
         })
+        # Preserve previous checkpoint values for new fields if not passed
+        prev_ckpt = state.get("manager_checkpoint", {})
         ckpt = {
             "papers_processed": papers_processed,
             "searcher_exhausted": searcher_exhausted,
+            "citation_chain_exhausted": (
+                citation_chain_exhausted if citation_chain_exhausted is not None
+                else prev_ckpt.get("citation_chain_exhausted", False)
+            ),
+            "author_search_exhausted": (
+                author_search_exhausted if author_search_exhausted is not None
+                else prev_ckpt.get("author_search_exhausted", False)
+            ),
             "session_target": session_target,
             "updated_at": now_iso(),
         }
@@ -302,6 +314,8 @@ def dispatch_checkpoint(project_root, papers_processed,
     ps = safe_read_json(ps_path, default={})
     ps["papers_processed"] = papers_processed
     ps["searcher_exhausted"] = searcher_exhausted
+    ps["citation_chain_exhausted"] = ckpt["citation_chain_exhausted"]
+    ps["author_search_exhausted"] = ckpt["author_search_exhausted"]
     ps["session_target"] = session_target
     ps["last_checkpoint"] = now_iso()
     if session_id is not None:
@@ -347,7 +361,9 @@ def dispatch_checkpoint(project_root, papers_processed,
 
 def recommend(project_root, searcher_exhausted=None,
               max_concurrent_extractors=5, session_target=None,
-              papers_processed=None):
+              papers_processed=None,
+              citation_chain_exhausted=None,
+              author_search_exhausted=None):
     """Recommend next dispatch actions based on current pipeline state.
 
     When papers_processed, searcher_exhausted, or session_target are None
@@ -362,18 +378,32 @@ def recommend(project_root, searcher_exhausted=None,
         papers_processed = ckpt.get("papers_processed", 0)
     if searcher_exhausted is None:
         searcher_exhausted = ckpt.get("searcher_exhausted", False)
+    if citation_chain_exhausted is None:
+        citation_chain_exhausted = ckpt.get("citation_chain_exhausted", False)
+    if author_search_exhausted is None:
+        author_search_exhausted = ckpt.get("author_search_exhausted", False)
     if session_target is None:
         session_target = ckpt.get("session_target")
 
     actions = []
 
-    # Searcher
-    if (not status["searcher_active"]
-            and not searcher_exhausted):
-        actions.append({
-            "action": "spawn_searcher",
-            "reason": "queries remain and searcher not active",
-        })
+    # Searcher — three phases: keyword → citation_chain → author_search
+    if not status["searcher_active"]:
+        if not searcher_exhausted:
+            actions.append({
+                "action": "spawn_searcher",
+                "reason": "keyword queries remain and searcher not active",
+            })
+        elif not citation_chain_exhausted:
+            actions.append({
+                "action": "spawn_citation_searcher",
+                "reason": "keywords exhausted, citation chaining available",
+            })
+        elif not author_search_exhausted:
+            actions.append({
+                "action": "spawn_author_searcher",
+                "reason": "citation chaining exhausted, author search available",
+            })
 
     # API Fetcher
     if not status["api_fetcher_active"] and status["queue"] > 0:
@@ -481,9 +511,11 @@ def recommend(project_root, searcher_exhausted=None,
             "reason": f"{status['finds']} finds ready",
         })
 
-    # Session end check
+    # Session end check — all THREE search phases must be exhausted
     all_exhausted = (
         searcher_exhausted
+        and citation_chain_exhausted
+        and author_search_exhausted
         and status["queue"] == 0
         and len(unclaimed) == 0
         and status["finds"] == 0
@@ -709,6 +741,10 @@ def main():
     p_rec.add_argument("--project-root", default=".")
     p_rec.add_argument("--searcher-exhausted", action="store_true",
                        default=None)
+    p_rec.add_argument("--citation-chain-exhausted", action="store_true",
+                       default=None)
+    p_rec.add_argument("--author-search-exhausted", action="store_true",
+                       default=None)
     p_rec.add_argument("--max-concurrent-extractors", type=int, default=5)
     p_rec.add_argument("--session-target", default=None)
     p_rec.add_argument("--papers-processed", type=int, default=None)
@@ -721,6 +757,8 @@ def main():
     p_ckpt.add_argument("--project-root", default=".")
     p_ckpt.add_argument("--papers-processed", type=int, required=True)
     p_ckpt.add_argument("--searcher-exhausted", action="store_true")
+    p_ckpt.add_argument("--citation-chain-exhausted", action="store_true")
+    p_ckpt.add_argument("--author-search-exhausted", action="store_true")
     p_ckpt.add_argument("--session-target", default=None)
     p_ckpt.add_argument("--session-id", default=None)
 
@@ -776,12 +814,16 @@ def main():
     elif args.command == "recommend":
         # None means "use checkpoint fallback" — only pass explicit values
         se = args.searcher_exhausted if args.searcher_exhausted else None
+        cce = args.citation_chain_exhausted if args.citation_chain_exhausted else None
+        ase = args.author_search_exhausted if args.author_search_exhausted else None
         result = recommend(
             args.project_root,
             searcher_exhausted=se,
             max_concurrent_extractors=args.max_concurrent_extractors,
             session_target=args.session_target,
             papers_processed=args.papers_processed,
+            citation_chain_exhausted=cce,
+            author_search_exhausted=ase,
         )
         if args.compact:
             result.pop("status", None)
@@ -794,6 +836,8 @@ def main():
             searcher_exhausted=args.searcher_exhausted,
             session_target=args.session_target,
             session_id=args.session_id,
+            citation_chain_exhausted=args.citation_chain_exhausted or None,
+            author_search_exhausted=args.author_search_exhausted or None,
         )
         print(json.dumps({"status": "ok"}))
 

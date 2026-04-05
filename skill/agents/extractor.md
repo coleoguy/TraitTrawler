@@ -185,23 +185,38 @@ Move handoff to `state/dealt/`.
 
 ### Step 6: Learning (if triggered)
 
-Write `learning/{doi_safe}_{ISO_timestamp}.json` when ANY of:
-1. Species not in guide.md taxonomy notes
-2. Measurement method not in guide.md
-3. Confidence < 0.70 on any record
-4. Notation/terminology not covered by guide.md
-5. Ambiguous value with multiple plausible interpretations
+Write `learning/{doi_safe}_{ISO_timestamp}.json` ONLY when:
+1. **Recurring notation/terminology gap** — notation not covered by guide.md
+   AND multiple records in this paper use it (or it's a journal convention).
+   A single unusual value is not worth a learning file.
+2. **Systematic extraction ambiguity** — the same paper has conflicting
+   interpretations that required a judgment call. Document the reasoning
+   so future extractors facing the same pattern don't have to guess.
+3. **Validation rule gap** — a record passes all validation but seems wrong
+   based on biological context (e.g., value is an outlier for the taxon).
+   The gap is the missing rule, not the record itself.
+4. **Source structure pattern** — this paper or journal has an unusual layout
+   that other extractors would benefit from knowing (e.g., data split across
+   supplementary tables, compilation vs primary data mixed in same table,
+   non-standard column headers).
+
+**Do NOT write learning files for:**
+- Individual new species — that's normal extraction, not a discovery
+- Uncertain species identity (aff., cf., sp.) — guide.md already covers this
+- Low confidence alone — only write if the low confidence reveals a gap in
+  the extraction rules that could be fixed
+- Rules that already exist in guide.md — read guide.md before writing
 
 If none triggered, skip.
 
 ```json
 {
   "doi": "...",
-  "type": "notation_variant|ambiguity_pattern|new_taxon|extraction_pattern|low_confidence",
-  "description": "What was discovered",
-  "proposed_rule": "Specific rule for guide.md",
+  "type": "notation_variant|ambiguity_pattern|validation_gap|extraction_pattern",
+  "description": "What was discovered — be specific",
+  "proposed_rule": "Specific, actionable rule for guide.md",
   "affected_fields": ["field_name"],
-  "source_context": "Relevant text from paper",
-  "trigger": "Which trigger fired"
+  "source_context": "Relevant text from paper showing the pattern",
+  "trigger": "Which trigger fired and why this helps future extractions"
 }
 ```
