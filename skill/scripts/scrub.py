@@ -30,32 +30,6 @@ from datetime import datetime, timezone
 
 CONFIDENCE_WORDS = {"high": 0.85, "medium": 0.65, "low": 0.40}
 
-# Canonical consensus_vote defaults keyed by consensus value
-CONSENSUS_VOTE_DEFAULTS = {
-    "full":         "1_1_1_NA",
-    "majority":     "1_1_0_NA",
-    "single_pass":  "1_NA_NA_NA",
-    "single_agent": "1_NA_NA_NA",
-}
-
-VALID_CONSENSUS_TYPES = {
-    "full", "majority", "two_found", "single_agent", "none",
-    "single_pass", "opus_escalation",
-}
-
-# Map non-standard consensus values (from agents) to valid ones
-CONSENSUS_ALIASES = {
-    "verified":       "single_pass",
-    "auditor":        "single_pass",
-    "extract_verify": "single_pass",
-    "confirmed":      "single_pass",
-    "corrected":      "single_pass",
-}
-
-# Regex for valid vote patterns: digits 0/1 or NA separated by underscores
-import re
-VOTE_PATTERN = re.compile(r"^[01NA]+_[01NA]+_[01NA]+_[01NA]+$")
-
 # Sex chromosome normalization map (lowercase key -> canonical value)
 SEX_CHROM_MAP = {
     "xyp": "Xyp", "xyr": "Xyp",
@@ -169,8 +143,12 @@ def _normalize_confidence(record, repairs):
         repairs["confidence_normalized"] += 1
 
 
-def _normalize_sex_chrom(record, repairs):
-    """Normalize sex_chromosome_system values."""
+def _normalize_sex_chrom(record, repairs, unresolved=None):
+    """Normalize sex_chromosome_system values.
+
+    If *unresolved* is a list, append details when a non-empty value
+    cannot be mapped to a canonical form.
+    """
     val = record.get("sex_chromosome_system", "")
     if not isinstance(val, str) or not val.strip():
         return
@@ -187,6 +165,15 @@ def _normalize_sex_chrom(record, repairs):
     if _MULTI_X_RE.match(raw):
         record["sex_chromosome_system"] = raw.replace(" ", "")
         repairs["sex_chrom_normalized"] += 1
+        return
+
+    # Value is non-empty but unrecognized — report it
+    if unresolved is not None:
+        unresolved.append({
+            "field": "sex_chromosome_system",
+            "raw_value": raw,
+            "species": record.get("species", ""),
+        })
 
 
 def _normalize_species(record, repairs):
@@ -257,7 +244,7 @@ def _normalize_float(record, field, repairs):
 # Core scrubbing logic
 # ---------------------------------------------------------------------------
 
-def scrub_file(fpath, repairs):
+def scrub_file(fpath, repairs, normalization_failures=None, project_root=None):
     """Scrub a single finds/ JSON file in-place. Returns (ok, error_msg)."""
     try:
         with open(fpath, "r", encoding="utf-8") as f:
@@ -309,6 +296,9 @@ def scrub_file(fpath, repairs):
 
     extraction_mode = str(data.get("extraction_mode", "")).strip().lower()
 
+    # Track fields that couldn't be normalized for this file
+    unresolved = []
+
     # --- Per-record processing ---
     for rec in records:
         if not isinstance(rec, dict):
@@ -342,26 +332,23 @@ def scrub_file(fpath, repairs):
                 rec[field] = fallback
                 repairs["metadata_backfilled"] += 1
 
-        # 3. Consensus normalization (fix invalid values, not just empty)
-        consensus = str(rec.get("consensus", "")).strip().lower()
-        if not consensus or consensus not in VALID_CONSENSUS_TYPES:
-            # Map known aliases or default to single_pass
-            rec["consensus"] = CONSENSUS_ALIASES.get(consensus, "single_pass")
-            repairs["consensus_fixed"] = repairs.get("consensus_fixed", 0) + 1
-
-        vote = str(rec.get("consensus_vote", "")).strip()
-        if not vote or not VOTE_PATTERN.match(vote):
-            # Invalid or missing vote — regenerate from consensus type
-            cons_val = str(rec.get("consensus", "")).strip().lower()
-            rec["consensus_vote"] = CONSENSUS_VOTE_DEFAULTS.get(
-                cons_val, "1_NA_NA_NA")
-            repairs["consensus_fixed"] = repairs.get("consensus_fixed", 0) + 1
+        # 3. pdf_path file-exists check
+        pdf_val = str(rec.get("pdf_path", "")).strip()
+        if pdf_val and project_root:
+            abs_pdf = os.path.join(project_root, pdf_val)
+            if not os.path.isfile(abs_pdf):
+                if unresolved is not None:
+                    unresolved.append({
+                        "field": "pdf_path",
+                        "raw_value": pdf_val,
+                        "species": rec.get("species", ""),
+                    })
 
         # 4. Confidence normalization
         _normalize_confidence(rec, repairs)
 
         # 5. Sex chromosome normalization
-        _normalize_sex_chrom(rec, repairs)
+        _normalize_sex_chrom(rec, repairs, unresolved)
 
         # 6. Species cleanup
         _normalize_species(rec, repairs)
@@ -372,7 +359,7 @@ def scrub_file(fpath, repairs):
         for field in FLOAT_FIELDS:
             _normalize_float(rec, field, repairs)
 
-        # 9. flag_for_review: coerce to boolean string
+        # 8. flag_for_review: coerce to boolean string
         ffr = rec.get("flag_for_review")
         if ffr is not None and not isinstance(ffr, bool) and ffr not in (
                 "True", "False", "true", "false", "", "0", "1"):
@@ -381,12 +368,21 @@ def scrub_file(fpath, repairs):
             repairs["flag_for_review_coerced"] = (
                 repairs.get("flag_for_review_coerced", 0) + 1)
 
-        # 10. None/null -> empty string (catch any stragglers in records)
+        # 9. None/null -> empty string (catch any stragglers in records)
         for k, v in list(rec.items()):
             if v is None:
                 rec[k] = ""
 
     data["records"] = records
+
+    # Report normalization failures for this file
+    if unresolved and normalization_failures is not None:
+        doi = data.get("doi", os.path.basename(fpath))
+        normalization_failures.append({
+            "file": os.path.basename(fpath),
+            "doi": doi,
+            "unresolved": unresolved,
+        })
 
     # --- Write back in-place ---
     try:
@@ -407,7 +403,6 @@ def scrub_finds(project_root, target_dir=None, target_file=None):
     """Scrub finds/ JSON files. Returns summary dict."""
     repairs = {
         "metadata_backfilled": 0,
-        "consensus_fixed": 0,
         "confidence_normalized": 0,
         "sex_chrom_normalized": 0,
         "species_cleaned": 0,
@@ -430,9 +425,11 @@ def scrub_finds(project_root, target_dir=None, target_file=None):
         pattern = os.path.join(project_root, "finds", "*.json")
         files = sorted(glob.glob(pattern))
 
+    normalization_failures = []
     files_scrubbed = 0
     for fpath in files:
-        ok, err = scrub_file(fpath, repairs)
+        ok, err = scrub_file(fpath, repairs, normalization_failures,
+                             project_root=project_root)
         if ok:
             files_scrubbed += 1
         else:
@@ -446,6 +443,8 @@ def scrub_finds(project_root, target_dir=None, target_file=None):
         "repairs": repairs,
         "errors": errors,
     }
+    if normalization_failures:
+        summary["normalization_failures"] = normalization_failures
     return summary
 
 

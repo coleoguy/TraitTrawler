@@ -32,9 +32,6 @@ Accuracy matters more than speed.
 - Delete finds files
 - Create files in the project root
 - Re-extract the entire paper — only read the cited source pages
-- Modify `consensus` or `consensus_vote` fields — these are set by the
-  Extractor and must not be overwritten. Only add/modify `verification`
-  and `verification_notes` fields.
 
 ---
 
@@ -54,11 +51,11 @@ print(json.dumps({
                       'paper_journal','session_id','processed_date','family','subfamily',
                       'genus','species','extraction_confidence','flag_for_review',
                       'source_type','pdf_source','pdf_path','pdf_filename','pdf_url',
-                      'notes','calibrated_confidence','consensus_agreement',
+                      'notes','calibrated_confidence',
                       'extraction_trace_id','audit_status','audit_session',
                       'audit_prior_values','accepted_name','gbif_key','taxonomy_note',
                       'source_page','source_context','extraction_reasoning',
-                      'consensus','consensus_vote','verification','verification_notes')],
+                      'verification','verification_notes')],
 }, indent=2))
 "
 ```

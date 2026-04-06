@@ -158,38 +158,37 @@ Write leads the same way as results.csv (Python csv.DictWriter, append mode,
 
 ## 6. PDF Naming and Organization
 
-**Use the `pdf_utils.py` utility** to construct paths. Never build PDF paths
-inline — the utility handles sanitization, directory creation, and consistent
-naming:
+**Use `pdf_utils.build_source_path()`** to construct paths. Never build PDF
+paths inline — the utility handles sanitization, directory creation, and
+collision avoidance:
 
 ```python
 import sys; sys.path.insert(0, "scripts")
-from pdf_utils import build_pdf_path
+from pdf_utils import build_source_path
 
-full_path, rel_path = build_pdf_path(
+full_path, rel_path = build_source_path(
     project_root=".",
-    first_author=first_author,
-    year=year,
-    journal=journal,
-    doi=doi,
-    subfolder_value=family,  # or whatever the grouping field is
+    authors="Smith, J; Jones, B",
+    year=2003,
+    title="Karyotype of Chrysolina fastuosa",
+    doi="10.1234/example",
 )
+# rel_path = "pdfs/Smith-2003-Chrysolina-a.pdf"
 # Then download: urllib.request.urlretrieve(pdf_url, full_path)
 ```
 
 The function produces paths like:
 ```
-pdfs/{Subfolder}/{FirstAuthor}_{Year}_{JournalAbbrev}_{ShortDOI}.pdf
+pdfs/Lastname-Year-RepresentativeWord-index.pdf
 ```
 
-- **Subfolder**: the primary grouping field from `collector_config.yaml` →
-  `pdf_subfolder_field` (default: `family`). Uses `unknown/` if not yet known.
-- **FirstAuthor**: last name of first author, ASCII only, no spaces, ≤20 chars.
-- **Year**: 4-digit publication year.
-- **JournalAbbrev**: first meaningful word of journal name, ≤12 chars.
-- **ShortDOI**: last segment of DOI after final `/` or `.`, ≤10 chars.
+- **Lastname**: first author's last name, ASCII only, no spaces, ≤20 chars.
+- **Year**: 4-digit publication year, or `noYear` if unknown.
+- **RepresentativeWord**: a taxonomically informative word from the title
+  (prefers genus/family names), ≤20 chars.
+- **index**: letter a-z to avoid collisions; falls back to MD5 hash.
 
-Example: `pdfs/Carabidae/Smith_2003_CompCytogen_9504.pdf`
+Example: `pdfs/Smith-2003-Chrysolina-a.pdf`
 
 **IMPORTANT**: Never save PDFs directly to the project root. The session-end
 check (`python3 scripts/pdf_utils.py --project-root . --check`) catches
@@ -330,22 +329,7 @@ Link each CSV record to its trace via the `extraction_trace_id` field.
 See [advanced_features.md](references/advanced_features.md) §22 for the full
 trace format and verification interface.
 
-### 7e-3. Consensus extraction trigger (§21)
-
-After standard extraction completes for a paper, check whether consensus
-extraction should be triggered:
-
-1. Compute mean confidence across all records from this paper
-2. If mean confidence < `consensus_config.trigger_threshold` (default: 0.7)
-   AND full text is available AND 20+ papers have been processed:
-   - Run two additional extraction passes (enumeration-first + adversarial)
-   - Resolve by field-level voting
-   - Update records with consensus results
-
-v5 uses extract-once + mandatory Auditor verification instead of the
-legacy three-pass consensus protocol.
-
-### 7e-4. Confidence calibration application (§19)
+### 7e-3. Confidence calibration application (§19)
 
 After extraction and before writing to CSV, apply the calibration model
 to transform raw confidence into calibrated probability:

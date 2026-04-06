@@ -157,7 +157,6 @@ def generate_report(project_root, session_id=None, as_json=False):
                          if e.get("event") == "agent_returned"
                          and e.get("agent_type") in ("dealer", "extractor")]
     total_records_extracted = 0
-    consensus_types = defaultdict(int)
     no_data_count = 0
     for entry in extraction_events:
         summary = entry.get("result_summary", {})
@@ -166,9 +165,6 @@ def generate_report(project_root, session_id=None, as_json=False):
             total_records_extracted += summary.get("records", 0)
         elif outcome == "no_data":
             no_data_count += 1
-        ct = summary.get("consensus_type")
-        if ct:
-            consensus_types[ct] += 1
 
     # --- Processed.json Analysis ---
     outcome_counts = defaultdict(int)
@@ -240,7 +236,6 @@ def generate_report(project_root, session_id=None, as_json=False):
             "papers_with_data": papers_extracted - no_data_count,
             "papers_no_data": no_data_count,
             "total_records": total_records_extracted,
-            "consensus_types": dict(consensus_types),
         },
         "agent_performance": {},
         "validation_failures": len(validations_failed),
@@ -338,10 +333,6 @@ def generate_report(project_root, session_id=None, as_json=False):
     lines.append(f"  Papers with data:    {e['papers_with_data']}")
     lines.append(f"  Papers no data:      {e['papers_no_data']}")
     lines.append(f"  Total records:       {e['total_records']}")
-    if e["consensus_types"]:
-        lines.append("  Consensus breakdown:")
-        for ct, count in sorted(e["consensus_types"].items(), key=lambda x: -x[1]):
-            lines.append(f"    {ct:18s} {count:>4d}")
     lines.append("")
 
     lines.append("── Agent Performance ──────────────────────────")

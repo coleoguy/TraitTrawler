@@ -80,5 +80,4 @@ Return a JSON object with `records` and `traces` arrays:
 ```
 
 Replace `TRAIT_FIELD_1`, etc. with the actual field names from `OUTPUT FIELDS`.
-All three extraction agents (A, B, C) use this same output format so the
-consensus orchestrator can align and vote across them.
+All extraction agents use this same output format.

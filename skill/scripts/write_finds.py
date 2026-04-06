@@ -501,8 +501,7 @@ def process_finds(project_root, session_id):
                     rec["first_author"] = pm["first_author"]
             if not rec.get("pdf_source"):
                 rec["pdf_source"] = data.get("pdf_source", "")
-            if not rec.get("pdf_path"):
-                rec["pdf_path"] = data.get("pdf_path", "")
+            # pdf_path backfill is handled by scrub.py; just warn if still empty
             if not rec.get("pdf_path"):
                 print(f"WARNING: Record for '{rec.get('species', '?')}' in "
                       f"{fname} has no pdf_path — provenance broken",

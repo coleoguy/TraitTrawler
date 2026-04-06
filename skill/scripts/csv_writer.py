@@ -111,7 +111,11 @@ SOFT_REQUIRED_FIELDS = {"paper_title"}
 # Fields that should not be empty (warn in notes but do NOT flag for review)
 # These are provenance metadata — missing values are common and recoverable
 # via Crossref backfill, so flagging every record is counterproductive.
-WARN_FIELDS = {"paper_authors", "pdf_path"}
+WARN_FIELDS = {"paper_authors"}
+
+# Fields that flag for review when empty — pdf_path is critical provenance;
+# records without it should be reviewed, not silently passed.
+FLAG_WHEN_EMPTY = {"pdf_path"}
 
 # Fields with known types
 FLOAT_FIELDS = {"extraction_confidence", "calibrated_confidence"}
@@ -195,6 +199,17 @@ def validate_record(record: dict, output_fields: list,
                     field, val, "warn",
                     f"Field '{field}' is empty — may be backfilled from Crossref",
                     action="warn"
+                ))
+
+    # 1d. Flag-when-empty fields (record written but marked for review)
+    for field in FLAG_WHEN_EMPTY:
+        if field in output_fields:
+            val = record.get(field, "")
+            if val is None or str(val).strip() == "":
+                errors.append(ValidationError(
+                    field, val, "provenance",
+                    f"Field '{field}' is empty — record has broken provenance",
+                    action="flag"
                 ))
 
     # 2. Must have doi or paper_title
@@ -413,7 +428,7 @@ _CORE_FIELDS = {
     "country", "source_page", "source_context", "extraction_reasoning",
     "accepted_name", "gbif_key", "taxonomy_note",
     "audit_status", "audit_session", "audit_prior_values",
-    "calibrated_confidence", "consensus_agreement", "extraction_trace_id",
+    "calibrated_confidence", "extraction_trace_id",
 }
 
 

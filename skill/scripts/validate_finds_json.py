@@ -2,8 +2,7 @@
 """
 Validate finds/ JSON files against the canonical schema.
 
-Called by the Consensus Orchestrator after assembling voted results,
-and by write_finds.py before processing. Catches structural problems
+Called by write_finds.py before processing. Catches structural problems
 before they waste downstream Writer cycles.
 
 Usage:
@@ -17,29 +16,16 @@ import argparse
 import glob
 import json
 import os
-import re
 import sys
-
-CONSENSUS_VOTE_PATTERN = re.compile(
-    r"^[01NA]+_[01NA]+_[01NA]+_[01NA]+$"
-)
-
-VALID_CONSENSUS_TYPES = {
-    "full", "majority", "two_found", "single_agent", "none",
-    "single_pass", "opus_escalation",
-}
 
 REQUIRED_TOP_KEYS = {"records", "extraction_timestamp"}
 # doi is strongly recommended but not required — pre-DOI papers
 # (pre-2000 literature) may not have one. Papers without DOI must
 # have a title for identification.
 RECOMMENDED_TOP_KEYS = {"doi"}
-REQUIRED_RECORD_KEYS = {"species", "extraction_confidence", "consensus",
-                        "consensus_vote"}
-# source_page is strongly recommended but not required — many valid
-# extraction scenarios (compiled databases, supplementary tables) don't
-# have meaningful page numbers. Missing source_page triggers a warning
-# but does NOT block validation.
+REQUIRED_RECORD_KEYS = {"species", "extraction_confidence"}
+# Soft-required: recommended but scrub.py auto-fills these before write.
+# Missing values trigger a warning, not a validation failure.
 SOFT_REQUIRED_RECORD_KEYS = {"source_page"}
 
 
@@ -157,17 +143,6 @@ def validate_file(path, config_path=None):
             except (ValueError, TypeError):
                 errors.append(f"{prefix}: extraction_confidence='{ec}' "
                               f"is not numeric")
-
-        # consensus must be a known type
-        cons = rec.get("consensus", "")
-        if cons and cons not in VALID_CONSENSUS_TYPES:
-            errors.append(f"{prefix}: unknown consensus type '{cons}'")
-
-        # consensus_vote pattern
-        cv = rec.get("consensus_vote", "")
-        if cv and not CONSENSUS_VOTE_PATTERN.match(cv):
-            errors.append(f"{prefix}: consensus_vote='{cv}' doesn't match "
-                          f"pattern X_X_X_X")
 
         # Detect prose in fields that should be flat values
         species = rec.get("species", "")

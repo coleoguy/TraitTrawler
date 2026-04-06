@@ -150,31 +150,6 @@ def build_source_path(project_root, first_author=None, authors=None,
     return str(full), str(rel)
 
 
-def build_pdf_path(project_root, first_author, year, journal, doi,
-                   subfolder_value, subfolder_field="family"):
-    """Construct the canonical PDF save path and ensure directory exists.
-
-    DEPRECATED: Use build_source_path() for new projects. This function
-    is kept for backward compatibility with existing pdfs/{family}/ layouts.
-
-    Returns (absolute_path, relative_path) tuple.
-    """
-    root = Path(project_root).resolve()
-    subfolder = _sanitize(subfolder_value, max_len=50) if subfolder_value else "unknown"
-    author = _sanitize(first_author, max_len=20)
-    yr = str(year) if year else "noYear"
-    jrnl = _sanitize(journal, max_len=12)
-    sdoi = _short_doi(doi)
-
-    filename = f"{author}_{yr}_{jrnl}_{sdoi}.pdf"
-    rel = Path("pdfs") / subfolder / filename
-    full = root / rel
-
-    # Ensure directory exists
-    full.parent.mkdir(parents=True, exist_ok=True)
-    return str(full), str(rel)
-
-
 def check_misplaced_pdfs(project_root):
     """Find PDF files in project root that should be in pdfs/ subfolder.
 

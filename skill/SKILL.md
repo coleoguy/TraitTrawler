@@ -115,7 +115,7 @@ python3 scripts/dispatch.py recommend --compact --project-root .
 | `spawn_api_fetcher` | API Fetcher agent (background) |
 | `spawn_browser_fetcher` | Browser Fetcher agent (background) |
 | `spawn_extractors` | N Extractor agents (background), one per `handoff_file` |
-| `verify_and_write` | Auditor (foreground) on `finds/`, then `scrub.py`, `write_finds.py`, `inline_qc.py` |
+| `verify_and_write` | Auditor → `scrub.py` → re-extraction routing (if normalization failures) → `write_finds.py` → `inline_qc.py` |
 | `info` | Print the reason string |
 
 Print one line: `dispatch: 2 extractors + verify+write | q=30 rdy=5 finds=2`

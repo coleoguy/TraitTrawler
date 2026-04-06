@@ -97,8 +97,6 @@ output_fields:
   - processed_date
   # --- Calibration & verification ---
   - calibrated_confidence
-  - consensus
-  - consensus_vote
   - verification
   - verification_notes
   # --- Audit tracking ---
@@ -192,10 +190,6 @@ taxonomy_resolution: true
 #     min: 0.001
 #     max: 200000
 #     on_fail: flag
-
-# --- Legacy consensus settings (v4, no longer used) ---
-# v5 uses extract + mandatory Auditor verification for all papers.
-# These settings are ignored but preserved for backward compatibility.
 
 # --- Confidence calibration (optional, §19) ---
 # Post-hoc calibration transforms raw confidence heuristics into

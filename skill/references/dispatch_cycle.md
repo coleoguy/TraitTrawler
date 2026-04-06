@@ -102,12 +102,19 @@ PROJECT ROOT: {cwd}\nFILES TO VERIFY: {finds_file_list}")
 ```
 
 ### verify_and_write Pipeline (foreground, blocking)
-Four-step pipeline run after Extractors produce finds/ files:
+Five-step pipeline run after Extractors produce finds/ files:
 
 1. **Auditor** (foreground): spawn Auditor on all finds/ files
 2. **Scrub**: `python3 scripts/scrub.py --project-root . --dir finds/`
-3. **Write**: `python3 scripts/write_finds.py --project-root . --session-id $SESSION_ID`
-4. **Process**: `python3 scripts/process_agent_output.py --action writer_results --project-root .`
+3. **Re-extraction routing**: If scrub output contains `normalization_failures`,
+   those records have field values that couldn't be auto-fixed. For each
+   affected file: create a new handoff in `ready_for_extraction/` with the
+   original `pdf_path` and an `extraction_instructions` field listing the
+   specific field, bad value, and valid formats. Remove the affected file
+   from `finds/` so it doesn't write bad data. The re-extraction goes
+   through the normal Extractor pipeline with the formatting guidance.
+4. **Write**: `python3 scripts/write_finds.py --project-root . --session-id $SESSION_ID`
+5. **Process**: `python3 scripts/process_agent_output.py --action writer_results --project-root .`
 
 When to run: after every 2-3 Extractor returns, when an Extractor
 returns with none in-flight, or before session end.

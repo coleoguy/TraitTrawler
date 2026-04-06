@@ -172,7 +172,7 @@ If the user says yes:
    automatically: `species`, `family`, `genus`, `doi`, `paper_title`,
    `paper_year`, `first_author`, `paper_journal`, `extraction_confidence`,
    `flag_for_review`, `session_id`, `source_page`, `source_context`,
-   `extraction_reasoning`, `consensus`, `accepted_name`, `gbif_key`,
+   `extraction_reasoning`, `accepted_name`, `gbif_key`,
    `taxonomy_note`, `pdf_source`, `source_type`, `notes`
 2. **Ask only what can't be inferred** — typically taxon, trait name, email,
    proxy. Have a brief conversation to fill gaps rather than a checklist.

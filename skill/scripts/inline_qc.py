@@ -119,8 +119,6 @@ def _get_trait_fields(fieldnames):
         # Audit and verification
         "audit_status", "audit_session", "audit_prior_values",
         "verification", "verification_notes",
-        # Consensus (legacy)
-        "consensus", "consensus_vote", "consensus_agreement",
         "extraction_trace_id",
         # Free-text notes fields (these differ per paper by design)
         "notes", "karyotype_notes", "chromosome_notes", "morphology_notes",

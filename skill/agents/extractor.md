@@ -75,6 +75,9 @@ If still invalid: write `extractor_results/{doi_safe}_nodata.json` with
   `required_fields`, `compilation_tables`
 - `extraction_examples.md` (if exists)
 - `learning/*.json` (recent files only)
+- If the handoff contains `extraction_instructions`, read them carefully.
+  These are field-specific formatting corrections from a prior extraction
+  attempt — follow them exactly when extracting those fields.
 
 ### Step 2: Classify document
 
@@ -133,9 +136,8 @@ python3 scripts/validate_finds_json.py --file finds/{doi_safe}_{timestamp}.json
 ```
 
 Checks: top-level keys (`doi`, `records`, `extraction_timestamp`), `records`
-is array, each record has `species`, `extraction_confidence`, `consensus`,
-`consensus_vote`, `source_page`, confidence in [0,1], `paper_metadata` has
-`year`, `journal`, `first_author`.
+is array, each record has `species`, `extraction_confidence`, `source_page`,
+confidence in [0,1], `paper_metadata` has `year`, `journal`, `first_author`.
 
 If validation fails: read errors, fix using your PDF context, re-validate.
 Do not leave invalid JSON in `finds/`.
@@ -157,8 +159,6 @@ Do not leave invalid JSON in `finds/`.
     "family": "", "genus": "",
     "TRAIT_FIELDS": "from output_fields in config",
     "extraction_confidence": 0.92,
-    "consensus": "single_pass",
-    "consensus_vote": "1_NA_NA_NA",
     "source_page": "14",
     "source_context": "Table 2, row 3: ...",
     "extraction_reasoning": "",
@@ -175,8 +175,6 @@ Do not leave invalid JSON in `finds/`.
 - Copy `pdf_path`, `pdf_source`, `source_query` from handoff
 - `paper_authors`: semicolon-separated string, not a list
 - `records`: array of objects, one file per paper
-- `consensus`: always `"single_pass"`
-- `consensus_vote`: always `"1_NA_NA_NA"`
 
 **No-data**: `extractor_results/{doi_safe}_nodata.json`:
 `{"doi": "...", "outcome": "no_data", "reason": "...", "source_query": "..."}`

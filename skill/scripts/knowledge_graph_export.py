@@ -70,7 +70,7 @@ CORE_FIELDS = {
     "source_type", "pdf_source", "pdf_filename", "pdf_url", "notes",
     "processed_date", "collection_locality", "country", "source_page",
     "source_context", "extraction_reasoning", "extraction_trace_id",
-    "accepted_name", "gbif_key", "taxonomy_note", "consensus_agreement",
+    "accepted_name", "gbif_key", "taxonomy_note",
     "audit_status", "audit_session", "audit_prior_values",
 }
 
@@ -191,11 +191,6 @@ def export_jsonld(rows, trait_fields, output_path):
             cal_conf = row.get("calibrated_confidence", "").strip()
             if cal_conf:
                 record["prov:wasGeneratedBy"]["tt:calibratedConfidence"] = float(cal_conf)
-
-            # Add consensus info if available
-            consensus = row.get("consensus_agreement", "").strip()
-            if consensus:
-                record["prov:wasGeneratedBy"]["tt:consensusAgreement"] = consensus
 
             # Add taxonomy info
             accepted = row.get("accepted_name", "").strip()

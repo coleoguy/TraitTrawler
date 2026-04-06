@@ -65,8 +65,6 @@ existing rows.
 ### Extraction & verification
 | Field | Type | Notes |
 |---|---|---|
-| `consensus` | string | Extraction mode: `single_pass` (v5 default). Legacy values: `full`, `majority`. |
-| `consensus_vote` | string | Vote pattern: `1_NA_NA_NA` (v5 default). Legacy patterns from multi-agent voting. |
 | `verification` | string | Auditor result: `confirmed`, `corrected`, `ambiguous`, `auditor_added`. Empty if not yet audited. |
 | `verification_notes` | string | Auditor explanation when record was corrected or ambiguous. |
 
