@@ -157,11 +157,6 @@ a brief status checkpoint to `state/session_checkpoint.json`:
 ```
 If the session crashes or the context compacts, re-read this checkpoint
 at the start of the next session to resume exactly where you left off.
-Also regenerate the dashboard at each checkpoint so the browser auto-refresh
-picks up current data:
-```bash
-python3 "{project_root}/dashboard_generator.py" --project-root "{project_root}"
-```
 
 **4. Don't hold PDF text.** After extracting records from a paper, do NOT
 retain the PDF text in conversation. The subagent architecture handles
@@ -200,8 +195,7 @@ context exhaustion and runaway cost.
 
 ### 9e. Streaming progress & interruptible execution (§27)
 
-Regenerate the dashboard every 2 papers. After each paper, append a line
-to `state/live_progress.jsonl`:
+After each paper, append a line to `state/live_progress.jsonl`:
 ```json
 {"timestamp": "...", "paper": "Smith et al. 2003", "records": 3, "total_records": 1339, "queue_remaining": 22}
 ```
@@ -284,12 +278,6 @@ Large PDF progress:
 ```
 📚 [large PDF, pages 51-100/380] "Author 1975 — Book title"
    → 142 records this batch | resuming next session from page 101
-```
-
-**Dashboard update:** Every 2 papers processed, regenerate the dashboard
-so that the browser auto-refresh picks up new data (see §13):
-```bash
-python3 "{project_root}/dashboard_generator.py" --project-root "{project_root}"
 ```
 
 ---
@@ -488,10 +476,9 @@ At session end, also:
 8. Run cross-paper conflict detection:
    `python3 scripts/knowledge_graph_export.py --project-root . --format conflicts`
    See [advanced_features.md](references/advanced_features.md) §26a.
-9. Regenerate the dashboard.
-10. Check for misplaced PDFs: `python3 scripts/pdf_utils.py --project-root . --check`.
+9. Check for misplaced PDFs: `python3 scripts/pdf_utils.py --project-root . --check`.
     If any found, report to user and offer to run `--fix`.
-11. Check whether an audit is due: if `audit_config.auto_audit` is `true` and
+10. Check whether an audit is due: if `audit_config.auto_audit` is `true` and
     the session count (from `run_log.jsonl`) is a multiple of
     `audit_config.auto_audit_interval` (default: 5), offer:
     `🔍 Audit due — {N} records are candidates for re-examination. Run audit? [y/n]`
@@ -560,85 +547,4 @@ data = fetch_openalex_work(doi, email, log_file="state/run_log.jsonl")
 
 ## 13. Dashboard
 
-The skill includes a self-contained HTML dashboard that visualizes collection
-progress and summary statistics. It lives at `{project_root}/dashboard.html`.
-
-### Dashboard
-
-The dashboard is a **self-contained HTML file** (`dashboard.html`) with pure
-CSS/SVG charts. No CDN, no external dependencies. Users open it by
-double-clicking the file — works on `file://` protocol. It auto-refreshes
-every 60 seconds.
-
-Features:
-- KPI cards (records, species, families, papers, leads, mean confidence, flagged)
-- Activity panel (last 5 papers processed, queue remaining)
-- Charts: cumulative timeline, family breakdown, confidence distribution, source type
-- Auto-detected trait-specific charts
-- Interactive column picker (persists selections via localStorage)
-- Sortable data table (last 200 records)
-
-### When to regenerate
-
-1. **Session start** (§1e) — after reading state files
-2. **Every 2 papers processed** — alongside the rolling progress update (§10)
-3. **Session end** (§11) — as part of the session summary
-
-```bash
-python3 dashboard_generator.py --project-root .
-```
-
-Tell the user: **"Dashboard updated — refresh dashboard.html."**
-
-### Live dashboard server (optional)
-
-The `scripts/dashboard_server.py` SSE server is available but **not started
-by default**. Only start it if the user explicitly requests a live server:
-```bash
-python3 scripts/dashboard_server.py --project-root . --port 8347 &
-```
-
-### Command input (live dashboard only)
-
-The live dashboard has a command input at the bottom. When the user types
-a command and hits Send, it writes to `state/user_commands.txt`. The agent
-checks this file between papers (see §9e):
-
-```python
-import os
-cmd_path = os.path.join(project_root, "state", "user_commands.txt")
-if os.path.exists(cmd_path):
-    with open(cmd_path) as f:
-        lines = f.readlines()
-    if lines:
-        last_cmd = lines[-1].strip().split(" ", 1)[-1]  # strip timestamp
-        # Process command: skip, pause, redo, show trace, run QC, stop, etc.
-        # After processing, truncate the file:
-        open(cmd_path, "w").close()
-```
-
-Supported commands: `pause`, `status`, `explore`, `review`,
-`run QC`, `stop`.
-
-### What the static dashboard shows
-
-**KPI cards** (top row): Total records, unique species, papers processed,
-leads (need full text), flagged for review.
-
-**Search progress bar**: queries completed vs. total from `config.py`
-
-**Charts** (auto-generated based on available data): cumulative records over
-time, records by taxonomic group (top 20), records by publication year,
-full-text source breakdown, extraction confidence distribution, records by
-country (top 15), lead failure reasons, lead status breakdown, and
-additional trait-specific charts if recognized fields are present.
-
-### Stopping the live server
-
-At session end, stop the server:
-```bash
-pkill -f "dashboard_server.py" 2>/dev/null
-```
-
-Or leave it running — it's lightweight and the user can keep monitoring
-between sessions.
+Run `python3 dashboard_generator.py --project-root .` when the user requests a dashboard. It generates a self-contained `dashboard.html` with KPIs, a species accumulation chart with user-selectable grouping, and an interactive data table with column picker.

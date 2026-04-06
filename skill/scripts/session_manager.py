@@ -128,8 +128,7 @@ def copy_utility_scripts(project_root, skill_dir):
                       file=sys.stderr)
 
     # Root-level scripts
-    for script in ["dashboard_generator.py", "verify_session.py",
-                    "export_dwc.py"]:
+    for script in ["verify_session.py", "export_dwc.py"]:
         dest = os.path.join(project_root, script)
         src = os.path.join(skill_dir, script)
         if os.path.exists(src):
@@ -734,8 +733,6 @@ def run_teardown_scripts(project_root, session_id):
         ("session_report", ["python3", "scripts/session_report.py",
                             "--project-root", ".",
                             "--session", session_id, "--json"]),
-        ("dashboard", ["python3", "dashboard_generator.py",
-                       "--project-root", "."]),
     ]
 
     for name, cmd in scripts:

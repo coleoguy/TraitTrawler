@@ -442,19 +442,6 @@ python3 scripts/knowledge_graph_export.py --project-root . --format conflicts --
 
 ## 27. Streaming Progress & Interruptible Execution
 
-### 27a. Progressive dashboard updates
-
-Reduce dashboard regeneration interval from every 10 papers to every
-5 papers. Additionally, after each paper, append a single line to
-`state/live_progress.jsonl`:
-
-```json
-{"timestamp": "2026-03-24T15:12:00Z", "paper": "Smith et al. 2003", "records": 3, "total_records": 1339, "queue_remaining": 22}
-```
-
-The dashboard can poll this file for near-real-time updates without
-full regeneration.
-
 ### 27b. Interruptible extraction
 
 Between each paper in the main loop (§3b), check for user input signals:

@@ -648,7 +648,3 @@ produces unexpected results, fall back to serial processing for the rest
 of the session — one paper at a time with the same pipeline. Serial mode
 is slower but more reliable.
 
-**Every 2 papers processed**, regenerate the dashboard:
-```bash
-python3 dashboard_generator.py --project-root .
-```

@@ -180,20 +180,8 @@ pattern. If you see this error, the agent should use the template code from
 
 **Cause:** results.csv is empty or has only a header row.
 
-**Fix:** Run at least one collection session. The dashboard needs data
-to generate charts.
-
-### Dashboard doesn't auto-refresh
-
-**Symptom:** Charts don't update while the agent is running.
-
-**Cause:** Browser security may block auto-refresh for local files.
-
-**Fix:** Manually refresh the page, or open it via a local HTTP server:
-```bash
-python3 -m http.server 8080
-# Then open http://localhost:8080/dashboard.html
-```
+**Fix:** Run the generator (`python3 dashboard_generator.py --project-root .`)
+after at least one collection session has written data to results.csv.
 
 ---
 
@@ -316,9 +304,8 @@ guide.md and prevent the error in future extractions.
 
 **Symptom:** Small sessions (5-10 papers) feel slow due to agent startup.
 
-**Cause:** Each Agent tool invocation has overhead. The v4 pipeline spawns
-Searcher + Fetcher + Dealer + Extractor(x3) + Scrubber per paper.
+**Cause:** Each Agent tool invocation has overhead. The pipeline spawns
+Searcher + Fetcher + Extractor + Auditor agents.
 
-**Fix:** Use `fast` extraction mode for small exploratory sessions. This
-reduces extraction agents from 3 to 1 per paper. For very small sessions,
-consider processing PDFs directly ("PDF-only mode") which skips search.
+**Fix:** For very small sessions, drop PDFs directly into `provided_pdfs/`
+which skips search and fetch, going straight to extraction.

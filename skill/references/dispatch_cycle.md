@@ -196,7 +196,7 @@ config.py                 -- search terms
 guide.md                  -- domain knowledge
 results.csv               -- the database (append-only)
 leads.csv                 -- papers needing full-text
-dashboard.html            -- auto-generated dashboard
+dashboard.html            -- on-demand dashboard
 scripts/                  -- utility Python scripts
 state/                    -- JSON state files (Manager-owned)
   dealt/                  -- processed handoff files

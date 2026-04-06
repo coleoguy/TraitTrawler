@@ -5,11 +5,14 @@
 """
 TraitTrawler Dashboard Generator
 =================================
-Reads project data files and produces a self-contained HTML dashboard with
-CSS/SVG charts, interactive column picker, and activity panel.
+Reads results.csv and produces a self-contained HTML dashboard with:
+- Summary KPIs
+- Interactive data table with selectable columns
+- Species accumulation curve across publication years
+- User-selectable grouping for accumulation facets
 
 No external dependencies (no CDN, no Chart.js). Works offline and via
-file:// protocol. Auto-refreshes every 60 seconds.
+file:// protocol. Generated on demand — not auto-refreshed.
 
 Usage:
     python3 dashboard_generator.py [--project-root /path/to/root]
@@ -18,33 +21,11 @@ Usage:
 import argparse
 import csv
 import json
-import math
 import os
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
-
-
-# Fields that already have dedicated charts or are not chartable
-_CORE_FIELDS = {
-    "doi", "paper_title", "paper_authors", "first_author", "paper_year",
-    "paper_journal", "session_id", "species", "family", "subfamily", "genus",
-    "extraction_confidence", "flag_for_review", "source_type",
-    "pdf_source", "pdf_filename", "pdf_url", "notes", "processed_date",
-    "collection_locality", "country", "voucher_info",
-    "source_page", "source_context", "extraction_reasoning",
-    "accepted_name", "gbif_key", "taxonomy_note",
-    "audit_status", "audit_session", "audit_prior_values",
-}
-
-_SKIP_FIELDS = {
-    "notes", "pdf_url", "pdf_filename", "paper_title", "paper_authors",
-    "doi", "collection_locality", "voucher_info", "karyotype_formula",
-    "chromosome_morphology", "heterochromatin_pattern", "NOR_position",
-}
-
-_MAX_CATEGORICAL = 25
 
 
 # ── Data loading ─────────────────────────────────────────────────────────
@@ -56,40 +37,13 @@ def safe_read_csv(path):
         return list(csv.DictReader(f))
 
 
-def safe_read_json(path):
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, ValueError):
-        return {}
-
-
-def safe_read_jsonl_tail(path, n=5):
-    """Read last n lines of a JSONL file."""
-    if not os.path.exists(path):
-        return []
-    lines = []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    lines.append(line)
-        return [json.loads(l) for l in lines[-n:]]
-    except Exception:
-        return []
-
-
 def read_config(project_root):
     config_path = os.path.join(project_root, "collector_config.yaml")
     project_name = "TraitTrawler"
-    trait_name = ""
     output_fields = []
 
     if not os.path.exists(config_path):
-        return project_name, trait_name, output_fields
+        return project_name, output_fields
 
     try:
         with open(config_path, "r", encoding="utf-8") as f:
@@ -97,9 +51,6 @@ def read_config(project_root):
         m = re.search(r'^project_name:\s*["\']?(.+?)["\']?\s*$', content, re.MULTILINE)
         if m:
             project_name = m.group(1)
-        m = re.search(r'^trait_name:\s*["\']?(.+?)["\']?\s*$', content, re.MULTILINE)
-        if m:
-            trait_name = m.group(1)
         in_fields = False
         for line in content.split("\n"):
             stripped = line.strip()
@@ -115,176 +66,120 @@ def read_config(project_root):
                     break
     except Exception:
         pass
-    return project_name, trait_name, output_fields
+    return project_name, output_fields
 
-
-def classify_field(values):
-    if not values:
-        return "skip", None
-    numbers = []
-    for v in values:
-        try:
-            numbers.append(float(v) if "." in str(v) else int(v))
-        except (ValueError, TypeError):
-            pass
-    if len(numbers) > 0.6 * len(values) and len(set(numbers)) > _MAX_CATEGORICAL:
-        return "numeric", numbers
-    if len(numbers) > 0.6 * len(values) and len(set(numbers)) <= _MAX_CATEGORICAL:
-        counts = Counter(str(int(n)) if isinstance(n, (int, float)) and n == int(n) else str(n) for n in numbers)
-        return "categorical", counts
-    counts = Counter(v for v in values if v)
-    if len(counts) > _MAX_CATEGORICAL or len(counts) < 2:
-        return "skip", None
-    return "categorical", counts
-
-
-# ── SVG/CSS chart builders ───────────────────────────────────────────────
 
 def _h(text):
     """HTML-escape a string."""
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
-_PALETTE = [
-    "#38bdf8", "#4ade80", "#fbbf24", "#f87171", "#a78bfa",
-    "#fb923c", "#2dd4bf", "#e879f9", "#60a5fa", "#34d399",
-    "#facc15", "#f472b6", "#818cf8", "#a3e635", "#22d3ee",
-]
+# ── Species accumulation data ────────────────────────────────────────────
 
+def build_accumulation_data(results):
+    """Build species accumulation curves faceted by available grouping fields.
 
-def svg_bar_chart(labels, values, title="", width=400, height=200):
-    """Generate an inline SVG horizontal bar chart."""
-    if not values:
-        return f'<div class="chart-empty">{_h(title)}: no data</div>'
-    max_val = max(values) if values else 1
-    bar_h = min(24, max(14, (height - 30) // len(labels)))
-    total_h = bar_h * len(labels) + 30
-    lines = [f'<svg viewBox="0 0 {width} {total_h}" class="chart-svg">']
-    if title:
-        lines.append(f'<text x="{width//2}" y="16" class="chart-title">{_h(title)}</text>')
-    y = 28
-    for i, (label, val) in enumerate(zip(labels, values)):
-        pct = (val / max_val * 0.65) if max_val else 0
-        bw = max(2, int(pct * width))
-        color = _PALETTE[i % len(_PALETTE)]
-        lbl = _h(str(label))
-        if len(lbl) > 18:
-            lbl = lbl[:16] + ".."
-        lines.append(f'<text x="2" y="{y + bar_h - 4}" class="bar-label">{lbl}</text>')
-        lines.append(f'<rect x="{int(width*0.32)}" y="{y}" width="{bw}" height="{bar_h - 3}" '
-                     f'fill="{color}" rx="3"/>')
-        lines.append(f'<text x="{int(width*0.32) + bw + 4}" y="{y + bar_h - 4}" '
-                     f'class="bar-val">{val}</text>')
-        y += bar_h
-    lines.append('</svg>')
-    return "\n".join(lines)
+    Returns (accum_dict, candidate_fields).
+    accum_dict: {field_name: {group_value: [[year, cumulative_count], ...]}}
+    Also returns the overall (unfaceted) curve as {"_overall": [[year, count]]}.
+    """
+    # Identify candidate grouping fields (categorical, 2-50 unique values)
+    field_values = defaultdict(set)
+    for r in results:
+        for k, v in r.items():
+            if v and isinstance(v, str) and v.strip():
+                field_values[k].add(v.strip())
 
+    skip = {"doi", "paper_title", "paper_authors", "notes", "source_context",
+            "extraction_reasoning", "pdf_path", "pdf_source", "source_page",
+            "species", "paper_year", "processed_date", "session_id",
+            "accepted_name", "gbif_key", "taxonomy_note", "audit_status",
+            "audit_session", "audit_prior_values", "extraction_trace_id",
+            "source_query", "pdf_url", "pdf_filename", "first_author",
+            "paper_journal", "source_type", "flag_for_review",
+            "extraction_confidence", "calibrated_confidence"}
 
-def svg_line_chart(points, title="", width=500, height=200):
-    """Generate an inline SVG line chart from (label, value) pairs."""
-    if not points or len(points) < 2:
-        return f'<div class="chart-empty">{_h(title)}: insufficient data</div>'
-    values = [p[1] for p in points]
-    max_val = max(values) if values else 1
-    min_val = min(values) if values else 0
-    span = max_val - min_val if max_val != min_val else 1
-    pad_l, pad_r, pad_t, pad_b = 50, 20, 30, 30
-    cw = width - pad_l - pad_r
-    ch = height - pad_t - pad_b
-    n = len(points)
+    candidate_fields = []
+    for field, vals in field_values.items():
+        if field in skip:
+            continue
+        if 2 <= len(vals) <= 50:
+            candidate_fields.append(field)
 
-    coords = []
-    for i, (_, v) in enumerate(points):
-        x = pad_l + (i / max(1, n - 1)) * cw
-        y = pad_t + ch - ((v - min_val) / span) * ch
-        coords.append((x, y))
+    # Always include family if present
+    if "family" in field_values and "family" not in candidate_fields:
+        candidate_fields.insert(0, "family")
 
-    polyline = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
-    fill_pts = polyline + f" {coords[-1][0]:.1f},{pad_t + ch} {coords[0][0]:.1f},{pad_t + ch}"
+    # Build per-year species sets
+    year_species = defaultdict(set)
+    for r in results:
+        sp = r.get("species", "").strip()
+        yr = r.get("paper_year", "").strip()
+        if sp and yr:
+            try:
+                year_species[int(yr)].add(sp)
+            except ValueError:
+                pass
 
-    lines = [f'<svg viewBox="0 0 {width} {height}" class="chart-svg">']
-    if title:
-        lines.append(f'<text x="{width//2}" y="18" class="chart-title">{_h(title)}</text>')
-    # Y-axis labels
-    for i in range(5):
-        yv = min_val + (span * i / 4)
-        yp = pad_t + ch - (ch * i / 4)
-        lines.append(f'<text x="{pad_l - 4}" y="{yp + 4}" class="axis-label">{int(yv)}</text>')
-        lines.append(f'<line x1="{pad_l}" y1="{yp}" x2="{width - pad_r}" y2="{yp}" '
-                     f'stroke="#334155" stroke-width="0.5"/>')
-    # Fill area
-    lines.append(f'<polygon points="{fill_pts}" fill="#38bdf8" fill-opacity="0.15"/>')
-    # Line
-    lines.append(f'<polyline points="{polyline}" fill="none" stroke="#38bdf8" stroke-width="2"/>')
-    # X-axis: show ~5 evenly spaced labels with smart time formatting
-    n_labels = min(5, n)
-    label_indices = [int(i * (n - 1) / max(1, n_labels - 1)) for i in range(n_labels)]
-    # Determine if data spans single day or multiple days
-    first_ts = str(points[0][0])
-    last_ts = str(points[-1][0])
-    same_day = first_ts[:10] == last_ts[:10] if len(first_ts) >= 10 and len(last_ts) >= 10 else False
-    for idx in label_indices:
-        lbl = str(points[idx][0])
-        if same_day and len(lbl) >= 16:
-            lbl = lbl[11:16]  # just HH:MM
-        elif len(lbl) >= 16:
-            lbl = lbl[5:16]  # MM-DDTHH:MM
-        x = coords[idx][0]
-        lines.append(f'<text x="{x}" y="{height - 6}" class="axis-label">{_h(lbl)}</text>')
-    lines.append('</svg>')
-    return "\n".join(lines)
+    if not year_species:
+        return {}, candidate_fields
 
+    sorted_years = sorted(year_species.keys())
 
-def css_doughnut(labels, values, title=""):
-    """Generate a CSS conic-gradient doughnut chart."""
-    if not values or sum(values) == 0:
-        return f'<div class="chart-empty">{_h(title)}: no data</div>'
-    total = sum(values)
-    segments = []
-    angle = 0
-    for i, (label, val) in enumerate(zip(labels, values)):
-        color = _PALETTE[i % len(_PALETTE)]
-        pct = val / total * 360
-        segments.append(f"{color} {angle:.1f}deg {angle + pct:.1f}deg")
-        angle += pct
-    gradient = ", ".join(segments)
+    # Overall accumulation
+    seen = set()
+    overall = []
+    for yr in sorted_years:
+        seen |= year_species[yr]
+        overall.append([yr, len(seen)])
 
-    legend = []
-    for i, (label, val) in enumerate(zip(labels, values)):
-        color = _PALETTE[i % len(_PALETTE)]
-        pct = val / total * 100
-        lbl = _h(str(label))
-        if len(lbl) > 22:
-            lbl = lbl[:20] + ".."
-        legend.append(f'<div class="legend-item">'
-                     f'<span class="legend-dot" style="background:{color}"></span>'
-                     f'{lbl} <span class="legend-val">({val}, {pct:.0f}%)</span></div>')
+    accum = {"_overall": overall}
 
-    return f"""<div class="doughnut-wrap">
-  <div class="doughnut-title">{_h(title)}</div>
-  <div class="doughnut-row">
-    <div class="doughnut" style="background: conic-gradient({gradient})"></div>
-    <div class="legend">{''.join(legend)}</div>
-  </div>
-</div>"""
+    # Faceted accumulation
+    for field in candidate_fields:
+        group_year_species = defaultdict(lambda: defaultdict(set))
+        for r in results:
+            sp = r.get("species", "").strip()
+            yr = r.get("paper_year", "").strip()
+            gv = r.get(field, "").strip()
+            if sp and yr and gv:
+                try:
+                    group_year_species[gv][int(yr)].add(sp)
+                except ValueError:
+                    pass
+
+        field_accum = {}
+        for gv, ys in group_year_species.items():
+            seen_g = set()
+            curve = []
+            for yr in sorted_years:
+                seen_g |= ys.get(yr, set())
+                curve.append([yr, len(seen_g)])
+            field_accum[gv] = curve
+        accum[field] = field_accum
+
+    return accum, candidate_fields
 
 
 # ── Main generator ───────────────────────────────────────────────────────
 
 def generate_dashboard(project_root):
     results = safe_read_csv(os.path.join(project_root, "results.csv"))
-    leads = safe_read_csv(os.path.join(project_root, "leads.csv"))
-    processed = safe_read_json(os.path.join(project_root, "state", "processed.json"))
-    progress = safe_read_jsonl_tail(
-        os.path.join(project_root, "state", "live_progress.jsonl"), n=5)
-    project_name, trait_name, output_fields = read_config(project_root)
+    project_name, output_fields = read_config(project_root)
 
     n_records = len(results)
-    n_papers = len(processed) if isinstance(processed, dict) else 0
     species_set = {r.get("species", "") for r in results if r.get("species")}
     family_counts = Counter(r.get("family", "Unknown") for r in results if r.get("family"))
     n_families = len(family_counts)
-    n_leads = len(leads)
+
+    # Count unique papers
+    paper_ids = set()
+    for r in results:
+        doi = r.get("doi", "").strip()
+        title = r.get("paper_title", "").strip()
+        paper_ids.add(doi if doi else title)
+    paper_ids.discard("")
+    n_papers = len(paper_ids)
 
     # Mean confidence
     confs = []
@@ -298,115 +193,24 @@ def generate_dashboard(project_root):
     n_flagged = sum(1 for r in results
                     if str(r.get("flag_for_review", "")).lower() in ("true", "1", "yes"))
 
-    # ── Charts ───────────────────────────────────────────────────────
-    # Cumulative timeline
-    date_counts = Counter(r.get("processed_date") or "" for r in results)
-    sorted_dates = sorted(((d, c) for d, c in date_counts.items() if d), key=lambda x: x[0])
-    cumulative = []
-    running = 0
-    for d, c in sorted_dates:
-        running += c
-        cumulative.append((d, running))
-    timeline_svg = svg_line_chart(cumulative, title="Cumulative Records")
-
-    # Family breakdown (top 15)
-    top_fam = family_counts.most_common(15)
-    family_chart = svg_bar_chart(
-        [f[0] for f in top_fam], [f[1] for f in top_fam], title="Records by Family")
-
-    # Confidence distribution
-    conf_buckets = Counter()
-    for c in confs:
-        if c >= 0.9:
-            conf_buckets["0.90-1.00"] += 1
-        elif c >= 0.8:
-            conf_buckets["0.80-0.89"] += 1
-        elif c >= 0.7:
-            conf_buckets["0.70-0.79"] += 1
-        elif c >= 0.6:
-            conf_buckets["0.60-0.69"] += 1
-        else:
-            conf_buckets["< 0.60"] += 1
-    conf_order = ["0.90-1.00", "0.80-0.89", "0.70-0.79", "0.60-0.69", "< 0.60"]
-    conf_chart = svg_bar_chart(conf_order, [conf_buckets.get(k, 0) for k in conf_order],
-                                title="Confidence Distribution")
-
-    # Source type
-    source_counts = Counter(r.get("pdf_source", "unknown") or "unknown" for r in results)
-    src_items = source_counts.most_common(10)
-    source_chart = css_doughnut(
-        [s[0] for s in src_items], [s[1] for s in src_items], title="Source Breakdown")
-
-    # Trait-specific charts
-    trait_fields = [f for f in output_fields if f not in _CORE_FIELDS and f not in _SKIP_FIELDS]
-    trait_charts_html = []
-    for field in trait_fields:
-        values = [r.get(field, "") for r in results if r.get(field, "")]
-        classification, data = classify_field(values)
-        if classification == "skip" or not data:
-            continue
-        title = field.replace("_", " ").title()
-        if classification == "categorical":
-            items = data.most_common(15)
-            trait_charts_html.append(css_doughnut(
-                [it[0] for it in items], [it[1] for it in items], title=title))
-        elif classification == "numeric":
-            # Simple histogram via bar chart
-            bins = _histogram_bins(data)
-            trait_charts_html.append(svg_bar_chart(
-                [b[0] for b in bins], [b[1] for b in bins], title=title))
-
-    # ── Activity panel ───────────────────────────────────────────────
-    activity_html = ""
-    if progress:
-        last = progress[-1]
-        activity_items = []
-        for p in reversed(progress):
-            paper = _h(p.get("paper", ""))
-            recs = p.get("records", 0)
-            ts = p.get("timestamp", "")
-            if len(ts) > 16:
-                ts = ts[11:16]  # just HH:MM
-            activity_items.append(
-                f'<div class="activity-item">'
-                f'<span class="activity-time">{ts}</span> '
-                f'{paper} — <strong>{recs}</strong> records</div>')
-        queue_rem = last.get("queue_remaining", "?")
-        total_now = last.get("total_records", n_records)
-        activity_html = f"""
-<div class="activity-panel">
-  <div class="activity-header">Recent Activity <span class="activity-queue">Queue: {queue_rem} remaining</span></div>
-  {''.join(activity_items)}
-</div>"""
-
-    # ── Data table (last 200 rows as JSON) ───────────────────────────
+    # All fields from data
     all_fields = []
     if results:
         all_fields = list(results[0].keys())
-    table_rows = results[-200:] if len(results) > 200 else results
+
+    # Accumulation data
+    accum_data, accum_fields = build_accumulation_data(results)
+
     # Sanitize for JSON embedding
-    table_json = json.dumps(table_rows, ensure_ascii=True)
+    table_json = json.dumps(results, ensure_ascii=True)
     fields_json = json.dumps(all_fields)
+    output_fields_json = json.dumps(output_fields)
+    accum_json = json.dumps(accum_data, ensure_ascii=True)
+    accum_fields_json = json.dumps(accum_fields)
 
-    # ── Lead summary ─────────────────────────────────────────────────
-    lead_statuses = Counter(l.get("lead_status", l.get("status", "new")) for l in leads)
-    lead_items = lead_statuses.most_common(10)
-    lead_chart = ""
-    if lead_items:
-        lead_chart = css_doughnut(
-            [it[0] for it in lead_items], [it[1] for it in lead_items],
-            title="Lead Status")
-
-    # ── Assemble HTML ────────────────────────────────────────────────
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    trait_section = ""
-    if trait_charts_html:
-        trait_label = (trait_name or "Trait").title()
-        cards = "".join('<div class="chart-card">' + c + '</div>' for c in trait_charts_html)
-        trait_section = (
-            f'<div class="section-header">{_h(trait_label)} Data</div>'
-            f'<div class="chart-grid">{cards}</div>'
-        )
+    conf_color = "#4ade80" if mean_conf >= 0.85 else (
+        "#fbbf24" if mean_conf >= 0.7 else "#f87171")
 
     html = _build_html(
         project_name=project_name,
@@ -415,19 +219,14 @@ def generate_dashboard(project_root):
         n_species=len(species_set),
         n_families=n_families,
         n_papers=n_papers,
-        n_leads=n_leads,
         mean_conf=mean_conf,
+        conf_color=conf_color,
         n_flagged=n_flagged,
-        timeline_svg=timeline_svg,
-        family_chart=family_chart,
-        conf_chart=conf_chart,
-        source_chart=source_chart,
-        activity_html=activity_html,
-        trait_section=trait_section,
-        lead_chart=lead_chart,
         table_json=table_json,
         fields_json=fields_json,
-        n_table_rows=len(table_rows),
+        output_fields_json=output_fields_json,
+        accum_json=accum_json,
+        accum_fields_json=accum_fields_json,
     )
 
     out_path = os.path.join(project_root, "dashboard.html")
@@ -440,42 +239,7 @@ def generate_dashboard(project_root):
     return out_path
 
 
-def _histogram_bins(data, n_bins=15):
-    """Bin numeric data into histogram buckets. Returns [(label, count), ...]."""
-    if not data:
-        return []
-    all_int = all(isinstance(v, int) or (isinstance(v, float) and v == int(v)) for v in data)
-    if all_int:
-        int_data = [int(v) for v in data]
-        hist = Counter(int_data)
-        if len(hist) <= 30:
-            return sorted(hist.items())
-        # Bin into groups
-        mn, mx = min(int_data), max(int_data)
-        bin_size = max(1, (mx - mn + 1) // n_bins)
-        bins = Counter()
-        for v in int_data:
-            b = ((v - mn) // bin_size) * bin_size + mn
-            bins[f"{b}-{b + bin_size - 1}"] = bins.get(f"{b}-{b + bin_size - 1}", 0) + 1
-        return sorted(bins.items())
-    else:
-        mn, mx = min(data), max(data)
-        if mn == mx:
-            return [(str(mn), len(data))]
-        step = (mx - mn) / n_bins
-        bins = Counter()
-        for v in data:
-            b = int((v - mn) / step)
-            b = min(b, n_bins - 1)
-            lo = mn + b * step
-            bins[f"{lo:.1f}"] = bins.get(f"{lo:.1f}", 0) + 1
-        return sorted(bins.items())
-
-
 def _build_html(**d):
-    conf_color = "#4ade80" if d["mean_conf"] >= 0.85 else (
-        "#fbbf24" if d["mean_conf"] >= 0.7 else "#f87171")
-
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -496,66 +260,58 @@ body {{
 .header {{ text-align: center; margin-bottom: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }}
 .header h1 {{ font-size: 24px; font-weight: 700; color: var(--accent); margin-bottom: 2px; }}
 .header .sub {{ color: var(--muted); font-size: 13px; }}
-.kpi-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }}
+.kpi-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }}
 .kpi {{ background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; text-align: center; }}
 .kpi .val {{ font-size: 28px; font-weight: 700; color: var(--accent); }}
 .kpi .label {{ font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }}
-.kpi.highlight .val {{ color: var(--green); }}
 .kpi.warn .val {{ color: var(--amber); }}
-
-.activity-panel {{
-  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
-  padding: 14px; margin-bottom: 20px;
-}}
-.activity-header {{ font-size: 14px; font-weight: 600; color: var(--accent); margin-bottom: 8px; }}
-.activity-queue {{ float: right; color: var(--muted); font-weight: 400; font-size: 12px; }}
-.activity-item {{ font-size: 13px; color: var(--text); padding: 3px 0; border-bottom: 1px solid var(--border); }}
-.activity-item:last-child {{ border-bottom: none; }}
-.activity-time {{ color: var(--muted); font-family: monospace; font-size: 12px; }}
 
 .section-header {{
   font-size: 16px; font-weight: 600; color: var(--accent);
   margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
 }}
-.chart-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-bottom: 20px; }}
-.chart-card {{ background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }}
-.chart-empty {{ color: var(--muted); font-size: 13px; padding: 20px; text-align: center; }}
 
-.chart-svg {{ width: 100%; height: auto; }}
-.chart-svg .chart-title {{ fill: var(--accent); font-size: 13px; font-weight: 600; text-anchor: middle; }}
-.chart-svg .bar-label {{ fill: var(--muted); font-size: 11px; }}
-.chart-svg .bar-val {{ fill: var(--text); font-size: 11px; }}
-.chart-svg .axis-label {{ fill: var(--muted); font-size: 10px; text-anchor: end; }}
-
-.doughnut-wrap {{ padding: 4px; }}
-.doughnut-title {{ font-size: 13px; font-weight: 600; color: var(--accent); margin-bottom: 8px; }}
-.doughnut-row {{ display: flex; align-items: center; gap: 16px; }}
-.doughnut {{
-  width: 120px; height: 120px; border-radius: 50%; flex-shrink: 0;
-  position: relative;
+/* Accumulation chart */
+.accum-controls {{
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px; margin-bottom: 16px;
 }}
-.doughnut::after {{
-  content: ''; position: absolute;
-  top: 25%; left: 25%; width: 50%; height: 50%;
-  background: var(--card); border-radius: 50%;
+.accum-controls label {{ color: var(--muted); font-size: 13px; margin-right: 12px; }}
+.accum-controls select {{
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 8px; font-size: 13px;
 }}
-.legend {{ font-size: 12px; }}
-.legend-item {{ padding: 1px 0; white-space: nowrap; }}
-.legend-dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }}
-.legend-val {{ color: var(--muted); }}
+.chart-canvas {{
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px;
+}}
+.chart-canvas canvas {{ width: 100%; height: 400px; }}
+.chart-legend {{
+  display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; font-size: 12px;
+}}
+.chart-legend-item {{ display: flex; align-items: center; gap: 4px; cursor: pointer; }}
+.chart-legend-dot {{ width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }}
 
 /* Column picker + data table */
 .table-section {{ margin-top: 24px; }}
+.table-controls {{
+  display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap;
+}}
 .picker-toggle {{
   background: var(--card); border: 1px solid var(--border); color: var(--accent);
   padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
-  margin-bottom: 8px; display: inline-block;
 }}
 .picker-toggle:hover {{ background: var(--border); }}
+.search-input {{
+  background: var(--card); border: 1px solid var(--border); color: var(--text);
+  padding: 8px 12px; border-radius: 6px; font-size: 13px; flex: 1; min-width: 200px;
+}}
+.search-input::placeholder {{ color: var(--muted); }}
+.row-count {{ color: var(--muted); font-size: 12px; }}
 .picker-panel {{
   display: none; background: var(--card); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px; margin-bottom: 12px;
-  max-height: 200px; overflow-y: auto;
+  max-height: 250px; overflow-y: auto;
   column-count: 3; column-gap: 16px;
 }}
 .picker-panel.open {{ display: block; }}
@@ -566,20 +322,20 @@ body {{
 .picker-panel label:hover {{ color: var(--accent); }}
 .picker-panel input {{ margin-right: 6px; }}
 
-.data-table-wrap {{ overflow-x: auto; max-height: 500px; overflow-y: auto; }}
+.data-table-wrap {{ overflow-x: auto; max-height: 600px; overflow-y: auto; }}
 .data-table {{
   width: 100%; border-collapse: collapse; font-size: 12px;
 }}
 .data-table th {{
-  position: sticky; top: 0; background: var(--card);
+  position: sticky; top: 0; background: var(--card); z-index: 1;
   text-align: left; padding: 8px 6px; color: var(--accent);
   border-bottom: 2px solid var(--border); white-space: nowrap;
-  cursor: pointer;
+  cursor: pointer; user-select: none;
 }}
 .data-table th:hover {{ color: var(--green); }}
 .data-table td {{
   padding: 5px 6px; border-bottom: 1px solid var(--border);
-  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }}
 .data-table tr:hover td {{ background: rgba(56, 189, 248, 0.05); }}
 .conf-high {{ color: var(--green); }}
@@ -591,37 +347,38 @@ body {{
 
 <div class="header">
   <h1>{_h(d['project_name'])}</h1>
-  <div class="sub">Updated {d['now']} &middot; auto-refreshes every 60s</div>
+  <div class="sub">Generated {d['now']}</div>
 </div>
 
 <div class="kpi-grid">
-  <div class="kpi highlight"><div class="val">{d['n_records']}</div><div class="label">Records</div></div>
+  <div class="kpi"><div class="val">{d['n_records']}</div><div class="label">Records</div></div>
   <div class="kpi"><div class="val">{d['n_species']}</div><div class="label">Species</div></div>
   <div class="kpi"><div class="val">{d['n_families']}</div><div class="label">Families</div></div>
   <div class="kpi"><div class="val">{d['n_papers']}</div><div class="label">Papers</div></div>
-  <div class="kpi"><div class="val">{d['n_leads']}</div><div class="label">Leads</div></div>
-  <div class="kpi"><div class="val" style="color:{conf_color}">{d['mean_conf']:.2f}</div><div class="label">Mean Confidence</div></div>
+  <div class="kpi"><div class="val" style="color:{d['conf_color']}">{d['mean_conf']:.2f}</div><div class="label">Mean Confidence</div></div>
   <div class="kpi{' warn' if d['n_flagged'] > 0 else ''}"><div class="val">{d['n_flagged']}</div><div class="label">Flagged</div></div>
 </div>
 
-{d['activity_html']}
-
-<div class="section-header">Overview</div>
-<div class="chart-grid">
-  <div class="chart-card">{d['timeline_svg']}</div>
-  <div class="chart-card">{d['family_chart']}</div>
-  <div class="chart-card">{d['conf_chart']}</div>
-  <div class="chart-card">{d['source_chart']}</div>
+<div class="section-header">Species Accumulation</div>
+<div class="accum-controls">
+  <label for="accum-facet">Group by:</label>
+  <select id="accum-facet">
+    <option value="_overall">Overall (no grouping)</option>
+  </select>
+</div>
+<div class="chart-canvas">
+  <canvas id="accumChart"></canvas>
+  <div class="chart-legend" id="accumLegend"></div>
 </div>
 
-{d['trait_section']}
-
-{f'<div class="section-header">Leads</div><div class="chart-grid"><div class="chart-card">{d["lead_chart"]}</div></div>' if d['lead_chart'] else ''}
-
-<div class="section-header">Data Table (last {d['n_table_rows']} records)</div>
+<div class="section-header">Data Table ({d['n_records']} records)</div>
 <div class="table-section">
-  <div class="picker-toggle" onclick="document.getElementById('picker').classList.toggle('open')">
-    Column Picker
+  <div class="table-controls">
+    <div class="picker-toggle" onclick="document.getElementById('picker').classList.toggle('open')">
+      Column Picker
+    </div>
+    <input type="text" class="search-input" id="tableSearch" placeholder="Filter rows (searches all columns)...">
+    <div class="row-count" id="rowCount"></div>
   </div>
   <div id="picker" class="picker-panel"></div>
   <div class="data-table-wrap">
@@ -634,31 +391,192 @@ body {{
 
 <script>
 (function() {{
+  // ── Data ──────────────────────────────────────────────────────────
   var DATA = {d['table_json']};
   var FIELDS = {d['fields_json']};
+  var OUTPUT_FIELDS = {d['output_fields_json']};
+  var ACCUM = {d['accum_json']};
+  var ACCUM_FIELDS = {d['accum_fields_json']};
+
+  var PALETTE = [
+    '#38bdf8','#4ade80','#fbbf24','#f87171','#a78bfa',
+    '#fb923c','#2dd4bf','#e879f9','#60a5fa','#34d399',
+    '#facc15','#f472b6','#818cf8','#a3e635','#22d3ee',
+    '#c084fc','#fb7185','#67e8f9','#86efac','#fcd34d'
+  ];
   var STORAGE_KEY = 'tt_dashboard_columns';
 
-  // Default columns to show
-  var DEFAULT_COLS = ['species','family','genus','extraction_confidence','first_author',
-    'paper_year','pdf_source','source_type','processed_date'];
+  // ── Accumulation Chart ────────────────────────────────────────────
+  var facetSelect = document.getElementById('accum-facet');
+  ACCUM_FIELDS.forEach(function(f) {{
+    var opt = document.createElement('option');
+    opt.value = f;
+    opt.textContent = f.replace(/_/g, ' ');
+    facetSelect.appendChild(opt);
+  }});
+
+  var hiddenGroups = {{}};
+
+  function drawAccum() {{
+    var canvas = document.getElementById('accumChart');
+    var ctx = canvas.getContext('2d');
+    var facet = facetSelect.value;
+    var curves;
+
+    if (facet === '_overall') {{
+      curves = {{'Overall': ACCUM['_overall'] || []}};
+    }} else {{
+      curves = ACCUM[facet] || {{}};
+    }}
+
+    // Get all years across all curves
+    var allYears = new Set();
+    Object.values(curves).forEach(function(pts) {{
+      pts.forEach(function(p) {{ allYears.add(p[0]); }});
+    }});
+    var years = Array.from(allYears).sort(function(a,b) {{ return a - b; }});
+    if (years.length === 0) {{
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('No data', canvas.width / 2, canvas.height / 2);
+      return;
+    }}
+
+    // Sort groups by final count descending
+    var groups = Object.keys(curves).sort(function(a, b) {{
+      var ca = curves[a], cb = curves[b];
+      return (cb.length ? cb[cb.length-1][1] : 0) - (ca.length ? ca[ca.length-1][1] : 0);
+    }});
+
+    // Set canvas size for retina
+    var dpr = window.devicePixelRatio || 1;
+    var rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = 400 * dpr;
+    canvas.style.height = '400px';
+    ctx.scale(dpr, dpr);
+    var W = rect.width, H = 400;
+    ctx.clearRect(0, 0, W, H);
+
+    var padL = 55, padR = 20, padT = 10, padB = 40;
+    var cW = W - padL - padR, cH = H - padT - padB;
+
+    var minYear = years[0], maxYear = years[years.length - 1];
+    var yearSpan = maxYear - minYear || 1;
+
+    // Find max value across visible curves
+    var maxVal = 1;
+    groups.forEach(function(g) {{
+      if (hiddenGroups[facet + ':' + g]) return;
+      curves[g].forEach(function(p) {{ if (p[1] > maxVal) maxVal = p[1]; }});
+    }});
+
+    // Grid lines
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 0.5;
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    for (var i = 0; i <= 4; i++) {{
+      var yv = Math.round(maxVal * i / 4);
+      var yp = padT + cH - (cH * i / 4);
+      ctx.beginPath(); ctx.moveTo(padL, yp); ctx.lineTo(W - padR, yp); ctx.stroke();
+      ctx.fillText(yv, padL - 6, yp + 4);
+    }}
+
+    // X-axis labels
+    ctx.textAlign = 'center';
+    var nLabels = Math.min(years.length, 12);
+    var step = Math.max(1, Math.ceil(years.length / nLabels));
+    for (var j = 0; j < years.length; j += step) {{
+      var xp = padL + ((years[j] - minYear) / yearSpan) * cW;
+      ctx.fillText(years[j], xp, H - 8);
+    }}
+
+    // Draw curves
+    groups.forEach(function(g, gi) {{
+      if (hiddenGroups[facet + ':' + g]) return;
+      var color = PALETTE[gi % PALETTE.length];
+      var pts = curves[g];
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      pts.forEach(function(p, pi) {{
+        var x = padL + ((p[0] - minYear) / yearSpan) * cW;
+        var y = padT + cH - (p[1] / maxVal) * cH;
+        if (pi === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }});
+      ctx.stroke();
+
+      // Dots at data points (only if few enough)
+      if (pts.length <= 40) {{
+        ctx.fillStyle = color;
+        pts.forEach(function(p) {{
+          var x = padL + ((p[0] - minYear) / yearSpan) * cW;
+          var y = padT + cH - (p[1] / maxVal) * cH;
+          ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+        }});
+      }}
+    }});
+
+    // Axis labels
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Publication Year', padL + cW / 2, H - 2);
+    ctx.save();
+    ctx.translate(12, padT + cH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Cumulative Species', 0, 0);
+    ctx.restore();
+
+    // Legend
+    var legendEl = document.getElementById('accumLegend');
+    legendEl.innerHTML = '';
+    groups.forEach(function(g, gi) {{
+      var color = PALETTE[gi % PALETTE.length];
+      var isHidden = !!hiddenGroups[facet + ':' + g];
+      var item = document.createElement('div');
+      item.className = 'chart-legend-item';
+      item.style.opacity = isHidden ? '0.3' : '1';
+      item.innerHTML = '<div class="chart-legend-dot" style="background:' + color + '"></div>' +
+        '<span>' + g.replace(/_/g, ' ') + '</span>';
+      item.onclick = function() {{
+        hiddenGroups[facet + ':' + g] = !hiddenGroups[facet + ':' + g];
+        drawAccum();
+      }};
+      legendEl.appendChild(item);
+    }});
+  }}
+
+  facetSelect.addEventListener('change', drawAccum);
+  drawAccum();
+  window.addEventListener('resize', drawAccum);
+
+  // ── Data Table ────────────────────────────────────────────────────
+  var DEFAULT_COLS = ['species','family','genus','extraction_confidence',
+    'first_author','paper_year','pdf_source','processed_date'];
 
   function getVisibleCols() {{
     try {{
       var saved = localStorage.getItem(STORAGE_KEY);
       if (saved) return JSON.parse(saved);
     }} catch(e) {{}}
-    return DEFAULT_COLS.filter(function(c){{ return FIELDS.indexOf(c) >= 0; }});
+    return DEFAULT_COLS.filter(function(c) {{ return FIELDS.indexOf(c) >= 0; }});
   }}
   function saveVisibleCols(cols) {{
     try {{ localStorage.setItem(STORAGE_KEY, JSON.stringify(cols)); }} catch(e) {{}}
   }}
 
   var visibleCols = getVisibleCols();
-  // Add any trait-specific fields from FIELDS that aren't in defaults
-  // to the defaults on first visit
+  // On first visit, auto-show trait fields from collector_config output_fields
   if (!localStorage.getItem(STORAGE_KEY)) {{
-    FIELDS.forEach(function(f) {{
-      if (DEFAULT_COLS.indexOf(f) < 0 && f.indexOf('diploid') >= 0 || f.indexOf('sex_chrom') >= 0 || f.indexOf('karyotype') >= 0) {{
+    OUTPUT_FIELDS.forEach(function(f) {{
+      if (DEFAULT_COLS.indexOf(f) < 0 && FIELDS.indexOf(f) >= 0 &&
+          visibleCols.indexOf(f) < 0) {{
         visibleCols.push(f);
       }}
     }});
@@ -674,7 +592,7 @@ body {{
       cb.checked = visibleCols.indexOf(f) >= 0;
       cb.onchange = function() {{
         if (cb.checked) {{ visibleCols.push(f); }}
-        else {{ visibleCols = visibleCols.filter(function(c){{ return c !== f; }}); }}
+        else {{ visibleCols = visibleCols.filter(function(c) {{ return c !== f; }}); }}
         saveVisibleCols(visibleCols);
         buildTable();
       }};
@@ -685,6 +603,7 @@ body {{
   }}
 
   var sortCol = null, sortAsc = true;
+  var searchFilter = '';
 
   function buildTable() {{
     var head = document.getElementById('tableHead');
@@ -700,21 +619,35 @@ body {{
         else {{ sortCol = col; sortAsc = true; }}
         buildTable();
       }};
-      if (sortCol === col) th.textContent += sortAsc ? ' \\u25B2' : ' \\u25BC';
+      if (sortCol === col) th.textContent += sortAsc ? ' \u25B2' : ' \u25BC';
       head.appendChild(th);
     }});
 
     var rows = DATA.slice();
+
+    // Filter
+    if (searchFilter) {{
+      var q = searchFilter.toLowerCase();
+      rows = rows.filter(function(row) {{
+        return visibleCols.some(function(col) {{
+          return (row[col] || '').toString().toLowerCase().indexOf(q) >= 0;
+        }});
+      }});
+    }}
+
+    // Sort
     if (sortCol) {{
       rows.sort(function(a, b) {{
         var va = a[sortCol] || '', vb = b[sortCol] || '';
         var na = parseFloat(va), nb = parseFloat(vb);
         if (!isNaN(na) && !isNaN(nb)) return sortAsc ? na - nb : nb - na;
-        return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+        return sortAsc ? va.toString().localeCompare(vb.toString()) : vb.toString().localeCompare(va.toString());
       }});
     }} else {{
-      rows.reverse(); // most recent first
+      rows.reverse();
     }}
+
+    document.getElementById('rowCount').textContent = rows.length + ' of ' + DATA.length + ' rows';
 
     rows.forEach(function(row) {{
       var tr = document.createElement('tr');
@@ -722,6 +655,7 @@ body {{
         var td = document.createElement('td');
         var val = row[col] || '';
         td.textContent = val;
+        td.title = val;
         if (col === 'extraction_confidence') {{
           var n = parseFloat(val);
           if (n >= 0.85) td.className = 'conf-high';
@@ -734,12 +668,15 @@ body {{
     }});
   }}
 
+  document.getElementById('tableSearch').addEventListener('input', function(e) {{
+    searchFilter = e.target.value;
+    buildTable();
+  }});
+
   buildPicker();
   buildTable();
 }})();
 </script>
-
-<script>setTimeout(function(){{ location.reload(); }}, 60000);</script>
 </body>
 </html>"""
 

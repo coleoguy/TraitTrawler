@@ -237,7 +237,7 @@ When searches are exhausted but queue/extraction work remains, keep running.
 | `scripts/statistical_qc.py` | Chao1, outlier detection, QC plots |
 | `scripts/taxonomy_resolver.py` | Batch GBIF taxonomy lookups |
 | `verify_session.py` | Schema/integrity checks |
-| `dashboard_generator.py` | HTML dashboard |
+| `dashboard_generator.py` | HTML dashboard (on demand) |
 | `export_dwc.py` | Darwin Core Archive export |
 
 ---
