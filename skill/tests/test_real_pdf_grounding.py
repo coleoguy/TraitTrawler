@@ -205,10 +205,102 @@ def test_pipeline(tmp_root: Path) -> None:
         assert c.get("grounding_verified") is False
 
 
+def test_triage_prefilter(tmp_root: Path) -> None:
+    """triage_prefilter.py identifies trait-bearing pages via regex+keyword."""
+    # 1. Set up project
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "setup_project.py"),
+        "--root", str(tmp_root),
+        "--trait", "chromosome number", "--taxa", "insects",
+    ], check=True, capture_output=True)
+
+    # 2. Write a trait_profile.md with a couple of sections so the
+    #    vocab-extraction logic has something to pull from.
+    (tmp_root / "state" / "trait_profile.md").write_text("""\
+---
+trait: chromosome number
+---
+
+## 1. Canonical Name and Synonyms
+- chromosome number
+- 2n
+- diploid number
+
+## 2. Notation Conventions
+- Notation: `2n = N`
+- Example: `2n = 22, XY`
+
+## 4. Valid Biological Ranges
+- chromosomes
+
+## 11. Proposed Columns
+### diploid_2n
+- type: int
+""")
+
+    # 3. Build two PDFs: one with strong trait signal, one without
+    hit_pdf = tmp_root / "pdfs" / "good.pdf"
+    noise_pdf = tmp_root / "pdfs" / "irrelevant.pdf"
+    hit_pdf.parent.mkdir(exist_ok=True)
+    make_pdf(hit_pdf, pages=[
+        "Smith et al. 2020. Karyotype survey.",
+        "Methods: conventional Giemsa staining on meiotic preparations.",
+        "Results: Table 2. Chrysolina americana exhibited 2n = 22, XY. "
+        "Galerucella calmariensis exhibited 2n = 34.",
+        "Figure 1. Idiogram of Chrysolina americana.",
+    ])
+    make_pdf(noise_pdf, pages=[
+        "Thompson 2021. A general review of ecology.",
+        "This paper discusses population dynamics and community structure "
+        "in tropical forests. No karyotype data reported.",
+    ])
+
+    # 4. Ingest hashes
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "pdf_ingest.py"),
+        "--scan", "--project-root", str(tmp_root),
+    ], check=True, capture_output=True)
+
+    sha_hit = sha256_of(hit_pdf)
+    sha_noise = sha256_of(noise_pdf)
+
+    # 5. Run pre-filter on each
+    r1 = subprocess.run([
+        sys.executable, str(SCRIPTS / "triage_prefilter.py"),
+        "--sha256", sha_hit, "--project-root", str(tmp_root),
+    ], check=True, capture_output=True, text=True)
+    hit_report = json.loads(r1.stdout)
+
+    r2 = subprocess.run([
+        sys.executable, str(SCRIPTS / "triage_prefilter.py"),
+        "--sha256", sha_noise, "--project-root", str(tmp_root),
+    ], check=True, capture_output=True, text=True)
+    noise_report = json.loads(r2.stdout)
+
+    # 6. Assertions
+    # Hit paper should have HIGH confidence + multiple pages flagged
+    assert hit_report["paper_confidence"] >= 0.35, hit_report
+    assert hit_report["recommendation"] in ("READ_HIT_PAGES", "READ_ABSTRACT_ONLY"), \
+        hit_report
+    assert len(hit_report["pages_with_hits"]) >= 1
+    # One of the hit pages should be page 3 (where the Table 2 data is)
+    assert 3 in hit_report["pages_with_hits"], hit_report
+
+    # Noise paper should have LOW confidence
+    assert noise_report["paper_confidence"] < hit_report["paper_confidence"], \
+        (noise_report, hit_report)
+
+    # Vocab should have been extracted from the profile
+    assert hit_report["vocab_size"] >= 1, hit_report
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         test_pipeline(Path(d) / "e2e_proj")
         print("OK: real-PDF grounding (5 claims, 2 verified, 3 failed correctly)")
+    with tempfile.TemporaryDirectory() as d:
+        test_triage_prefilter(Path(d) / "prefilter_proj")
+        print("OK: triage pre-filter identifies trait-bearing pages")
     return 0
 
 

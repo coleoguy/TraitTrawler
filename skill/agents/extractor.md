@@ -67,7 +67,30 @@ mode based on what triage flagged:
   is the single biggest reason to prefer this over text-only on those
   pages.
 
-### 3. Emit Claims
+### 3. Emit Claims with adaptive self-consistency
+
+For claims where your `uncertainty.value_clarity` is ≥ 0.85, emit a
+single Claim and move on. Fast path — the value is unambiguous.
+
+For claims with `value_clarity` < 0.85 (ambiguous notation, partial
+OCR, multiple candidate values in a compound sentence), do adaptive
+self-consistency:
+
+1. Re-read the same passage 2 additional times, each time extracting
+   as if for the first time. Do NOT peek at your first extraction.
+2. Compare the three independent extractions:
+   - All three agree → emit with confidence boosted to 0.95.
+   - 2 of 3 agree → emit the consensus value with a
+     `self_consistency_note` field recording the dissenting value.
+   - All three disagree → emit a `Claim` flagged with
+     `escalate_on_verify: true` so the semantic_verifier knows to
+     escalate to the advisor immediately.
+
+Why: the 2025 CISC paper (Taubenfeld et al.) and the 2026 ReASC
+paper show confidence-weighted self-consistency matches fixed-N=10
+accuracy at ~46% of the cost. Adaptive-N means we only pay the
+extra Opus tokens on the hard cases, not on every claim.
+
 For each value you can defend with a direct quote, append one JSON line
 to `state/claims/<sha256>.jsonl`:
 

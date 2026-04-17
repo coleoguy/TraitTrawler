@@ -1,10 +1,10 @@
 ---
 name: triage
 description: >
-  Reads abstract + first page of a PDF to decide whether the paper actually
-  contains extractable data for the project's trait. Returns
-  {relevant: bool, pages_of_interest: [int], reason: str}. Cheap and fast:
-  uses Haiku and a cached trait primer.
+  Decides per paper whether it contains extractable trait data. Uses a
+  deterministic code-execution pre-filter FIRST (regex + keyword match
+  over PDF text) to cut LLM read tokens by ~90%, then reads only the
+  candidate pages with Haiku 4.5 for the final relevance verdict.
 model: haiku
 context: fork
 allowed-tools: Read, Write, Bash
@@ -12,31 +12,72 @@ allowed-tools: Read, Write, Bash
 
 # Triage
 
-You answer one question per paper: does this paper contain extractable
-data for our trait? If yes, which pages are worth the Extractor's Opus
-budget?
+You answer one question per paper: does this paper contain
+extractable data for our trait? If yes, which pages deserve the
+Extractor's Opus budget?
 
-## Inputs from the Manager
+## Why a pre-filter first
 
-- `sha256` of the PDF
-- `pdf_path` (from manifest lookup)
-- `trait_profile_path` — read this once for your context
+Anthropic's "Code Execution with MCP" engineering post demonstrates
+~98% token reduction by running deterministic filters BEFORE the
+model reads. A naïve triage that passes a 40-page PDF to Haiku costs
+~20,000 input tokens per paper. Our pre-filter does keyword/regex
+scanning in Python, identifies candidate pages, and hands you only
+those plus short context snippets — typically 2-5k tokens per paper.
 
-## Process
+On a 2,500-PDF corpus, that is the difference between ~$50 and ~$5
+in triage costs.
 
-1. Read `state/trait_profile.md` in full — it is your domain primer.
-2. Read the PDF's abstract and first two pages (use `Read` with
-   `offset` / `limit` parameters on the PDF, or `pdfplumber` via
-   `python scripts/pdf_peek.py --sha256 <sha> --pages 1-2`).
-3. Decide: is there evidence this paper contains a value for our
-   trait, not just a mention of the trait? Examples:
-   - "We sequenced the genome of X. chromosome number was 2n=22." → relevant, page 1
-   - "Chromosome numbers are important for evolution." → not relevant (background only)
-4. If relevant, scan the table of contents / section headers and list
-   the pages most likely to contain data (results, tables, supplementary
-   references). Cap at 5 pages to keep extractor cost bounded.
+## Your turn
 
-## Output
+### Step 1. Run the pre-filter
+
+```
+python scripts/triage_prefilter.py --sha256 <sha> --project-root <root> \
+  --out state/triage/<sha>.prefilter.json
+```
+
+The script reads `state/trait_profile.md` §1, §2, §4 to build the
+trait vocabulary, plus the always-on structural patterns (Table,
+Figure, Results, binomial species names). It scans every page,
+scores each, and returns:
+
+```json
+{
+  "total_pages": 42,
+  "pages_with_hits": [3, 4, 7, 12],
+  "paper_confidence": 0.84,
+  "recommendation": "READ_HIT_PAGES" | "READ_ABSTRACT_ONLY" | "SKIP_NO_SIGNAL",
+  "hit_summary": [ ... per-page snippets ... ]
+}
+```
+
+### Step 2. Branch on recommendation
+
+**`SKIP_NO_SIGNAL`** (paper_confidence < 0.15): the paper almost
+certainly does not contain trait data. Log the skip reason and
+return without reading the PDF yourself. Example response:
+
+```json
+{
+  "sha256": "...",
+  "relevant": false,
+  "reason": "no_trait_signal",
+  "pages_of_interest": [],
+  "prefilter_confidence": 0.08
+}
+```
+
+**`READ_ABSTRACT_ONLY`** (0.15 <= conf < 0.35): weak signal, worth
+confirming by reading the abstract only. Use `pdf_peek.py --pages
+1-2` and decide.
+
+**`READ_HIT_PAGES`** (conf >= 0.35): the pre-filter identified
+specific pages. Read those pages (only those) and decide final
+relevance. Read the snippets the pre-filter already provided — they
+may be enough to decide without a PDF read at all.
+
+### Step 3. Emit the triage verdict
 
 Write `state/triage/<sha256>.json`:
 ```json
@@ -44,15 +85,18 @@ Write `state/triage/<sha256>.json`:
   "sha256": "...",
   "relevant": true,
   "pages_of_interest": [3, 4, 7, 12],
-  "reason": "Table 2 on page 4 reports karyotypes for 18 species; figure 3 legend on page 7 mentions B chromosomes."
+  "prefilter_confidence": 0.84,
+  "reason": "Table 2 page 4 reports karyotypes for 18 species."
 }
 ```
 
 ## Return value to Manager
 
-- relevance verdict (one of: `relevant`, `background_only`, `wrong_trait`, `wrong_taxon`, `unreadable`)
+Under 100 words:
+- verdict (`relevant`, `background_only`, `wrong_trait`, `wrong_taxon`, `unreadable`)
+- prefilter_confidence (so Manager sees the cost-saving signal)
 - page count if relevant
 - one-sentence reason
 
-The Manager skips any paper marked not-relevant. The reason is logged
-for active-learning feedback.
+The Manager skips any paper marked not-relevant. The reason is
+logged for active-learning feedback.
