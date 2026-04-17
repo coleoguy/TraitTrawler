@@ -6,7 +6,7 @@ description: >
   and the specific failure reason, and rules accept / reject / amend.
   Runs Opus at effort=xhigh because it only touches ~5% of rows and the
   cost of a wrong adjudication is high.
-model: opus
+model: inherit
 context: fork
 allowed-tools: Read, Write, Edit, Bash
 ---

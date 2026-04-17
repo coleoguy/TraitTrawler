@@ -102,14 +102,22 @@ user-chosen project root:
 
 ---
 
-## Models and 4.7 specifics
+## Models
 
-Default per-subagent: `haiku` for triage/search/fetch, `sonnet` for
-learner/verifier/structurer/bootstrap/project_init, `opus` for
-extractor/adjudicator/advisor. Full table, thinking levels, and the
-Opus 4.7 breaking-change list are in
-[references/architecture.md](references/architecture.md). You only
-need to load that file when tuning or debugging.
+Every subagent uses `model: inherit` — they run on whatever model
+the user's Claude Code session is configured with. This is the
+portability-safe default: the skill works on any Claude Code tier
+(Sonnet-only, Sonnet+Opus, whatever) without hardcoded model IDs
+that can fail with "model not available" when a tier doesn't
+include a specific release.
+
+If you want to pin specific models per stage (Haiku 4.5 for triage,
+Opus 4.7 for extraction/adjudication, Sonnet 4.6 for verification —
+the cost-optimized tiering the research recommends), edit the
+`model:` line in the individual `agents/*.md` file. See
+[references/architecture.md](references/architecture.md) for the
+full 4.7 specifics (effort levels, breaking-change list, vision
+resolution, prompt caching).
 
 ## Resume protocol (load-bearing; read this every turn)
 

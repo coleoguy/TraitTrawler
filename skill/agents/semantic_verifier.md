@@ -8,7 +8,7 @@ description: >
   by ~23% F1 on scientific IE because the critic doesn't anchor on
   the draft. Escalates ambiguous cases to the advisor subagent
   (Opus 4.7) emulating Anthropic's Advisor Tool pattern.
-model: sonnet
+model: inherit
 thinking: adaptive
 effort: high
 context: fork

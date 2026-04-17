@@ -8,7 +8,7 @@ description: >
   validation hooks for the user to approve. Runs in two modes: "bootstrap"
   (fresh projects) and "update" (periodic refresh during processing).
   Returns a short summary; substantive output lives on disk.
-model: sonnet
+model: inherit
 thinking: adaptive
 effort: high
 context: fork

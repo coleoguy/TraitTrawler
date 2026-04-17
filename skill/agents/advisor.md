@@ -8,7 +8,7 @@ description: >
   12% cost reduction per Anthropic's benchmarks) inside the Claude Code
   skill harness, where the verifier is a Sonnet subagent that dispatches
   this Opus subagent as needed.
-model: opus
+model: inherit
 thinking: adaptive
 effort: xhigh
 context: fork

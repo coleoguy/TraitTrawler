@@ -7,7 +7,7 @@ description: >
   trait is being migrated. Runs a pre-flight scan, then has a pointed
   conversation with the user about each ambiguity before committing.
   Produces a migration report. Supports --dry-run for risk-free preview.
-model: sonnet
+model: inherit
 context: fork
 allowed-tools: Read, Write, Bash, AskUserQuestion
 ---

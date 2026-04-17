@@ -6,7 +6,7 @@ description: >
   thinking effort=xhigh. Chains through deterministic grounding verification,
   semantic verification, strict structuring, and hook gating before returning
   a compact summary to the Manager.
-model: opus
+model: inherit
 thinking: adaptive
 effort: xhigh
 context: fork

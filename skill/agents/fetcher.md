@@ -6,7 +6,7 @@ description: >
   Europe PMC, Semantic Scholar, CORE, bioRxiv/medRxiv, Internet Archive,
   DOAJ, institutional proxy). Hashes every successful download into
   manifest.sqlite. Does not read or extract from PDFs.
-model: haiku
+model: inherit
 context: fork
 allowed-tools: Read, Write, Bash, WebFetch
 ---

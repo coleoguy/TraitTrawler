@@ -5,7 +5,7 @@ description: >
   matching the project's trait + taxa. Produces deduplicated candidate
   records with triage priority. Runs in a forked context so the Manager
   never sees the raw search API payloads.
-model: haiku
+model: inherit
 context: fork
 allowed-tools: Read, Write, Bash, WebFetch, WebSearch, Task
 ---

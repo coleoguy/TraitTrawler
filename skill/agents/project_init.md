@@ -5,7 +5,7 @@ description: >
   creates the project directory, writes initial config.yaml and
   session.json. A lightweight guided setup; handed back to the Manager
   immediately after.
-model: sonnet
+model: inherit
 context: fork
 allowed-tools: Read, Write, Bash, AskUserQuestion
 ---

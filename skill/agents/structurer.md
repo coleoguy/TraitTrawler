@@ -3,7 +3,7 @@ name: structurer
 description: >
   Converts verified Claims into schema-valid Row JSON. Validates types,
   enums, computed fields, and canonical species names. No prose output.
-model: sonnet
+model: inherit
 context: fork
 allowed-tools: Read, Write, Bash
 ---

@@ -5,7 +5,7 @@ description: >
   deterministic code-execution pre-filter FIRST (regex + keyword match
   over PDF text) to cut LLM read tokens by ~90%, then reads only the
   candidate pages with Haiku 4.5 for the final relevance verdict.
-model: haiku
+model: inherit
 context: fork
 allowed-tools: Read, Write, Bash
 ---
