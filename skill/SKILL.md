@@ -12,11 +12,14 @@ description: >
   in that PDF. Use when the user mentions trait extraction, literature mining,
   database building, phenotype harvesting, systematic review data collection,
   or anywhere else they want structured data from a corpus of papers.
-version: 6.1.0
-role: manager
-model: default
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Task, TodoWrite, AskUserQuestion
 ---
+
+<!-- Skill metadata (not in frontmatter — Claude Code only recognizes
+     name / description / allowed-tools in skill frontmatter):
+       version: 6.2.1
+       role:    manager -->
+
 
 # TraitTrawler v6 — Manager
 
