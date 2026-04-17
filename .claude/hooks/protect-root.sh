@@ -1,6 +1,8 @@
 #!/bin/bash
 # PreToolUse hook: blocks file creation in project root.
-# Agents must write to their designated folders (finds/, dealer_results/, etc.)
+# v6 rewrite — only allows a minimal, explicit set of root files and
+# subdirectories. Most state lives under state/, pdfs/, reports/, or
+# inside skill/.
 # Exit 2 = block the tool call.
 
 INPUT=$(cat)
@@ -15,18 +17,16 @@ if [[ -z "$FILE_PATH" ]]; then
   exit 0
 fi
 
-# Get the project root from cwd
 PROJECT_DIR=$(echo "$INPUT" | jq -r '.cwd // empty')
 if [[ -z "$PROJECT_DIR" ]]; then
   exit 0
 fi
 
-# Calculate relative path
 REL_PATH=$(python3 -c "
-import os.path, sys
+import os.path
 try:
     print(os.path.relpath('$FILE_PATH', '$PROJECT_DIR'))
-except:
+except Exception:
     print('')
 " 2>/dev/null)
 
@@ -34,33 +34,33 @@ if [[ -z "$REL_PATH" ]]; then
   exit 0
 fi
 
-# If the file has no directory separator, it's in the project root
+# File in project root (no directory separator)?
 if [[ "$REL_PATH" != *"/"* ]]; then
-  # Allow known root files
   case "$REL_PATH" in
-    collector_config.yaml|config.py|guide.md|extraction_examples.md|\
-    results.csv|leads.csv|dashboard.html|context.md|\
-    dashboard_generator.py|verify_session.py|export_dwc.py|\
-    .gitignore|README.md|LICENSE|CHANGELOG.md|CITATION.cff)
+    # v6 allowed root files
+    config.yaml|candidates.jsonl|results.csv|legacy_rejected.csv|\
+    .gitignore|README.md|LICENSE|CHANGELOG.md|CITATION.cff|\
+    CONTRIBUTING.md|VALIDATION_GUIDE.md|requirements.txt|\
+    traittrawler.skill)
       exit 0
       ;;
     *)
-      echo "BLOCKED: Cannot create '$REL_PATH' in project root. Use a subdirectory (finds/, dealer_results/, state/, etc.)." >&2
+      echo "BLOCKED: Cannot create '$REL_PATH' in project root. Use state/, pdfs/, reports/, or skill/." >&2
       exit 2
       ;;
   esac
 fi
 
-# File is in a subdirectory — check it's an allowed one
+# In a subdirectory — check it's an allowed top-level dir
 TOP_DIR=$(echo "$REL_PATH" | cut -d'/' -f1)
 case "$TOP_DIR" in
-  finds|dealer_results|writer_results|ready_for_extraction|\
-  search_results|fetch_failures|lead_files|learning|\
-  state|pdfs|provided_pdfs|scripts|.claude)
+  # v6 canonical directories
+  state|pdfs|reports|skill|tests|docs|evals|examples|\
+  .claude|.github|.pytest_cache|.ruff_cache)
     exit 0
     ;;
   *)
-    echo "BLOCKED: Cannot write to unauthorized directory '$TOP_DIR/'. Allowed: finds/, dealer_results/, state/, pdfs/, etc." >&2
+    echo "BLOCKED: Cannot write to unauthorized directory '$TOP_DIR/'. Allowed v6 dirs: state/, pdfs/, reports/, skill/, tests/, docs/." >&2
     exit 2
     ;;
 esac

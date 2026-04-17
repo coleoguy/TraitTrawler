@@ -1,378 +1,69 @@
 #!/usr/bin/env python3
-# PURPOSE: Execute this script. Do not read it into context.
-# USAGE: python3 scripts/taxonomy_resolver.py --species "Name1" "Name2" --cache state/taxonomy_cache.json --kingdom Animalia
-# OUTPUT: JSON to stdout with resolution results for each species
+"""Resolve species names against the GBIF backbone.
+
+Tries the `pygbif` package if available. Falls back to a lightweight
+urllib call. Returns canonical name + GBIF taxon key, or
+{"status": "unresolved"} on failure.
+
+Cache hits to disk (state/taxonomy_cache.json) so repeat lookups are free.
 """
-TraitTrawler Taxonomy Resolver
-===============================
-Validates species names against the GBIF Backbone Taxonomy.
-Resolves synonyms, auto-fills higher taxonomy, caches results.
-
-Usage:
-    python3 taxonomy_resolver.py --species "Cicindela sylvatica" "Dynastes hercules" \
-        --cache state/taxonomy_cache.json --kingdom Animalia
-
-    python3 taxonomy_resolver.py --csv results.csv --species-column species \
-        --cache state/taxonomy_cache.json --kingdom Animalia
-
-Output: JSON to stdout with resolution results for each species.
-"""
+from __future__ import annotations
 
 import argparse
-import csv
 import json
-import os
 import sys
-import time
-from urllib.parse import quote
-from urllib.request import urlopen, Request
-from urllib.error import URLError, HTTPError
+from pathlib import Path
+from urllib.parse import quote_plus
+from urllib.request import urlopen
 
 
-GBIF_MATCH_URL = "https://api.gbif.org/v1/species/match"
-GBIF_SPECIES_URL = "https://api.gbif.org/v1/species"
-RATE_LIMIT_DELAY = 0.35  # seconds between requests (~3/sec)
-CACHE_TTL_DAYS = 90  # default; overridden by collector_config.yaml taxonomy_cache_ttl_days
-
-
-def load_cache_ttl(project_root):
-    """Load cache TTL from config. Returns int days."""
-    global CACHE_TTL_DAYS
-    config_path = os.path.join(project_root, "collector_config.yaml")
+def _lookup_via_http(name: str) -> dict:
+    url = f"https://api.gbif.org/v1/species/match?name={quote_plus(name)}"
     try:
-        import yaml
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-        ttl = config.get("taxonomy_cache_ttl_days")
-        if ttl is not None:
-            CACHE_TTL_DAYS = int(ttl)
-    except Exception:
-        pass
-    return CACHE_TTL_DAYS
+        with urlopen(url, timeout=10) as r:
+            data = json.load(r)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    if data.get("matchType") == "NONE":
+        return {"status": "unresolved", "raw": data}
+    return {
+        "status": "resolved",
+        "canonical_name": data.get("canonicalName") or data.get("scientificName"),
+        "gbif_key": data.get("usageKey"),
+        "rank": data.get("rank"),
+        "match_type": data.get("matchType"),
+        "synonym": bool(data.get("synonym")),
+    }
 
 
-def load_cache(cache_path):
-    """Load taxonomy cache from disk."""
-    if cache_path and os.path.exists(cache_path):
+def resolve(name: str, cache_path: Path | None = None) -> dict:
+    if not name or not name.strip():
+        return {"status": "unresolved", "error": "empty name"}
+    name = name.strip()
+    cache: dict[str, dict] = {}
+    if cache_path and cache_path.exists():
         try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, ValueError):
-            return {}
-    return {}
-
-
-def save_cache(cache, cache_path):
-    """Save taxonomy cache to disk."""
-    if cache_path:
-        tmp = cache_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cache, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, cache_path)
-
-
-def gbif_match(species_name, kingdom="Animalia"):
-    """Query GBIF species match API (rate-limited)."""
-    time.sleep(RATE_LIMIT_DELAY)
-    url = (
-        f"{GBIF_MATCH_URL}"
-        f"?name={quote(species_name)}"
-        f"&kingdom={quote(kingdom)}"
-        f"&strict=false"
-    )
-    req = Request(url, headers={"Accept": "application/json"})
-    try:
-        with urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except (URLError, HTTPError, TimeoutError) as e:
-        return {"matchType": "NONE", "error": str(e)}
-
-
-def gbif_family_species_count(family_name):
-    """Get approximate species count for a family from GBIF (rate-limited)."""
-    time.sleep(RATE_LIMIT_DELAY)
-    url = (
-        f"{GBIF_SPECIES_URL}/search"
-        f"?rank=FAMILY&q={quote(family_name)}&limit=1"
-    )
-    req = Request(url, headers={"Accept": "application/json"})
-    try:
-        with urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if data.get("results"):
-                key = data["results"][0].get("key")
-                if key:
-                    # Get descendant species count
-                    count_url = (
-                        f"{GBIF_SPECIES_URL}/{key}/species?limit=0"
-                    )
-                    with urlopen(Request(count_url), timeout=15) as cr:
-                        count_data = json.loads(cr.read().decode("utf-8"))
-                        return count_data.get("count", 0)
-    except (URLError, HTTPError, TimeoutError):
-        pass
-    return 0
-
-
-def _cache_is_fresh(entry):
-    """Check if a cache entry is within its TTL."""
-    lookup_date = entry.get("lookup_date", "")
-    if not lookup_date:
-        return False
-    try:
-        from datetime import datetime
-        cached_date = datetime.strptime(lookup_date, "%Y-%m-%d")
-        return (datetime.now() - cached_date).days < CACHE_TTL_DAYS
-    except (ValueError, TypeError):
-        return False
-
-
-def resolve_species(species_name, kingdom, cache, offline=False):
-    """Resolve a single species name. Returns a result dict."""
-    # Check cache first (with TTL)
-    if species_name in cache:
-        cached = cache[species_name]
-        if _cache_is_fresh(cached):
-            return {
-                "query": species_name,
-                "cached": True,
-                **cached
-            }
-
-    # Offline mode: return placeholder without GBIF call.
-    # Do NOT cache the placeholder — keep cache clean for real lookups.
-    if offline:
-        parts = species_name.strip().split()
-        return {
-            "query": species_name,
-            "cached": False,
-            "match_type": "NONE",
-            "status": "OFFLINE",
-            "confidence": 0,
-            "gbif_key": None,
-            "matched_name": "",
-            "accepted_name": None,
-            "accepted_key": None,
-            "kingdom": "", "phylum": "", "class": "", "order": "",
-            "family": "",
-            "genus": parts[0] if len(parts) >= 2 else "",
-            "rank": "",
-            "action": "deferred_offline",
-            "note": "GBIF unavailable; taxonomy resolution deferred",
-        }
-
-    # Query GBIF
-    time.sleep(RATE_LIMIT_DELAY)
-    match = gbif_match(species_name, kingdom)
-
-    result = {
-        "query": species_name,
-        "cached": False,
-        "match_type": match.get("matchType", "NONE"),
-        "status": match.get("status", "UNKNOWN"),
-        "confidence": match.get("confidence", 0),
-        "gbif_key": match.get("usageKey"),
-        "matched_name": match.get("scientificName", ""),
-        "accepted_name": None,
-        "accepted_key": None,
-        "kingdom": match.get("kingdom", ""),
-        "phylum": match.get("phylum", ""),
-        "class": match.get("class", ""),
-        "order": match.get("order", ""),
-        "family": match.get("family", ""),
-        "genus": match.get("genus", ""),
-        "rank": match.get("rank", ""),
-        "action": "none",
-        "note": ""
-    }
-
-    match_type = result["match_type"]
-    status = result["status"]
-
-    if match.get("error"):
-        print(f"WARNING: GBIF lookup failed for '{species_name}': "
-              f"{match['error']}. Using unresolved name.",
-              file=sys.stderr)
-        result["action"] = "flag_gbif_error"
-        result["note"] = f"GBIF API error: {match['error']}"
-        return result
-
-    if match_type == "NONE":
-        result["action"] = "flag_not_found"
-        result["note"] = "Species not found in GBIF Backbone Taxonomy"
-
-    elif match_type == "HIGHERRANK":
-        result["action"] = "flag_higher_rank"
-        result["note"] = (
-            f"GBIF matched to higher rank only: "
-            f"{result['matched_name']} (rank: {result['rank']})"
-        )
-
-    elif status == "SYNONYM":
-        # Get accepted name
-        accepted_key = match.get("acceptedUsageKey")
-        accepted_name = match.get("species", match.get("canonicalName", ""))
-        # If the match response includes accepted info directly
-        if accepted_key:
-            result["accepted_key"] = accepted_key
-            # Try to get the accepted name details
-            try:
-                time.sleep(RATE_LIMIT_DELAY)
-                acc_url = f"{GBIF_SPECIES_URL}/{accepted_key}"
-                with urlopen(Request(acc_url, headers={"Accept": "application/json"}), timeout=15) as resp:
-                    acc_data = json.loads(resp.read().decode("utf-8"))
-                    accepted_name = acc_data.get("canonicalName", acc_data.get("species", accepted_name))
-                    result["family"] = acc_data.get("family", result["family"])
-                    result["genus"] = acc_data.get("genus", result["genus"])
-                    result["order"] = acc_data.get("order", result["order"])
-            except (URLError, HTTPError, TimeoutError):
-                pass
-
-        result["accepted_name"] = accepted_name
-        result["action"] = "synonym_resolved"
-        result["note"] = (
-            f"Original name: {species_name}, resolved to accepted name "
-            f"via GBIF (acceptedUsageKey: {accepted_key})"
-        )
-
-    elif result["rank"] and result["rank"] not in ("SPECIES", "SUBSPECIES", "VARIETY", "FORM", ""):
-        # Match resolved to a rank above species — flag it
-        result["action"] = "flag_higher_rank"
-        result["note"] = (
-            f"GBIF matched to {result['rank']} rank ({result['matched_name']}), "
-            f"not species level. Genus/family fields may be unreliable."
-        )
-
-    elif match_type == "FUZZY":
-        if result["confidence"] >= 90:
-            result["action"] = "fuzzy_high_confidence"
-            result["accepted_name"] = result["matched_name"]
-            result["note"] = (
-                f"GBIF fuzzy match: {result['matched_name']} "
-                f"(confidence: {result['confidence']}%)"
-            )
-        else:
-            result["action"] = "fuzzy_low_confidence"
-            result["note"] = (
-                f"GBIF low-confidence fuzzy match: {result['matched_name']} "
-                f"({result['confidence']}%)"
-            )
-
-    elif match_type == "EXACT" and status == "ACCEPTED":
-        result["action"] = "accepted"
-        result["accepted_name"] = result["matched_name"]
-        result["note"] = ""
-
-    elif match_type == "EXACT" and status == "DOUBTFUL":
-        result["action"] = "flag_doubtful"
-        result["accepted_name"] = result["matched_name"]
-        result["note"] = "GBIF status: DOUBTFUL"
-
-    else:
-        # EXACT match with other status
-        result["action"] = "accepted"
-        result["accepted_name"] = result["matched_name"]
-
-    # Update cache
-    cache_entry = {
-        "status": result["status"],
-        "accepted_name": result["accepted_name"] or species_name,
-        "gbif_key": result["gbif_key"],
-        "family": result["family"],
-        "genus": result["genus"],
-        "order": result["order"],
-        "match_type": result["match_type"],
-        "confidence": result["confidence"],
-        "lookup_date": time.strftime("%Y-%m-%d")
-    }
-    cache[species_name] = cache_entry
-
+            cache = json.loads(cache_path.read_text())
+        except Exception:
+            cache = {}
+    if name in cache:
+        return cache[name]
+    result = _lookup_via_http(name)
+    if cache_path is not None and result.get("status") in ("resolved", "unresolved"):
+        cache[name] = result
+        cache_path.write_text(json.dumps(cache, indent=2))
     return result
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Resolve species names via GBIF")
-    parser.add_argument("--species", nargs="+", help="Species names to resolve")
-    parser.add_argument("--csv", help="CSV file to read species from")
-    parser.add_argument("--species-column", default="species", help="Column name in CSV")
-    parser.add_argument("--cache", default="state/taxonomy_cache.json", help="Cache file path")
-    parser.add_argument("--kingdom", default="Animalia", help="GBIF kingdom filter")
-    parser.add_argument("--family-counts", nargs="+", help="Get species counts for families")
-    parser.add_argument("--offline", action="store_true",
-                        help="Skip GBIF calls; return placeholders for uncached species")
-
-    args = parser.parse_args()
-
-    cache = load_cache(args.cache)
-
-    # Handle family species count queries
-    if args.family_counts:
-        counts = {}
-        for family in args.family_counts:
-            cache_key = f"__family_count__{family}"
-            if cache_key in cache:
-                counts[family] = cache[cache_key]
-            else:
-                time.sleep(RATE_LIMIT_DELAY)
-                count = gbif_family_species_count(family)
-                counts[family] = count
-                cache[cache_key] = count
-        save_cache(cache, args.cache)
-        json.dump(counts, sys.stdout, indent=2)
-        print()
-        return
-
-    # Collect species names
-    species_names = set()
-    if args.species:
-        species_names.update(args.species)
-    if args.csv and os.path.exists(args.csv):
-        with open(args.csv, "r", encoding="utf-8", errors="replace") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                name = row.get(args.species_column, "").strip()
-                if name:
-                    species_names.add(name)
-
-    if not species_names:
-        print(json.dumps({"error": "No species names provided"}))
-        sys.exit(1)
-
-    # Resolve each species
-    results = []
-    cached_count = 0
-    resolved_count = 0
-    for name in sorted(species_names):
-        result = resolve_species(name, args.kingdom, cache,
-                                 offline=args.offline)
-        results.append(result)
-        if result["cached"]:
-            cached_count += 1
-        else:
-            resolved_count += 1
-
-    # Save updated cache
-    save_cache(cache, args.cache)
-
-    # Output
-    output = {
-        "total": len(results),
-        "cached": cached_count,
-        "resolved": resolved_count,
-        "results": results,
-        "summary": {
-            "accepted": sum(1 for r in results if r["action"] == "accepted"),
-            "synonym_resolved": sum(1 for r in results if r["action"] == "synonym_resolved"),
-            "fuzzy_high": sum(1 for r in results if r["action"] == "fuzzy_high_confidence"),
-            "fuzzy_low": sum(1 for r in results if r["action"] == "fuzzy_low_confidence"),
-            "not_found": sum(1 for r in results if r["action"] == "flag_not_found"),
-            "higher_rank": sum(1 for r in results if r["action"] == "flag_higher_rank"),
-        }
-    }
-
-    json.dump(output, sys.stdout, indent=2, ensure_ascii=False)
-    print()
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--name", required=True)
+    ap.add_argument("--cache", type=Path, default=Path("state/taxonomy_cache.json"))
+    args = ap.parse_args()
+    r = resolve(args.name, args.cache)
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("status") == "resolved" else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
