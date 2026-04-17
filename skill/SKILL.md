@@ -102,113 +102,36 @@ user-chosen project root:
 
 ---
 
-## Model selection (as of 2026-04-16)
+## Models and 4.7 specifics
 
-The default model assignment per subagent, updated for the Opus 4.7
-launch today:
+Default per-subagent: `haiku` for triage/search/fetch, `sonnet` for
+learner/verifier/structurer/bootstrap/project_init, `opus` for
+extractor/adjudicator/advisor. Full table, thinking levels, and the
+Opus 4.7 breaking-change list are in
+[references/architecture.md](references/architecture.md). You only
+need to load that file when tuning or debugging.
 
-| Subagent | Model | Effort / thinking | Why |
-|---|---|---|---|
-| project_init, bootstrap | `claude-sonnet-4-6` | default | Lightweight guided setup; cheap and fast. |
-| trait_learner | `claude-sonnet-4-6` | `effort: high` | Careful synthesis of 5–10 seeds; benefits from adaptive thinking. |
-| searcher, fetcher | `claude-haiku-4-5` | default | Near-frontier reasoning at $1/$5 MTok; cache the shared query template. |
-| triage | `claude-haiku-4-5` | default | Relevance gate on ~60% of papers; Haiku 4.5's code-and-reasoning jump makes it enough. |
-| extractor | `claude-opus-4-7` | `effort: xhigh` | The hard stage. 4.7's stricter literal-instruction following + adaptive thinking + 2576px image support are precisely the v4.6→v4.7 wins we care about. |
-| semantic_verifier | `claude-sonnet-4-6` | `effort: high` | Short snippet + proposed row; Opus overkill unless escalated via advisor (see below). |
-| structurer | `claude-sonnet-4-6` | default | Deterministic schema conversion; low cognitive load. |
-| adjudicator | `claude-opus-4-7` | `effort: xhigh` | Disputes only (~5% of rows); cost of a wrong ruling is high. |
-| advisor (optional) | `claude-opus-4-7` | `effort: xhigh` | Called by semantic_verifier when uncertain; see `agents/advisor.md`. |
+## Resume protocol (load-bearing; read this every turn)
 
-Opus 4.7 **breaking-change checklist** (do not attempt to send these on 4.7
-or the API returns 400):
-- `temperature`, `top_p`, `top_k` → omit entirely
-- `thinking.budget_tokens` → use `thinking.type: "adaptive"` + `output_config.effort`
-- Assistant-message prefill → use `output_config.format` with a JSON schema instead
-- Old beta headers (`effort-2025-11-24`, `interleaved-thinking-2025-05-14`,
-  `fine-grained-tool-streaming-2025-05-14`) → remove; adaptive thinking
-  enables interleaved automatically
+At the start of every turn:
+1. Read `state/session.json`. It is the authoritative phase marker.
+2. If you cannot recall the last 3–5 batches, run
+   `python scripts/checkpoint.py --project-root <root> --show` and
+   `tail -n 50 state/manager_log.md`. These files win over in-
+   context memory.
 
-**Token-budget note.** The 4.7 tokenizer produces 1.0–1.35× as many tokens
-for identical input (structured data inflates most). Counter via: (a) lean
-into prompt caching — cache `state/trait_profile.md` and `state/schema.json`
-with `cache_control` at the outer content block; (b) route non-interactive
-stages (triage of cold papers, bootstrap re-scoring) to the Batch API for
-the 50% discount; (c) raise extractor `max_tokens` to ≥ 64k when using
-`effort: xhigh`.
+At the end of every batch:
+1. `python scripts/session_log.py --root <root> --batch <n> ...` —
+   appends one line; compaction-safe narration.
+2. Every 10 batches: `python scripts/checkpoint.py --project-root <root>`.
 
-**Vision gains matter for us.** 4.7's max image resolution jumped
-1568px → 2576px (CharXiv Reasoning 69.1% → 82.1% no-tools). For table- and
-figure-heavy trait papers, rendering each page of a PDF as a 2576px image
-and passing it alongside the text is often the single biggest quality lift
-available. The `extractor` subagent should default to image + text for
-pages flagged by triage as containing tables or figures, text-only for
-prose-dominant pages. See `agents/extractor.md` for the recipe.
+Every 50 batches (~500 papers) proactively suggest `/clear` + re-invoke
+so your context stays under ~500k tokens. The state files let the
+user resume seamlessly.
 
----
-
-## Context hygiene and resume protocol
-
-Your context fills up over long runs. A 2,500-PDF corpus at
-batch_size 10 is 250 batches at ~10k tokens of accumulated Manager
-context per batch — that is ~2.5M tokens, well above any single
-model's window. Claude Code will auto-compact at some point. This
-section tells you how to stay correct through that.
-
-### At the start of every turn
-
-1. Read `state/session.json` first. Authoritative phase state.
-2. If you cannot recall with confidence what the last 3-5 batches
-   did, run:
-   ```
-   python scripts/checkpoint.py --project-root <root> --show
-   tail -n 50 state/manager_log.md
-   ```
-   These files are the authoritative narrative. If they conflict
-   with what you "remember", they win.
-
-### At the end of every batch
-
-1. Append one line to `state/manager_log.md`:
-   ```
-   python scripts/session_log.py --root <root> --batch <n> \
-     --papers-in-batch <N> --rows-written <M> --to-review <K> \
-     --adjudicated <J> --interesting "<one-sentence surprise or empty>"
-   ```
-2. Every 10 batches, write a fresh checkpoint:
-   ```
-   python scripts/checkpoint.py --project-root <root>
-   ```
-   This rewrites `state/manager_checkpoint.md` from the on-disk truth
-   (ledger, review queue, results.csv). It is cheap — takes under a
-   second — and it is your lifeline across compaction events.
-
-### What NOT to keep in context
-
-- Full extraction output. That lives in `state/ledger.jsonl`. Read it
-  via checkpoint.py or tail-grep; do NOT load it whole.
-- Full PDF contents. The extractor subagent handles PDFs in its own
-  forked context and returns a summary. You never need the raw text.
-- Reference docs you read earlier in the session. Re-read on demand
-  (they are small) rather than carrying them forward turn to turn.
-
-### Resume after compaction / session break
-
-If the user restarts the session:
-1. Read `state/session.json` → know what phase you are in.
-2. Read `state/manager_checkpoint.md` → know what has been written
-   and what the running narrative is.
-3. Tail last ~50 lines of `state/manager_log.md` → restore the
-   moment-to-moment narration style.
-4. Continue from the current phase. Do not re-process completed
-   batches. The ledger is the proof that work happened.
-
-### Size targets
-
-Aim for Manager context under ~500k tokens per uninterrupted run.
-At batch_size 10 that is ~50 batches = 500 papers in one session.
-For larger runs, the user restarts the skill between 500-paper
-chunks. The state files make this free. Narrate the restart
-boundary to the user so they know when to /clear and re-invoke.
+Do NOT keep in context: full extraction output (ledger has it),
+raw PDF text (extractor handled it in a forked context), or
+reference docs you read earlier.
 
 ## Phase state machine
 
@@ -423,60 +346,29 @@ Actions:
 
 ---
 
-## Subagent dispatch patterns
+## Subagent dispatch (the throughput rule)
 
-**Parallel batch dispatch — the single most important performance move.**
-At the start of every batch, issue ALL Task calls for that batch in a
-SINGLE assistant message. Do not loop one at a time. Example for a
-batch of 10 papers:
+**Issue ALL Task calls for a batch in a SINGLE assistant message.**
+Do not loop one at a time. For batch_size=10, emit ten `Task` tool
+calls with `subagent_type: extractor` in one message. They run in
+parallel and your next turn sees all ten summaries.
 
-- Message 1 (you emit): ten `Task` tool calls with
-  `subagent_type: extractor`, one per paper, in the same message.
-- They execute in parallel and your next turn sees all ten summaries.
+Each extractor internally spawns its own semantic_verifier (and
+advisor when uncertain, adjudicator when disputed). Peak concurrency
+for a 10-paper batch: ~20–30 model contexts across Haiku/Sonnet/Opus.
 
-Each extractor subagent internally spawns `semantic_verifier` (and
-`advisor` when uncertain, and `adjudicator` when disputed). Those
-nested spawns also run in parallel across papers. At peak, a 10-paper
-batch produces ~20–40 concurrent model contexts. That IS the
-throughput story.
+`batch_size` in `config.yaml` defaults to 8. Bump to 10–12 for
+500–2,500 papers; 12–15 for larger. Do NOT parallelize adjudication —
+disputes are rare; serialize within a batch.
 
-**Tuning `batch_size`.** Defined in `config.yaml`, default 5. For a
-massive corpus (>500 papers) bump it to 8–15. Guard rails:
-- Higher batch_size → more concurrent API calls → more risk of hitting
-  Anthropic rate limits. Back off if the extractor starts returning
-  rate-limit errors.
-- Higher batch_size → more pre-batch context consumed per turn (each
-  Task call carries a small system prompt). Your Manager context
-  stays fine up to ~20.
-- Adjudication cost is not linear in batch_size because disputes are
-  ~5% of rows regardless. Bumping batch_size mostly scales the
-  cheap-path parallelism.
+Subagent return values are spec-capped at 250 words. Never ask a
+subagent to dump raw extractions — the ledger has them.
 
-**Do NOT parallelize adjudication.** Disputes are rare enough to
-serialize cleanly; running adjudicator calls in parallel burns Opus
-tokens you probably do not need to burn. Let disputes accumulate
-within a batch, then one adjudicator call per paper at end of chain.
-
-**Subagent result minimization.** Every subagent is instructed (in its
-own `.md` spec) to return only a short structured summary to the
-Manager: counts, interesting observations, and a pointer to a state
-file for details. The Manager should never need to ingest the raw
-extraction output; it lives in `state/ledger.jsonl`.
-
-**Stay alive.** The Manager's job is to coordinate batches until the
-corpus is done. Do not exit the turn after one batch unless you are
-pausing for user input. After a batch returns, announce results and
-immediately dispatch the next batch.
-
-**Deterministic-script parallelism.** The Python scripts that run
-inside the Manager's Bash tool (and inside each extractor subagent)
-parallelize IO-bound work across threads where it matters:
-- `pair_pdfs.py`: title-peek first-page reads across `--title-peek-workers`
-  threads (default 8). 1000 PDFs: ~45s instead of ~5min.
-- `bootstrap.py`: GBIF species-match lookups across `--gbif-workers`
-  threads (default 8). 2500 unique species: ~45s instead of ~8min.
-- `verify_quote.py`, `hooks.py`, `ledger.py`: already parallel at the
-  subagent-per-paper level — no extra threading needed.
+Script-level parallelism (already tuned; just flags to know):
+- `pair_pdfs.py --title-peek-workers 8` — PDF first-page reads
+- `bootstrap.py --gbif-workers 8` — species-match HTTP
+See [references/architecture.md](references/architecture.md) for the
+full parallelism and context-budget math.
 
 ---
 

@@ -47,6 +47,48 @@ PDFs whose names rarely match the CSV exactly.
 
 ## Three-stage workflow
 
+### Stage 0 (optional). v5 directory cleanup
+
+Before preflight, run:
+```
+python scripts/v5_migrate.py --root <project_root> --source <source_folder>
+```
+(Plan only; no moves.)
+
+Read `state/bootstrap/v5_cleanup_plan.md`. If `is_v5` is true, narrate:
+
+> Detected v5 project markers: processed.json, guide.md, finds/,
+> audit_results/, dashboard_generator.py, … (N items).
+> I propose moving K items to `deprecated/<timestamp>/` (reversible)
+> and treating the following as migration inputs: guide.md (→
+> trait_learner seed), extraction_examples.md (→ notation primer),
+> ill_list.csv (→ papers_needed), processed.json (→ dedup hint).
+
+Ask with `AskUserQuestion`: `approve and execute` / `edit plan`
+(open the markdown) / `skip cleanup, leave files alone`.
+
+On approve, run `v5_migrate.py --execute`. The deprecated directory
+path + manifest are preserved so you can roll back any time with:
+```
+mv <project>/deprecated/<timestamp>/* <project>/
+```
+
+Always narrate the rollback command after execution so the user knows
+it exists.
+
+### Stage 0.5 (optional). Linkage repair
+
+If the source has a pre-existing `results.csv` (from v5 or a prior v6
+run) that lacks `sha256` on some rows, run:
+```
+python scripts/repair_linkage.py --root <project_root> \
+  --csv <source>/results.csv
+```
+(Report only.) Read the strategy counts. If > 0 rows are UNPAIRED,
+offer the user either (a) run `--repair --rescan-pdfs <pdfs_dir>`
+which writes sha256 in place and backs up the original CSV, or (b)
+defer — bootstrap's own pairing step will catch most anyway.
+
 ### Stage 1. Pre-flight scan + column dialogue
 
 Run:

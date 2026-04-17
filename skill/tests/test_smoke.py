@@ -9,6 +9,7 @@ Run:
 """
 from __future__ import annotations
 
+import csv
 import json
 import subprocess
 import sys
@@ -571,6 +572,117 @@ def test_checkpoint_and_session_log(tmp_root: Path) -> None:
     assert "Manager Checkpoint" in r2.stdout
 
 
+def test_v5_migrate_and_linkage_repair(tmp_root: Path) -> None:
+    """v5_migrate classifies + moves cruft; repair_linkage adds sha256."""
+    run([sys.executable, str(SCRIPTS / "setup_project.py"),
+         "--root", str(tmp_root),
+         "--trait", "anything", "--taxa", "any"])
+
+    # Synthetic v5 directory inside the project root
+    v5 = tmp_root / "legacy_v5"
+    v5.mkdir()
+    # v5 markers
+    (v5 / "pipeline_state.json").write_text("{}")
+    (v5 / "processed.json").write_text("{}")
+    (v5 / "dashboard_generator.py").write_text("# v5 dashboard")
+    (v5 / "verify_session.py").write_text("# v5 verifier")
+    (v5 / "guide.md").write_text("# v5 domain guide")
+    (v5 / "ill_list.csv").write_text("doi,title\n10.1/a,Needed A\n")
+    (v5 / "results.csv").write_text("species,doi,diploid_2n\nAlpha beta,10.1/x,22\n")
+    (v5 / "pdfs").mkdir()
+    (v5 / "pdfs" / "paper_10_1_x.pdf").write_bytes(
+        b"%PDF-1.4\n%fake content\n%%EOF\n")
+    (v5 / "finds").mkdir()
+    (v5 / "finds" / "smith.json").write_text("{}")
+    (v5 / "audit_results").mkdir()
+    (v5 / "audit_results" / "a.json").write_text("{}")
+
+    # Plan-only pass
+    r = run([sys.executable, str(SCRIPTS / "v5_migrate.py"),
+             "--root", str(tmp_root),
+             "--source", str(v5)])
+    summary = json.loads(r.stdout)
+    assert summary["mode"] == "plan-only"
+    assert summary["is_v5"] is True, summary
+    assert summary["counts"]["DEPRECATE"] >= 4, summary
+    assert summary["counts"]["MIGRATE"] >= 2, summary  # guide.md + ill_list.csv
+    assert summary["counts"]["KEEP"] >= 2, summary  # results.csv + pdfs/
+
+    # Confirm plan files exist
+    assert (tmp_root / "state" / "bootstrap" / "v5_cleanup_plan.json").exists()
+    assert (tmp_root / "state" / "bootstrap" / "v5_cleanup_plan.md").exists()
+
+    # Execute pass — moves DEPRECATE items
+    r2 = run([sys.executable, str(SCRIPTS / "v5_migrate.py"),
+              "--root", str(tmp_root),
+              "--source", str(v5),
+              "--execute"])
+    s2 = json.loads(r2.stdout)
+    assert s2["mode"] == "executed"
+    assert s2["moved_count"] >= 4
+    # Originally-deprecated items should no longer exist at source
+    assert not (v5 / "pipeline_state.json").exists()
+    assert not (v5 / "finds").exists()
+    assert not (v5 / "dashboard_generator.py").exists()
+    # Migrate items stay in place
+    assert (v5 / "guide.md").exists()
+    assert (v5 / "ill_list.csv").exists()
+    # Keep items stay in place
+    assert (v5 / "results.csv").exists()
+    assert (v5 / "pdfs").exists()
+    # deprecated/ dir now exists
+    deprecated_root = v5 / "deprecated"
+    assert deprecated_root.exists()
+    # And it has the moved items
+    subdirs = list(deprecated_root.iterdir())
+    assert len(subdirs) == 1
+    stamp_dir = subdirs[0]
+    assert (stamp_dir / "pipeline_state.json").exists()
+
+    # Manifest written
+    manifest = json.loads(
+        (tmp_root / "state" / "bootstrap" / "v5_manifest.json").read_text()
+    )
+    assert "rollback_command" in manifest
+    assert len(manifest["moved"]) >= 4
+
+    # === repair_linkage ===
+    # Hash the surviving PDF into manifest.sqlite
+    run([sys.executable, str(SCRIPTS / "pdf_ingest.py"),
+         "--scan",
+         "--project-root", str(tmp_root)])  # won't find anything in v5/pdfs/
+    # Also ingest explicitly from v5/pdfs
+    run([sys.executable, str(SCRIPTS / "pdf_ingest.py"),
+         "--file", str(v5 / "pdfs" / "paper_10_1_x.pdf"),
+         "--project-root", str(tmp_root)])
+
+    # Run report-only repair pass on the v5 results.csv
+    r3 = run([sys.executable, str(SCRIPTS / "repair_linkage.py"),
+              "--root", str(tmp_root),
+              "--csv", str(v5 / "results.csv")])
+    rep = json.loads(r3.stdout)
+    assert rep["total_rows"] == 1
+    # Strategy should be DOI_IN_STEM (10.1/x → paper_10_1_x.pdf) or UNPAIRED
+    # depending on how the stem normalizes
+    strategies = rep["strategies"]
+    assert any(k in strategies for k in ("DOI_IN_STEM", "FILENAME", "UNPAIRED")), strategies
+
+    # Actually repair: rewrites the CSV with sha256 column
+    r4 = run([sys.executable, str(SCRIPTS / "repair_linkage.py"),
+              "--root", str(tmp_root),
+              "--csv", str(v5 / "results.csv"),
+              "--repair"])
+    rep2 = json.loads(r4.stdout)
+    assert "backup" in rep2
+    # Backup was created
+    assert Path(rep2["backup"]).exists()
+    # The repaired CSV has a sha256 column
+    with (v5 / "results.csv").open() as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        assert "sha256" in header, header
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         test_setup_and_project_hooks(Path(d) / "proj_hooks")
@@ -593,6 +705,9 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         test_checkpoint_and_session_log(Path(d) / "proj_ckpt")
         print("OK: checkpoint + session log (compaction-safe state recovery)")
+    with tempfile.TemporaryDirectory() as d:
+        test_v5_migrate_and_linkage_repair(Path(d) / "proj_v5")
+        print("OK: v5 cleanup + linkage repair (deprecate dir + sha256 backfill)")
     print("\nAll smoke tests passed.")
     return 0
 
