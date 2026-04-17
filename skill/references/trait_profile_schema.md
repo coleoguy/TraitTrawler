@@ -6,9 +6,9 @@ It is written by the `trait_learner` subagent and updated periodically.
 
 ## File format
 
-Markdown with a YAML frontmatter and exactly ten sections in a fixed
-order. The format is stable; downstream scripts parse it by section
-header.
+Markdown with a YAML frontmatter and exactly **eleven** sections in a
+fixed order. The format is stable; downstream scripts parse it by
+section header.
 
 ```markdown
 ---
@@ -86,6 +86,19 @@ Per confusion pair:
 Per schema column:
 - Column: <name>
 - Rule: <sentence the extractor obeys>
+
+## 11. Proposed Columns
+
+Machine-parseable block that `scripts/propose_columns.py` reads to build
+the output schema. One `### <column_name>` block per column; each block
+is a list of key: value lines.
+
+### <column_name>
+- type: int | float | string | enum | bool | json
+- required: true | false
+- values: [v1, v2, ...]              (enum only)
+- description: free text
+- cited_value_required: true | false (optional; numeric columns only)
 ```
 
 ## Design constraints

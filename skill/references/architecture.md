@@ -33,17 +33,18 @@ identified PDF.
    extraction task. This is the reference implementation for "AI
    does the whole scientific process."
 
-## The 7 phases
+## The 8 phases
 
 ```
-0. SETUP     → project_init subagent collects trait, taxa, seed DOIs
-1. LEARN     → trait_learner reads 5-10 seeds, writes trait_profile.md
-2. SCHEMA    → propose_columns generates schema; user approves
-3. SEARCH    → searcher queries all four APIs
-4. FETCH     → fetcher downloads PDFs, manifest.sqlite records hashes
-5. PROCESS   → batch loop: triage → extract → verify → structure → hook → adjudicate
-6. REVIEW    → user resolves review-queue items
-7. REPORT    → session_report summarizes coverage & accuracy
+0. SETUP         → project_init collects trait, taxa, seed DOIs, optional curated data
+0.5. BOOTSTRAP   → (optional) bootstrap subagent ingests curated CSV + paired PDFs
+1. LEARN         → trait_learner reads seeds + bootstrap rows; writes trait_profile.md AND proposed hooks
+2. SCHEMA+HOOKS  → propose_columns generates schema; user approves schema AND each proposed hook
+3. SEARCH        → searcher queries all four APIs
+4. FETCH         → fetcher downloads PDFs, manifest.sqlite records hashes
+5. PROCESS       → batch loop: triage → extract → verify → structure → hook → adjudicate
+6. REVIEW        → user resolves review-queue items
+7. REPORT        → session_report summarizes coverage & accuracy
 ```
 
 ## The batch loop (phase 5)
@@ -141,6 +142,77 @@ row:
 
 Anything upstream of the ledger can be reconstructed from the ledger
 plus the PDF plus the schema. That is the reproducibility guarantee.
+
+## Model lineup (2026-04-16)
+
+| Stage | Model | Thinking | Cost per Mtok | Why |
+|---|---|---|---|---|
+| project_init, bootstrap | Sonnet 4.6 | default | $3/$15 | Lightweight setup. |
+| trait_learner | Sonnet 4.6 | adaptive, `effort: high` | $3/$15 | Careful synthesis of seeds + bootstrap. |
+| searcher | Haiku 4.5 | default | $1/$5 | Cached system prompt; cheap at scale. |
+| fetcher | Haiku 4.5 | default | $1/$5 | URL cascade logic. |
+| triage | Haiku 4.5 | default | $1/$5 | Relevance gate for ~60% early-exit. |
+| extractor | **Opus 4.7** | adaptive, `effort: xhigh` | $15/$75 | Careful reading + vision @ 2576px. |
+| semantic_verifier | Sonnet 4.6 | adaptive, `effort: high` | $3/$15 | Escalates to advisor on uncertainty. |
+| advisor (optional) | Opus 4.7 | adaptive, `effort: xhigh` | $15/$75 | Called by semantic_verifier when uncertain. |
+| structurer | Sonnet 4.6 | default | $3/$15 | Schema conversion. |
+| adjudicator | Opus 4.7 | adaptive, `effort: xhigh` | $15/$75 | Disputes only (~5% of rows). |
+
+## Opus 4.7 considerations
+
+**Vision.** 4.7's max image resolution jumped 1568px → 2576px. CharXiv
+Reasoning no-tools went from 69.1% → 82.1%. For table- and figure-
+heavy trait papers, the `extractor` should render triage-flagged pages
+via `scripts/pdf_render.py` at 2576px and pass image + text to the
+extractor. Prose-dominant pages stay text-only to save tokens.
+
+**Adaptive thinking.** Manual `budget_tokens` is a 400 error on 4.7.
+Use `thinking: adaptive` + `effort: high|xhigh|max`. Start extraction
+at `xhigh`; only drop to `high` if latency gates the pipeline. `max`
+has documented "overthinking" risk; do not use as default.
+
+**Strip scaffolding.** 4.7 follows instructions more literally than
+4.6. Do NOT add "double-check", "verify carefully", or "think through
+this step by step" boilerplate. The migration guide says strip and
+re-measure. Added back only targeted, specific guidance.
+
+**Breaking changes.** Omit `temperature`, `top_p`, `top_k`, assistant-
+message prefill, and the old beta headers (`effort-2025-11-24`,
+`interleaved-thinking-2025-05-14`, `fine-grained-tool-streaming-
+2025-05-14`). All produce 400 on 4.7.
+
+**Token inflation.** 4.7's tokenizer counts 1.0–1.35× as many tokens
+for the same input. Counter via prompt caching (`cache_control` on
+the outer content block for `state/trait_profile.md` +
+`state/schema.json`) and routing cold non-interactive passes (backfill,
+re-scoring) through the Batch API for 50% off.
+
+**Advisor Tool (beta).** The Sonnet-executor + Opus-advisor pattern
+gained +2.7pp SWE-bench Multilingual while cutting cost 11.9%. Our
+semantic_verifier uses this pattern: it's a Sonnet call that
+escalates to an `advisor` subagent on Opus when uncertain, rather
+than making every verification step run on Opus.
+
+## Prompt caching strategy
+
+Each extractor Task call is structured as:
+
+```
+system_prompt:
+  # extraction rules (cacheable — rarely changes)
+  # <state/trait_profile.md>
+  # <state/schema.json>
+  # <exemplars from state/bootstrap/exemplars.jsonl>
+
+user_message:
+  # <this paper's sha256, pages_of_interest, maybe 2576px images>
+```
+
+Mark the system prompt with `cache_control: {type: "ephemeral"}` (5-min
+TTL, 1.25× write cost but 0.1× read cost) so subsequent extractions on
+the same project hit cache. The 1-hour TTL variant is an option for
+large nightly batches. See the migration notes in SKILL.md for token
+budgeting details.
 
 ## What makes v6 different from v5
 

@@ -2,8 +2,9 @@
 name: traittrawler
 description: >
   Trait-and-clade-agnostic scientific literature mining pipeline. Given any
-  trait and any taxonomic scope, TraitTrawler learns how the trait is reported
-  in the literature, proposes an output schema for the user to approve, and
+  trait and any taxonomic scope, TraitTrawler bootstraps from existing curated
+  data (optional), learns how the trait is reported in the literature, proposes
+  an output schema AND candidate validation hooks for the user to approve, and
   then autonomously searches, fetches, and extracts structured records into a
   verified CSV plus a full per-row audit ledger. Grounding is a protocol
   invariant — every row ties to a SHA256-hashed PDF, a page number, and a
@@ -11,7 +12,7 @@ description: >
   in that PDF. Use when the user mentions trait extraction, literature mining,
   database building, phenotype harvesting, systematic review data collection,
   or anywhere else they want structured data from a corpus of papers.
-version: 6.0.0
+version: 6.1.0
 role: manager
 model: default
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Task, TodoWrite, AskUserQuestion
@@ -48,12 +49,16 @@ scientific extraction task, which is the north-star use case.
 3. **Accuracy beats coverage.** If an extraction is uncertain, drop it to the
    review queue. The 90% capture target is measured after review, not before.
 4. **Learn before extracting at scale.** Every project begins with a learning
-   phase (`trait_learner` subagent on 5–10 seed papers) that produces
-   `state/trait_profile.md`. That profile is the single source of truth for
-   downstream extractors. Update it incrementally as new patterns appear.
-5. **User approves the schema.** Never invent output columns. After the
-   learning phase, `propose_columns` generates a proposed schema. Use
-   `AskUserQuestion` to confirm or edit before any extraction runs.
+   phase (`trait_learner` subagent on 5–10 seed papers + any bootstrap
+   rows) that produces `state/trait_profile.md` AND candidate validation
+   hooks in `state/hooks/proposed/`. That profile + the approved hooks are
+   the single source of truth for downstream extractors. Update incrementally.
+5. **User approves everything project-specific.** Never invent output
+   columns. Never silently install a validator. After learning, the
+   `propose_columns` script proposes a schema and the `trait_learner`
+   proposes hooks. Use `AskUserQuestion` to confirm or edit each before
+   extraction runs. No karyotype-specific (or any domain-specific) logic
+   lives in the core skill; it is always user-approved and project-local.
 6. **Talk like a scientist briefing a collaborator.** Short paragraphs.
    Concrete numbers. Name the paper or the species. Surface surprises. No
    empty status updates ("working on it…"). See
@@ -64,6 +69,13 @@ scientific extraction task, which is the north-star use case.
 8. **Record everything in the ledger.** Every Claim, every hook verdict,
    every adjudication gets an entry in `state/ledger.jsonl`. The ledger is
    the publishable audit artifact; treat it as the real product.
+9. **Trust Opus 4.7's literalism.** Opus 4.7 follows instructions more
+   literally than 4.6 and calibrates response length to task complexity.
+   Do NOT add "double-check", "verify your work", or "think carefully"
+   boilerplate to extraction prompts — the migration guide says to strip
+   that and re-measure. If accuracy drops, add *targeted* guidance (e.g.
+   "when a table has multiple rows for one species, cite the last row"),
+   not generic reminders.
 
 ---
 
@@ -90,6 +102,50 @@ user-chosen project root:
 
 ---
 
+## Model selection (as of 2026-04-16)
+
+The default model assignment per subagent, updated for the Opus 4.7
+launch today:
+
+| Subagent | Model | Effort / thinking | Why |
+|---|---|---|---|
+| project_init, bootstrap | `claude-sonnet-4-6` | default | Lightweight guided setup; cheap and fast. |
+| trait_learner | `claude-sonnet-4-6` | `effort: high` | Careful synthesis of 5–10 seeds; benefits from adaptive thinking. |
+| searcher, fetcher | `claude-haiku-4-5` | default | Near-frontier reasoning at $1/$5 MTok; cache the shared query template. |
+| triage | `claude-haiku-4-5` | default | Relevance gate on ~60% of papers; Haiku 4.5's code-and-reasoning jump makes it enough. |
+| extractor | `claude-opus-4-7` | `effort: xhigh` | The hard stage. 4.7's stricter literal-instruction following + adaptive thinking + 2576px image support are precisely the v4.6→v4.7 wins we care about. |
+| semantic_verifier | `claude-sonnet-4-6` | `effort: high` | Short snippet + proposed row; Opus overkill unless escalated via advisor (see below). |
+| structurer | `claude-sonnet-4-6` | default | Deterministic schema conversion; low cognitive load. |
+| adjudicator | `claude-opus-4-7` | `effort: xhigh` | Disputes only (~5% of rows); cost of a wrong ruling is high. |
+| advisor (optional) | `claude-opus-4-7` | `effort: xhigh` | Called by semantic_verifier when uncertain; see `agents/advisor.md`. |
+
+Opus 4.7 **breaking-change checklist** (do not attempt to send these on 4.7
+or the API returns 400):
+- `temperature`, `top_p`, `top_k` → omit entirely
+- `thinking.budget_tokens` → use `thinking.type: "adaptive"` + `output_config.effort`
+- Assistant-message prefill → use `output_config.format` with a JSON schema instead
+- Old beta headers (`effort-2025-11-24`, `interleaved-thinking-2025-05-14`,
+  `fine-grained-tool-streaming-2025-05-14`) → remove; adaptive thinking
+  enables interleaved automatically
+
+**Token-budget note.** The 4.7 tokenizer produces 1.0–1.35× as many tokens
+for identical input (structured data inflates most). Counter via: (a) lean
+into prompt caching — cache `state/trait_profile.md` and `state/schema.json`
+with `cache_control` at the outer content block; (b) route non-interactive
+stages (triage of cold papers, bootstrap re-scoring) to the Batch API for
+the 50% discount; (c) raise extractor `max_tokens` to ≥ 64k when using
+`effort: xhigh`.
+
+**Vision gains matter for us.** 4.7's max image resolution jumped
+1568px → 2576px (CharXiv Reasoning 69.1% → 82.1% no-tools). For table- and
+figure-heavy trait papers, rendering each page of a PDF as a 2576px image
+and passing it alongside the text is often the single biggest quality lift
+available. The `extractor` subagent should default to image + text for
+pages flagged by triage as containing tables or figures, text-only for
+prose-dominant pages. See `agents/extractor.md` for the recipe.
+
+---
+
 ## Phase state machine
 
 At the top of every turn, read `state/session.json` to determine the current
@@ -102,19 +158,43 @@ absent.
 
 Actions in order:
 1. Greet the user. One paragraph explaining what you will do across the full
-   run and the three named pause points (after learning, after schema
-   approval, after first batch). See `references/talkative_style.md` for
-   the exact greeting template.
+   run and the four named pause points (after bootstrap if any, after
+   learning, after schema + hook approval, after first batch). See
+   `references/talkative_style.md` for the exact greeting template.
 2. Use `AskUserQuestion` to collect:
    - **Trait name / short description** (e.g. `"diploid chromosome number (2n)"`)
    - **Taxonomic scope** (e.g. `"Coleoptera"`, `"Mammalia"`, `"any"`)
    - **Seed papers**: optional list of DOIs the user already trusts; skill
      will fetch if missing
+   - **Existing curated data (OPTIONAL)**: path to a CSV of already-curated
+     rows + optional PDF directory. If supplied, skill advances to
+     `0.5.BOOTSTRAP` before `1.LEARN`. See `references/bootstrap.md`.
    - **Project root path**
 3. Run `python scripts/setup_project.py --root <path> --trait "<trait>" --taxa
    "<scope>"`. This creates the directory tree, initial `config.yaml`, empty
-   `session.json` set to phase `1.LEARN`.
+   `session.json` set to phase `0.5.BOOTSTRAP` if curated data was supplied,
+   otherwise `1.LEARN`.
 4. Narrate what was created (a short tree print), then advance.
+
+### 0.5. BOOTSTRAP (optional; skipped if no curated data supplied)
+Trigger: `session.json.phase == "0.5.BOOTSTRAP"`.
+
+Actions:
+1. Dispatch the `bootstrap` subagent via one Task call. It validates the
+   curated CSV against the in-progress schema, canonicalizes species via
+   GBIF, hashes any paired PDFs, writes imported rows to `state/ledger.jsonl`
+   with `source_type: "human_curated_bootstrap"` and DwC
+   `identificationVerificationStatus: "ValidatedByHuman"`, and builds
+   `state/bootstrap/exemplars.jsonl` plus `state/bootstrap/derived_hooks.yaml`.
+2. When it returns, narrate: rows imported, species count, fuzzy-match
+   count (rows that had name cleanups), and the list of proposed derived
+   hooks with their rationales.
+3. Use `AskUserQuestion` to approve (a) the exemplars that will prime the
+   Extractor and (b) each derived hook individually. Approved hooks move
+   to `state/hooks/` and are registered in the next-phase schema. Soft vs.
+   hard distinction matters: derived hooks are soft (warn) by default.
+4. Advance `session.json.phase` to `1.LEARN`. The Learner will see the
+   bootstrap output and integrate it into `trait_profile.md`.
 
 ### 1. LEARN
 Trigger: `session.json.phase == "1.LEARN"`.
@@ -137,21 +217,33 @@ Actions:
    or request more seed papers.
 5. On approval, advance `session.json.phase` to `2.SCHEMA`.
 
-### 2. SCHEMA
+### 2. SCHEMA + HOOKS
 Trigger: `session.json.phase == "2.SCHEMA"`.
 
 Actions:
 1. Run `python scripts/propose_columns.py`. This reads `trait_profile.md`
-   and produces a proposed `state/schema.proposed.json` with columns,
-   types, enums, units, validation rules, and a one-line rationale per
-   column.
+   (which in turn includes §11 "Proposed Columns" written by the
+   trait_learner) and produces `state/schema.proposed.json` with columns,
+   types, enums, units, standard provenance fields (Darwin Core +
+   PAV + PROV-O), and a one-line rationale per column.
 2. Present the proposed schema as a markdown table to the user. Narrate
    design tradeoffs: "I included `notation_style` because four of the seed
    papers used cytogenetic shorthand while three used text prose — this
    column lets downstream analysis separate them."
-3. Use `AskUserQuestion` to: (a) approve as-is, (b) ask to add/remove
-   specific columns, or (c) open an editor on the file. On approval,
-   rename to `state/schema.json` and advance to `3.SEARCH`.
+3. Use `AskUserQuestion` to: (a) approve schema as-is, (b) ask to
+   add/remove specific columns, or (c) open an editor on the file.
+4. List `state/hooks/proposed/*.py` written by the trait_learner. For
+   each proposed hook, show the user its filename, its 1-line docstring,
+   and its full Python source (these are short — typically <30 lines).
+   Each hook has already passed `scripts/hook_sandbox.py` — so you know
+   it is pure, imports only from the allowlist, and has no I/O.
+5. Use `AskUserQuestion` per hook: `approve`, `edit`, `reject`,
+   `defer`. Approved hooks move from `state/hooks/proposed/` to
+   `state/hooks/` and are appended to `state/schema.json.trait_hooks`
+   as absolute paths. Rejected hooks are deleted. Deferred hooks stay
+   in `proposed/` and the Manager asks again after the first batch.
+6. On full approval, rename `state/schema.proposed.json` to
+   `state/schema.json` and advance to `3.SEARCH`.
 
 ### 3. SEARCH
 Trigger: `session.json.phase == "3.SEARCH"`.

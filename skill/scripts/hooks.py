@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Deterministic hook gate.
 
-Hooks are pure Python functions that validate a proposed Row against
-both domain-agnostic invariants (grounding, schema, dedup) and trait-
-specific rules (range, arithmetic, regex). Each hook returns Pass() or
-Fail(reason).
+Hooks validate a proposed Row against both domain-agnostic invariants
+(grounding, schema, dedup, taxonomy) and project-specific rules that
+live in `state/hooks/*.py`. Each project-specific hook is a pure Python
+function that was auto-proposed by the trait_learner or hand-written by
+the user, passed through `scripts/hook_sandbox.py` for safety, and
+approved via AskUserQuestion before being enabled.
+
+The core skill carries ZERO trait-specific logic. No karyotype hooks,
+no chromosome range checks, no sex-system regex lives in this file.
+All of that is project-local.
 
 CLI usage:
   python hooks.py --rows state/rows/<sha>.jsonl \
@@ -13,21 +19,19 @@ CLI usage:
                   --csv results.csv \
                   --disputes state/disputes.jsonl
 
-Exit code 0 always (partial failures are routed to disputes, not an
-error).
+Exit code 0 always (partial failures are routed to disputes, not errors).
 """
 from __future__ import annotations
 
 import argparse
 import csv
-import importlib
+import importlib.util
 import json
-import re
-import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
 
 # ------------------------------------------------------------------
 # Hook result types
@@ -39,7 +43,7 @@ class HookResult:
     verdict: str  # "pass" or "fail"
     reason: str = ""
     hook: str = ""
-    severity: str = "hard"  # "hard" -> dispute, "soft" -> log only
+    severity: str = "hard"  # "hard" -> dispute, "soft" -> warn but write
 
 
 def Pass(hook: str = "") -> HookResult:
@@ -50,20 +54,15 @@ def Fail(reason: str, hook: str = "", severity: str = "hard") -> HookResult:
     return HookResult("fail", reason, hook, severity)
 
 
-# ------------------------------------------------------------------
-# Context passed to each hook
-# ------------------------------------------------------------------
-
-
 @dataclass
 class HookContext:
     schema: dict
     ledger_path: Path
-    written_keys: set  # DOI composite keys already seen this session
+    written_keys: set  # DOI composite keys already seen
 
 
 # ------------------------------------------------------------------
-# Domain-agnostic hooks (ALWAYS ON)
+# Domain-agnostic hooks (ALWAYS ON, regardless of trait)
 # ------------------------------------------------------------------
 
 
@@ -83,17 +82,18 @@ def hook_has_verbatim_quote(row: dict, ctx: HookContext) -> HookResult:
 
 
 def hook_quote_verified(row: dict, ctx: HookContext) -> HookResult:
+    # Bootstrap rows are human-curated and marked as such — they don't need
+    # grounding verification (the curator already did it).
+    if row.get("source_type") == "human_curated_bootstrap":
+        return Pass("hook_quote_verified")
     if not row.get("grounding_verified"):
         return Fail("claim did not pass verify_quote.py", "hook_quote_verified")
     return Pass("hook_quote_verified")
 
 
 def hook_cited_value_in_quote(row: dict, ctx: HookContext) -> HookResult:
-    """For columns flagged `cited_value_required: true` in the schema, the
-    literal numeric value must appear in the verbatim_quote. Opt-in per
-    column because derived fields (computed counts, page numbers) need not
-    appear in the quote.
-    """
+    """For columns flagged `cited_value_required: true`, the literal numeric
+    value must appear in verbatim_quote. Opt-in per column."""
     quote = row.get("verbatim_quote") or ""
     for col, cfg in ctx.schema.get("columns", {}).items():
         if not cfg.get("cited_value_required"):
@@ -123,13 +123,14 @@ def hook_schema_valid(row: dict, ctx: HookContext) -> HookResult:
         t = cfg.get("type")
         try:
             if t == "int" and not isinstance(value, int):
-                return Fail(f"{name} expected int, got {type(value).__name__}", "hook_schema_valid")
+                return Fail(f"{name} expected int, got {type(value).__name__}",
+                            "hook_schema_valid")
             if t == "float" and not isinstance(value, (int, float)):
                 return Fail(f"{name} expected float", "hook_schema_valid")
             if t == "enum":
                 if value not in cfg.get("values", []):
                     return Fail(
-                        f"{name}={value!r} not in allowed enum {cfg.get('values')}",
+                        f"{name}={value!r} not in enum {cfg.get('values')}",
                         "hook_schema_valid",
                     )
         except Exception as e:
@@ -143,7 +144,7 @@ def hook_doi_composite_unique(row: dict, ctx: HookContext) -> HookResult:
     trait = row.get("trait_key") or ctx.schema.get("primary_trait_key", "value")
     key = (doi, species, trait)
     if key in ctx.written_keys:
-        return Fail(f"duplicate (doi, species, trait) key: {key}",
+        return Fail(f"duplicate (doi, species, trait): {key}",
                     "hook_doi_composite_unique")
     ctx.written_keys.add(key)
     return Pass("hook_doi_composite_unique")
@@ -157,65 +158,6 @@ def hook_gbif_resolved(row: dict, ctx: HookContext) -> HookResult:
     return Pass("hook_gbif_resolved")
 
 
-# ------------------------------------------------------------------
-# Trait-specific hooks for karyotype projects (registered by schema)
-# ------------------------------------------------------------------
-
-
-def hook_2n_range(row: dict, ctx: HookContext) -> HookResult:
-    v = row.get("diploid_2n")
-    if v is None or v == "":
-        return Pass("hook_2n_range")
-    try:
-        v = int(v)
-    except (TypeError, ValueError):
-        return Fail(f"diploid_2n not an int: {v!r}", "hook_2n_range")
-    if not 2 <= v <= 500:
-        return Fail(f"diploid_2n={v} outside biological range", "hook_2n_range")
-    return Pass("hook_2n_range")
-
-
-def hook_hac_consistency(row: dict, ctx: HookContext) -> HookResult:
-    d = row.get("diploid_2n")
-    h = row.get("haploid_autosome_count")
-    s = row.get("sex_chrom_count")
-    if d in (None, "") or h in (None, "") or s in (None, ""):
-        return Pass("hook_hac_consistency")
-    try:
-        d, h, s = int(d), int(h), int(s)
-    except (TypeError, ValueError):
-        return Fail("HAC consistency inputs not integers", "hook_hac_consistency")
-    expected = (d - s) / 2
-    if expected != h:
-        return Fail(
-            f"HAC inconsistent: (2n - sex_chrom_count)/2 = {expected}, "
-            f"but haploid_autosome_count = {h} (likely 2n/HAC swap)",
-            "hook_hac_consistency",
-        )
-    return Pass("hook_hac_consistency")
-
-
-COMPLEX_SEX_REGEX = re.compile(
-    r"X[\u2080\u2081\u2082_\s]?[0-9]|neo[\s\-]?XY|multiple\s+sex\s+chrom", re.IGNORECASE
-)
-
-
-def hook_sex_system_regex(row: dict, ctx: HookContext) -> HookResult:
-    quote = row.get("verbatim_quote") or ""
-    sys_val = (row.get("sex_system") or "").upper()
-    if COMPLEX_SEX_REGEX.search(quote) and sys_val in ("XY", "XX"):
-        return Fail(
-            "quote indicates complex sex system (e.g. X1X2Y, neoXY) but row says simple XY",
-            "hook_sex_system_regex",
-        )
-    return Pass("hook_sex_system_regex")
-
-
-# ------------------------------------------------------------------
-# Hook registry
-# ------------------------------------------------------------------
-
-
 AGNOSTIC_HOOKS: list[Callable] = [
     hook_has_sha256_and_page,
     hook_has_verbatim_quote,
@@ -226,33 +168,93 @@ AGNOSTIC_HOOKS: list[Callable] = [
     hook_gbif_resolved,
 ]
 
-# Trait-specific hook registry: schema declares which ones to load.
-TRAIT_HOOK_TABLE: dict[str, Callable] = {
-    "hook_2n_range": hook_2n_range,
-    "hook_hac_consistency": hook_hac_consistency,
-    "hook_sex_system_regex": hook_sex_system_regex,
-}
+
+# ------------------------------------------------------------------
+# Per-project hook loader
+# ------------------------------------------------------------------
 
 
-def resolve_trait_hooks(schema: dict) -> list[Callable]:
-    names = schema.get("trait_hooks", [])
-    out: list[Callable] = []
-    for n in names:
-        if n in TRAIT_HOOK_TABLE:
-            out.append(TRAIT_HOOK_TABLE[n])
-        else:
-            # Allow custom hooks declared in an external module
-            try:
-                mod_name, fn_name = n.rsplit(".", 1)
-                mod = importlib.import_module(mod_name)
-                out.append(getattr(mod, fn_name))
-            except Exception as e:
-                print(f"WARN: could not resolve hook {n}: {e}", file=sys.stderr)
-    return out
+def load_project_hooks(schema: dict, schema_path: Path) -> list[Callable]:
+    """Load project-specific hooks listed in schema.json.trait_hooks.
+
+    Each entry in `trait_hooks` is a path (absolute or relative to the
+    project root) pointing to a Python file that defines one or more
+    functions matching the hook signature. The file MUST have already
+    been validated by scripts/hook_sandbox.py; this loader enforces the
+    same safety subset at load time as a defense in depth.
+
+    Convention: the module may define any number of top-level functions
+    named `hook_*`. Every such function is registered.
+    """
+    loaded: list[Callable] = []
+    trait_hooks = schema.get("trait_hooks", [])
+    if not trait_hooks:
+        return loaded
+
+    # Import the sandbox linter (sibling module). Fail loudly if missing —
+    # we refuse to load project-specific hooks without sandbox validation.
+    try:
+        from hook_sandbox import validate_hook_source, HookSandboxError
+    except ImportError:
+        here = Path(__file__).resolve().parent
+        sys.path.insert(0, str(here))
+        from hook_sandbox import validate_hook_source, HookSandboxError  # type: ignore
+
+    # Project root is the parent of schema.json
+    project_root = schema_path.resolve().parent.parent  # state/schema.json -> project_root
+
+    for entry in trait_hooks:
+        p = Path(entry)
+        if not p.is_absolute():
+            p = (project_root / entry).resolve()
+        if not p.exists():
+            print(f"WARN: project hook missing on disk: {p}", file=sys.stderr)
+            continue
+        try:
+            validate_hook_source(p.read_text())
+        except HookSandboxError as e:
+            print(f"REJECTED unsafe hook {p}: {e}", file=sys.stderr)
+            continue
+        # Load the module
+        spec = importlib.util.spec_from_file_location(
+            f"project_hooks_{p.stem}", p
+        )
+        if not spec or not spec.loader:
+            continue
+        mod = importlib.util.module_from_spec(spec)
+        # Inject the Pass/Fail helpers into the module's globals so
+        # hook files can call them without importing anything. This
+        # matches the ergonomic contract documented in
+        # references/hooks_reference.md.
+        mod.Pass = Pass  # type: ignore[attr-defined]
+        mod.Fail = Fail  # type: ignore[attr-defined]
+        mod.HookResult = HookResult  # type: ignore[attr-defined]
+        try:
+            spec.loader.exec_module(mod)
+        except Exception as e:
+            print(f"WARN: could not exec {p}: {e}", file=sys.stderr)
+            continue
+        # Re-inject after exec_module in case the module body shadowed
+        # them (it shouldn't, but be defensive).
+        mod.Pass = Pass  # type: ignore[attr-defined]
+        mod.Fail = Fail  # type: ignore[attr-defined]
+        mod.HookResult = HookResult  # type: ignore[attr-defined]
+        for name in dir(mod):
+            if not name.startswith("hook_"):
+                continue
+            fn = getattr(mod, name)
+            if callable(fn):
+                loaded.append(fn)
+    return loaded
+
+
+# ------------------------------------------------------------------
+# Ledger dedup key helpers
+# ------------------------------------------------------------------
 
 
 def load_written_keys(ledger_path: Path) -> set:
-    keys = set()
+    keys: set = set()
     if not ledger_path.exists():
         return keys
     with ledger_path.open() as f:
@@ -264,9 +266,6 @@ def load_written_keys(ledger_path: Path) -> set:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            # Derive the composite key from the entry if stored
-            # (best-effort; worst case dedup hook is slightly leaky
-            # across sessions and can be rebuilt from results.csv).
             keys.add((
                 entry.get("doi"),
                 entry.get("canonical_species"),
@@ -282,14 +281,11 @@ def load_written_keys(ledger_path: Path) -> set:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rows", required=True, type=Path,
-                    help="JSONL file of proposed rows from structurer")
+    ap.add_argument("--rows", required=True, type=Path)
     ap.add_argument("--schema", required=True, type=Path)
     ap.add_argument("--ledger", required=True, type=Path)
-    ap.add_argument("--csv", required=True, type=Path,
-                    help="results.csv to append passes to")
-    ap.add_argument("--disputes", required=True, type=Path,
-                    help="state/disputes.jsonl to append failures to")
+    ap.add_argument("--csv", required=True, type=Path)
+    ap.add_argument("--disputes", required=True, type=Path)
     ap.add_argument("--session-id", default="unknown")
     ap.add_argument("--extractor-model", default="claude-opus-4-7")
     ap.add_argument("--verifier-model", default="claude-sonnet-4-6")
@@ -297,18 +293,21 @@ def main() -> int:
     args = ap.parse_args()
 
     schema = json.loads(args.schema.read_text())
-    trait_hooks = resolve_trait_hooks(schema)
-    all_hooks = AGNOSTIC_HOOKS + trait_hooks
+    project_hooks = load_project_hooks(schema, args.schema)
+    all_hooks = AGNOSTIC_HOOKS + project_hooks
     ctx = HookContext(
         schema=schema,
         ledger_path=args.ledger,
         written_keys=load_written_keys(args.ledger),
     )
 
+    # Local import to avoid hard dependency when hooks.py is used as a lib
+    here = Path(__file__).resolve().parent
+    if str(here) not in sys.path:
+        sys.path.insert(0, str(here))
     from ledger import append_entry  # type: ignore
 
     columns = list(schema.get("columns", {}).keys())
-    # Ensure csv has a header
     write_header = not args.csv.exists() or args.csv.stat().st_size == 0
     csv_f = args.csv.open("a", newline="")
     dispute_f = args.disputes.open("a")
@@ -320,7 +319,9 @@ def main() -> int:
     if write_header:
         writer.writeheader()
 
-    stats = {"total": 0, "passed": 0, "disputed": 0}
+    stats = {"total": 0, "passed": 0, "disputed": 0,
+             "agnostic_hooks": len(AGNOSTIC_HOOKS),
+             "project_hooks": len(project_hooks)}
     try:
         with args.rows.open() as f:
             for line in f:
@@ -360,11 +361,10 @@ def main() -> int:
                         "quote_following_10w": row.get("quote_following_10w"),
                     }) + "\n")
                 else:
-                    # Append ledger entry, then CSV row with the ledger_id
                     ledger_id = append_entry(
                         args.ledger,
                         row=row,
-                        claim=row,  # row carries forward claim_id, uncertainty
+                        claim=row,
                         hook_results=hook_results_for_ledger,
                         session_id=args.session_id,
                         extractor_model=args.extractor_model,
