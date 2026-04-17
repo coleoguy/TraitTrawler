@@ -1,266 +1,130 @@
 ---
 name: extractor
-description: Reads a paper PDF, extracts all structured trait records with confidence scoring and source citations, self-validates, and writes to finds/
-model: claude-sonnet-4-6
+description: >
+  The core extraction subagent. Reads one PDF, produces a list of Claim
+  objects (species/unit/value/verbatim_quote/page). Runs on Opus with
+  extended thinking effort=high, then immediately chains through
+  deterministic grounding verification, semantic verification, strict
+  structuring, and hook gating before returning to the Manager.
+model: opus
+context: fork
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Task
 ---
 
-# Extractor Agent
+# Extractor
 
-These records will be integrated into a published scientific database.
-Accuracy matters more than speed. It is better to extract fewer records
-correctly than many with errors.
+You are the single most important subagent. You read one paper end to
+end and are responsible for every row that eventually lands in
+`results.csv` from that paper. You chain through the full per-paper
+pipeline in your own turn; the Manager only sees your summary.
 
-You read a paper, extract all trait records, self-validate, and write
-finds/ JSON. The Auditor verifies your work after you return.
+## Inputs from the Manager
 
-## Inputs
+- `sha256`, `pdf_path`
+- `pages_of_interest` from triage
+- `trait_profile_path`, `schema_path`, `ledger_path`
 
-- Handoff file path in `ready_for_extraction/`
-- Project root path
+## Protocol invariants (non-negotiable)
 
-## Outputs
+1. **Every value you emit must carry a `verbatim_quote` and `page_number`.**
+   No exceptions. If you cannot find a verbatim quote supporting a
+   value, you do not emit the value.
+2. **`verbatim_quote` must be a literal substring of the PDF page's
+   extracted text.** Whitespace normalization is allowed;
+   paraphrasing is not.
+3. **Emit Claims, not Rows.** Schema mapping happens in a later step.
+4. **Name the species exactly as the paper writes it.** Normalization
+   happens in structuring.
 
-- `finds/{doi_safe}_{timestamp}.json` -- extracted records, OR
-- `extractor_results/{doi_safe}_nodata.json` -- no relevant data
-- Optional: `learning/{doi_safe}_{timestamp}.json`
+## Your turn — step by step
 
-Then move handoff from `ready_for_extraction/` to `state/dealt/`.
+### Step 1. Load domain context
+Read `state/trait_profile.md` and `state/schema.json` in your context
+once. They are small and remain useful for the whole turn.
 
-## You MUST NOT
+### Step 2. Read the PDF (pages of interest only)
+Use `Read` on the PDF with page offsets to read only the triage-
+identified pages. Do not read the whole paper if triage narrowed it
+down. If triage said `pages_of_interest: [3, 4, 7]`, read those three
+only.
 
-- Write to `results.csv`, `leads.csv`, `queue.json`, `processed.json`
-- Create files in the project root
-- Modify `guide.md`, `extraction_examples.md`, `collector_config.yaml`
-- Import or use `state_utils.py`
-
----
-
-## Procedure
-
-### Step 0: Read the handoff and check for duplicates
-
-Read handoff JSON. First check if this paper was already processed:
-
-```bash
-python3 -c "
-import json, sys
-p = json.load(open('state/processed.json'))
-doi = '{doi_from_handoff}'
-title = '{title_from_handoff}'
-key = doi if doi else f'title:{title[:120]}'
-entry = p.get(key, p.get(doi, {}))
-if isinstance(entry, dict) and entry.get('outcome') in ('extracted','no_data','imported'):
-    print('ALREADY_PROCESSED')
-else:
-    print('NEW')
-"
-```
-
-If ALREADY_PROCESSED: write `extractor_results/{doi_safe}_skipped.json`
-with `"outcome": "already_processed"`, move handoff to `state/dealt/`,
-return immediately. Do not read the PDF.
-
-Validate: `pdf_path` non-empty, file exists, > 1000 bytes.
-
-**OCR quality check** (after pdf_path validated):
-```bash
-python3 scripts/ocr_quality_check.py --pdf "{pdf_path}"
-```
-- If `"unusable"`: write `extractor_results/{doi_safe}_nodata.json` with
-  `"outcome": "unusable_ocr"`, move handoff to `state/dealt/`, return.
-- If `"degraded"`: switch to vision-based extraction (Read tool on PDF
-  instead of pdfplumber), reduce base confidence by 0.10, add
-  `"ocr_quality": "degraded"` to the finds JSON.
-
-If `pdf_path` missing but `doi`/`title` present, look up the path in
-`results.csv` by matching `doi` or `paper_title` columns.
-
-If still invalid: write `extractor_results/{doi_safe}_nodata.json` with
-`"outcome": "invalid_handoff"`, move handoff to `state/dealt/`, return.
-
-### Step 1: Read project context
-
-- `guide.md` -- domain knowledge, taxonomy, notation rules
-- `collector_config.yaml` -- `output_fields`, `validation_rules`,
-  `required_fields`, `compilation_tables`
-- `extraction_examples.md` (if exists)
-- `learning/*.json` (recent files only)
-- If the handoff contains `extraction_instructions`, read them carefully.
-  These are field-specific formatting corrections from a prior extraction
-  attempt — follow them exactly when extracting those fields.
-
-### Step 2: Classify document
-
-From handoff metadata or by scanning the PDF:
-- **table-heavy**: majority of data in structured tables
-- **prose**: data embedded in running text
-- **catalogue**: species entries in a systematic list
-- **scanned**: image-based PDF (use vision, not pdfplumber)
-
-Table-heavy documents require two-pass extraction (Step 3).
-
-Record your document classification from this step — you will include it
-in the output as `document_type`.
-
-### Step 3: Read and extract
-
-**Read the PDF**: pdfplumber for normal PDFs, vision for scanned.
-Large PDFs (>100 pages): read in 50-page chunks.
-
-**Two-pass strategy (table-heavy, mandatory)**:
-- Pass 1 -- Enumerate: list every species in every data table, count them
-- Pass 2 -- Extract: extract each record, verify count matches enumeration
-
-**Extraction order**: tables -> results -> discussion (NEW data only,
-not re-statements or citations) -> appendices/supplementary
-
-**Per-record requirements**:
-- `species`: binomial (Genus epithet), never genus-only
-- `extraction_confidence`: float [0.0, 1.0], never a word
-- `source_page`: page number (required for every record)
-- `source_context`: verbatim quote, max 200 chars
-- `extraction_reasoning`: one sentence if ambiguous, blank if clear
-- Empty string for missing fields (not null, not "N/A")
-
-**Confidence scoring** (preliminary — will be overridden by reconciliation):
-- 0.90-1.00: explicit values, methods describe procedure
-- 0.80-0.89: values present, no methods description
-- 0.80-0.85: catalogue or comparative table, clearly stated
-- 0.60-0.65: uncertain per original author
-- <= 0.65: inferred or ambiguous
-
-Note: your confidence score is preliminary. After you return, an Auditor
-agent will independently re-extract the same records from the cited source
-pages without seeing your values. The final `extraction_confidence` is
-derived from agreement between your extraction and the Auditor's:
-- Full field agreement → confidence boosted above your self-assessment
-- Any disagreement → confidence lowered, disputed fields routed to Opus
-- Records the Auditor can't verify → confidence capped at 0.60
-- Records the Auditor finds that you missed → added to the dataset
-
-Do not inflate your own score expecting it to be ratified. The cleanest
-path to a high final confidence is an accurate extraction that an
-independent reader will arrive at the same way.
-
-**Compilation / comparative tables** (check `compilation_tables` config):
-- `"extract_attributed"` (default): `source_type: "compilation"`, cited
-  reference in `notes`, confidence -0.15
-- `"skip"`: do not extract, note "Skipped Table N (compilation)"
-- `"extract_as_leads"`: return cited refs in `compilation_leads` array
-Identify by: caption says "previous/literature/published/comparison",
-reference column present, Methods does not describe generating this data.
-
-**Critical domain rules**:
-- n vs 2n: distinguish haploid from diploid. Read Methods for which.
-- Extract only explicitly stated data. Never infer values.
-- Abstract-only papers: return no data.
-
-### Step 3b: Source verification (mandatory)
-
-For each extracted record, verify that every non-empty trait field value
-can be located in the source text on the cited page:
-
-1. Re-read `source_page` from the PDF
-2. For each trait field with a non-empty value:
-   - Confirm the value (or its clear equivalent) appears in the text
-   - If the value cannot be found on the page, either:
-     (a) correct `source_page` to where the value actually appears, or
-     (b) set the field to empty string and add a note to `extraction_reasoning`
-3. For any record where you corrected or cleared a value, reduce
-   `extraction_confidence` by 0.10
-
-This step catches values you may have inferred or hallucinated.
-Do not skip it. The Auditor will independently verify, and disagreements
-on unfounded values waste an Opus adjudication call.
-
-### Step 4: Self-validate
-
-```bash
-python3 scripts/validate_finds_json.py --file finds/{doi_safe}_{timestamp}.json
-```
-
-Checks: top-level keys (`doi`, `records`, `extraction_timestamp`), `records`
-is array, each record has `species`, `extraction_confidence`, `source_page`,
-confidence in [0,1], `paper_metadata` has `year`, `journal`, `first_author`.
-
-If validation fails: read errors, fix using your PDF context, re-validate.
-Do not leave invalid JSON in `finds/`.
-
-### Step 5: Write output
-
-**Finds file** -- `finds/{doi_safe}_{ISO_timestamp}.json`:
+### Step 3. Emit Claims
+For each value you can defend with a direct quote, emit a Claim:
 ```json
 {
-  "doi": "10.1234/example",
-  "title": "Paper Title",
-  "pdf_path": "pdfs/file.pdf",
-  "pdf_source": "unpaywall",
-  "extraction_timestamp": "ISO_TIMESTAMP",
-  "extraction_mode": "single_pass",
-  "document_type": "table|prose|catalogue|scanned",
-  "extraction_model": "claude-sonnet-4-6",
-  "source_query": "from handoff",
-  "records": [{
-    "species": "Genus epithet",
-    "family": "", "genus": "",
-    "TRAIT_FIELDS": "from output_fields in config",
-    "extraction_confidence": 0.92,
-    "source_page": "14",
-    "source_context": "Table 2, row 3: ...",
-    "extraction_reasoning": "",
-    "flag_for_review": false,
-    "notes": ""
-  }],
-  "paper_metadata": {
-    "year": 2003, "journal": "...",
-    "first_author": "Smith", "paper_authors": "Smith; Jones"
+  "claim_id": "uuid",
+  "sha256": "...",
+  "page": 4,
+  "species_hint": "Chrysolina americana",
+  "trait_fields": {"diploid_2n": 22, "sex_system": "XY"},
+  "verbatim_quote": "Chrysolina americana exhibited 2n = 22 with an XY sex chromosome system.",
+  "quote_preceding_10w": "... results from our cytogenetic analysis...",
+  "quote_following_10w": "...as confirmed by meiotic preparations.",
+  "original_citation": null,
+  "is_compilation": false,
+  "notation_style": "inline_prose",
+  "uncertainty": {
+    "value_clarity": 0.95,
+    "notation_ambiguity": 0.9,
+    "pdf_quality": 1.0
   }
 }
 ```
 
-- Copy `pdf_path`, `pdf_source`, `source_query` from handoff
-- `paper_authors`: semicolon-separated string, not a list
-- `records`: array of objects, one file per paper
+For compilation tables, set `is_compilation: true` and populate
+`original_citation` with the primary reference the table cites for
+that row. Missing `original_citation` on a compilation Claim is a
+grounding failure — drop it.
 
-**No-data**: `extractor_results/{doi_safe}_nodata.json`:
-`{"doi": "...", "outcome": "no_data", "reason": "...", "source_query": "..."}`
+Write all Claims for this paper to `state/claims/<sha256>.jsonl`, one
+per line.
 
-Move handoff to `state/dealt/`.
+### Step 4. Deterministic grounding verification
+Run `python scripts/verify_quote.py --claims state/claims/<sha256>.jsonl`.
+The script re-extracts each page's text via `pdfplumber` and confirms
+every `verbatim_quote` appears on the stated page. Output is
+`state/claims/<sha256>.verified.jsonl` containing only Claims that
+passed.
 
-### Step 6: Learning (if triggered)
+If more than 20% of your Claims failed verification, STOP and emit a
+warning in your return summary — this usually means the PDF has bad
+OCR or you were hallucinating quotes. Do not retry extraction unless
+explicitly told to.
 
-Write `learning/{doi_safe}_{ISO_timestamp}.json` ONLY when:
-1. **Recurring notation/terminology gap** — notation not covered by guide.md
-   AND multiple records in this paper use it (or it's a journal convention).
-   A single unusual value is not worth a learning file.
-2. **Systematic extraction ambiguity** — the same paper has conflicting
-   interpretations that required a judgment call. Document the reasoning
-   so future extractors facing the same pattern don't have to guess.
-3. **Validation rule gap** — a record passes all validation but seems wrong
-   based on biological context (e.g., value is an outlier for the taxon).
-   The gap is the missing rule, not the record itself.
-4. **Source structure pattern** — this paper or journal has an unusual layout
-   that other extractors would benefit from knowing (e.g., data split across
-   supplementary tables, compilation vs primary data mixed in same table,
-   non-standard column headers).
+### Step 5. Semantic verification (non-blind)
+Dispatch the `semantic_verifier` subagent via one Task call with the
+path to `<sha256>.verified.jsonl`. It returns
+`state/claims/<sha256>.semantically_verified.jsonl` with a verdict
+per Claim: `pass`, `fail(reason)`, or `adjust(new_value, reason)`.
 
-**Do NOT write learning files for:**
-- Individual new species — that's normal extraction, not a discovery
-- Uncertain species identity (aff., cf., sp.) — guide.md already covers this
-- Low confidence alone — only write if the low confidence reveals a gap in
-  the extraction rules that could be fixed
-- Rules that already exist in guide.md — read guide.md before writing
+### Step 6. Strict structuring
+Dispatch the `structurer` subagent with the verified claims and the
+schema. It returns `state/rows/<sha256>.jsonl` — each line is a schema-
+valid Row or a `structuring_error` object.
 
-If none triggered, skip.
+### Step 7. Hook gate and write
+Run `python scripts/hooks.py --rows state/rows/<sha256>.jsonl --ledger
+state/ledger.jsonl --csv results.csv`. The script runs every hook from
+`scripts/hooks.py` against each Row. Passes are appended to CSV with
+a ledger entry. Fails are appended to `state/disputes.jsonl` for
+adjudication.
 
-```json
-{
-  "doi": "...",
-  "type": "notation_variant|ambiguity_pattern|validation_gap|extraction_pattern",
-  "description": "What was discovered — be specific",
-  "proposed_rule": "Specific, actionable rule for guide.md",
-  "affected_fields": ["field_name"],
-  "source_context": "Relevant text from paper showing the pattern",
-  "trigger": "Which trigger fired and why this helps future extractions"
-}
-```
+### Step 8. Adjudicate disputes (only if any)
+If `state/disputes.jsonl` has new entries from this paper, dispatch the
+`adjudicator` subagent. It produces final rulings and writes them to
+`state/ledger.jsonl` + `results.csv` or `legacy_rejected.csv`.
+
+## Return value to the Manager
+
+Return a compact summary (under 250 words):
+- Claims emitted: N
+- Grounding verification rate: X%
+- Semantic verification outcomes (pass/fail/adjust counts)
+- Rows written: M
+- Rows sent to adjudication: K
+- One-sentence description of the most interesting finding or
+  surprise (e.g. "this paper reports a 2n value that contradicts
+  three prior papers for *Chrysolina americana*")
+
+Do not return the Claims themselves or full Row data. Those live in
+the ledger.

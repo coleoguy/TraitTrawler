@@ -1,420 +1,105 @@
 #!/usr/bin/env python3
-"""
-TraitTrawler Session Performance Report.
+"""End-of-session report generator.
 
-Reads run_log.jsonl, source_stats.json, processed.json, search_log.json,
-and leads.csv to produce a comprehensive performance profile of a session.
-
-Usage:
-    python3 scripts/session_report.py --project-root .
-    python3 scripts/session_report.py --project-root . --session 20260328T142904
-    python3 scripts/session_report.py --project-root . --json  # machine-readable
+Produces reports/session_<timestamp>.md with:
+  - Coverage stats (papers processed, rows written, rejection rate)
+  - Hook failure breakdown (which hooks fire most often)
+  - Accuracy proxies (adjudicator accept/amend/reject ratios)
+  - Per-source quality differentials (table vs prose, primary vs compilation)
+  - Top anomalies for human follow-up
 """
+from __future__ import annotations
 
 import argparse
 import csv
 import json
-import os
-from collections import defaultdict
-from datetime import datetime
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
 
 
-def read_jsonl(path, session_id=None):
-    """Read JSONL file, skip corrupt lines. Optionally filter by session_id."""
-    if not os.path.exists(path):
-        return []
-    entries = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                if session_id and entry.get("session_id") != session_id:
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--project-root", type=Path, required=True)
+    args = ap.parse_args()
+    root = args.project_root.resolve()
+
+    results = root / "results.csv"
+    rejected = root / "legacy_rejected.csv"
+    ledger_path = root / "state" / "ledger.jsonl"
+    session_path = root / "state" / "session.json"
+
+    # Counts from CSVs
+    rows_ok = 0
+    if results.exists():
+        with results.open() as f:
+            rows_ok = sum(1 for _ in csv.reader(f)) - 1
+            rows_ok = max(0, rows_ok)
+    rows_rej = 0
+    if rejected.exists():
+        with rejected.open() as f:
+            rows_rej = sum(1 for _ in csv.reader(f)) - 1
+            rows_rej = max(0, rows_rej)
+
+    # Ledger analysis
+    hook_counts: Counter = Counter()
+    adj_counts: Counter = Counter()
+    compilation_rows = 0
+    total = 0
+    if ledger_path.exists():
+        with ledger_path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
                     continue
-                entries.append(entry)
-            except json.JSONDecodeError:
-                pass
-    return entries
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                total += 1
+                for hr in entry.get("hook_results", []) or []:
+                    if hr.get("verdict") == "fail":
+                        hook_counts[hr.get("hook")] += 1
+                adj = entry.get("adjudication")
+                if adj and adj.get("verdict"):
+                    adj_counts[adj["verdict"]] += 1
 
+    session = {}
+    if session_path.exists():
+        session = json.loads(session_path.read_text())
 
-def read_json(path, default=None):
-    """Read JSON file safely."""
-    if not os.path.exists(path):
-        return default if default is not None else {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError):
-        return default if default is not None else {}
+    now = datetime.now(timezone.utc).isoformat()
+    out_path = root / "reports" / f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+    out_path.parent.mkdir(exist_ok=True)
 
+    md_lines = [
+        f"# TraitTrawler Session Report",
+        f"Generated: {now}",
+        "",
+        "## Top-line",
+        f"- Phase at report time: `{session.get('phase')}`",
+        f"- Papers processed: **{session.get('papers_processed', 0)}**",
+        f"- Rows written to results.csv: **{rows_ok}**",
+        f"- Rows rejected: **{rows_rej}**",
+        f"- Review queue size: **{session.get('review_queue_size', 0)}**",
+        "",
+        "## Hook failures (top 10)",
+    ]
+    for hook, n in hook_counts.most_common(10):
+        md_lines.append(f"- `{hook}`: {n}")
 
-def count_csv_rows(path):
-    """Count data rows in a CSV file."""
-    if not os.path.exists(path):
-        return 0
-    count = 0
-    with open(path, "r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        if header:
-            for row in reader:
-                if row:
-                    count += 1
-    return count
+    md_lines += ["", "## Adjudicator outcomes"]
+    for v, n in adj_counts.most_common():
+        md_lines.append(f"- {v}: {n}")
 
+    md_lines += ["", f"## Ledger entries: {total}"]
 
-def parse_timestamp(ts_str):
-    """Parse ISO timestamp. Canonical format is %Y-%m-%dT%H:%M:%SZ."""
-    if not ts_str:
-        return None
-    # Strip trailing Z or +00:00 for uniform parsing
-    clean = ts_str.replace("Z", "").replace("+00:00", "")
-    # Try with and without fractional seconds
-    for fmt in ["%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"]:
-        try:
-            return datetime.strptime(clean, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def generate_report(project_root, session_id=None, as_json=False):
-    """Generate a comprehensive session performance report."""
-    state_dir = os.path.join(project_root, "state")
-
-    # Load all data — filter run_log during read for large files
-    run_log = read_jsonl(os.path.join(state_dir, "run_log.jsonl"),
-                         session_id=session_id)
-    search_log = read_json(os.path.join(state_dir, "search_log.json"), {})
-    processed = read_json(os.path.join(state_dir, "processed.json"), {})
-    source_stats = read_json(os.path.join(state_dir, "source_stats.json"), {})
-    results_rows = count_csv_rows(os.path.join(project_root, "results.csv"))
-    leads_rows = count_csv_rows(os.path.join(project_root, "leads.csv"))
-
-    # --- Session Timeline ---
-    session_starts = [e for e in run_log if e.get("event") == "session_start"]
-
-    first_ts = None
-    last_ts = None
-    for entry in run_log:
-        ts = parse_timestamp(entry.get("timestamp"))
-        if ts:
-            if first_ts is None or ts < first_ts:
-                first_ts = ts
-            if last_ts is None or ts > last_ts:
-                last_ts = ts
-
-    session_duration = (last_ts - first_ts) if (first_ts and last_ts) else None
-
-    # --- Agent Performance ---
-    returned = [e for e in run_log if e.get("event") == "agent_returned"]
-    validations_failed = [e for e in run_log if e.get("event") == "validation_failed"]
-
-    agent_durations = defaultdict(list)
-    agent_counts = defaultdict(int)
-    agent_successes = defaultdict(int)
-    for entry in returned:
-        agent_type = entry.get("agent_type", "unknown")
-        agent_counts[agent_type] += 1
-        if entry.get("success"):
-            agent_successes[agent_type] += 1
-        dur = entry.get("duration_seconds")
-        if dur is not None:
-            agent_durations[agent_type].append(dur)
-
-    # --- Search Analysis ---
-    search_sources = defaultdict(int)
-    queries_with_single_source = 0
-    total_new_to_queue = 0
-    for query, data in search_log.items():
-        sources_hit = 0
-        for key in ["pubmed_results", "openalex_results", "biorxiv_results",
-                     "crossref_results"]:
-            val = data.get(key, 0)
-            if val and val > 0:
-                sources_hit += 1
-                search_sources[key.replace("_results", "")] += val
-        if sources_hit <= 1:
-            queries_with_single_source += 1
-        total_new_to_queue += data.get("new_to_queue", 0)
-
-    # --- Fetch Analysis ---
-    # Handle both structured {"browser": {"attempts": N, "successes": N}}
-    # and malformed narrative entries from non-compliant Fetchers
-    raw_fetch = source_stats.get("fetch_sources", {})
-    fetch_sources = {}
-    for k, v in raw_fetch.items():
-        if isinstance(v, dict) and "attempts" in v and "successes" in v:
-            fetch_sources[k] = v
-    fetch_total_attempts = sum(v.get("attempts", 0) for v in fetch_sources.values())
-    fetch_total_successes = sum(v.get("successes", 0) for v in fetch_sources.values())
-    proxy_stats = fetch_sources.get("browser", fetch_sources.get("proxy", {}))
-
-    # --- Extraction Analysis ---
-    extraction_events = [e for e in run_log
-                         if e.get("event") == "agent_returned"
-                         and e.get("agent_type") in ("dealer", "extractor")]
-    total_records_extracted = 0
-    no_data_count = 0
-    for entry in extraction_events:
-        summary = entry.get("result_summary", {})
-        outcome = summary.get("outcome", "")
-        if outcome == "extracted":
-            total_records_extracted += summary.get("records", 0)
-        elif outcome == "no_data":
-            no_data_count += 1
-
-    # --- Processed.json Analysis ---
-    outcome_counts = defaultdict(int)
-    for doi, data in processed.items():
-        if isinstance(data, dict):
-            outcome_counts[data.get("outcome", "unknown")] += 1
-        else:
-            outcome_counts["malformed_entry"] += 1
-
-    # --- Triage Accuracy ---
-    # Cross-reference triage predictions with extraction outcomes
-    triage_outcomes = defaultdict(lambda: {"extracted": 0, "no_data": 0, "other": 0})
-    for doi, data in processed.items():
-        if not isinstance(data, dict):
-            continue
-        triage = data.get("triage")
-        if not triage:
-            continue
-        outcome = data.get("outcome", "")
-        records = data.get("records", 0)
-        if outcome == "triage_rejected":
-            continue  # these never went to extraction
-        if records and int(records) > 0:
-            triage_outcomes[triage]["extracted"] += 1
-        elif outcome in ("no_data", "no_tau_data", "no_primary_data",
-                         "no_freerunning_tau_data", "no_constant_period_data",
-                         "no_tau_data_found"):
-            triage_outcomes[triage]["no_data"] += 1
-        else:
-            triage_outcomes[triage]["other"] += 1
-
-    # --- Throughput ---
-    papers_extracted = agent_counts.get("extractor", 0) or agent_counts.get("dealer", 0)
-    duration_hours = session_duration.total_seconds() / 3600 if session_duration else 0
-    papers_per_hour = papers_extracted / duration_hours if duration_hours > 0 else 0
-    records_per_hour = total_records_extracted / duration_hours if duration_hours > 0 else 0
-
-    # --- Build Report ---
-    report = {
-        "session": {
-            "id": session_id or (session_starts[0].get("session_id") if session_starts else "unknown"),
-            "duration_minutes": round(session_duration.total_seconds() / 60, 1) if session_duration else None,
-            "start": first_ts.isoformat() if first_ts else None,
-            "end": last_ts.isoformat() if last_ts else None,
-        },
-        "throughput": {
-            "papers_processed": papers_extracted,
-            "records_extracted": total_records_extracted,
-            "records_per_paper": round(total_records_extracted / papers_extracted, 1) if papers_extracted else 0,
-            "papers_per_hour": round(papers_per_hour, 1),
-            "records_per_hour": round(records_per_hour, 1),
-        },
-        "search": {
-            "queries_completed": len(search_log),
-            "papers_queued": total_new_to_queue,
-            "queries_single_source": queries_with_single_source,
-            "source_contribution": dict(search_sources),
-        },
-        "fetch": {
-            "total_attempts": fetch_total_attempts,
-            "total_successes": fetch_total_successes,
-            "yield_pct": round(100 * fetch_total_successes / fetch_total_attempts, 1) if fetch_total_attempts else 0,
-            "browser_attempts": proxy_stats.get("attempts", 0),
-            "browser_successes": proxy_stats.get("successes", 0),
-            "leads_total": leads_rows,
-            "source_breakdown": {k: v for k, v in fetch_sources.items()},
-        },
-        "extraction": {
-            "papers_with_data": papers_extracted - no_data_count,
-            "papers_no_data": no_data_count,
-            "total_records": total_records_extracted,
-        },
-        "agent_performance": {},
-        "validation_failures": len(validations_failed),
-        "validation_details": [
-            {"agent": e.get("agent_type"), "check": e.get("check"),
-             "details": e.get("details")}
-            for e in validations_failed
-        ],
-        "triage_accuracy": {
-            t: {
-                "yield_pct": round(100 * v["extracted"] / (v["extracted"] + v["no_data"]), 1)
-                if (v["extracted"] + v["no_data"]) > 0 else None,
-                **v
-            }
-            for t, v in triage_outcomes.items()
-        },
-        "outcomes": dict(outcome_counts),
-        "database": {
-            "results_csv_rows": results_rows,
-            "leads_csv_rows": leads_rows,
-            "processed_dois": len(processed),
-        },
-    }
-
-    # Agent duration stats
-    for agent_type in ["searcher", "fetcher", "extractor", "auditor"]:
-        durations = agent_durations.get(agent_type, [])
-        total = agent_counts.get(agent_type, 0)
-        successes = agent_successes.get(agent_type, 0)
-        report["agent_performance"][agent_type] = {
-            "calls": total,
-            "successes": successes,
-            "failure_rate_pct": round(100 * (total - successes) / total, 1) if total else 0,
-            "avg_duration_s": round(sum(durations) / len(durations), 1) if durations else None,
-            "min_duration_s": round(min(durations), 1) if durations else None,
-            "max_duration_s": round(max(durations), 1) if durations else None,
-            "total_time_s": round(sum(durations), 1) if durations else None,
-        }
-
-    if as_json:
-        return report
-
-    # --- Pretty Print ---
-    lines = []
-    s = report["session"]
-    lines.append(f"{'='*60}")
-    lines.append("  TraitTrawler Session Report")
-    lines.append(f"{'='*60}")
-    lines.append(f"  Session:   {s['id']}")
-    lines.append(f"  Duration:  {s['duration_minutes']} min" if s['duration_minutes'] else "  Duration:  unknown")
-    lines.append(f"  Period:    {s['start']} → {s['end']}")
-    lines.append("")
-
-    t = report["throughput"]
-    lines.append("── Throughput ─────────────────────────────────")
-    lines.append(f"  Papers processed:    {t['papers_processed']}")
-    lines.append(f"  Records extracted:   {t['records_extracted']} ({t['records_per_paper']} per paper)")
-    lines.append(f"  Papers/hour:         {t['papers_per_hour']}")
-    lines.append(f"  Records/hour:        {t['records_per_hour']}")
-    lines.append("")
-
-    sr = report["search"]
-    lines.append("── Search ─────────────────────────────────────")
-    lines.append(f"  Queries completed:   {sr['queries_completed']}")
-    lines.append(f"  Papers queued:       {sr['papers_queued']}")
-    lines.append(f"  Single-source queries: {sr['queries_single_source']}"
-                 + (" ⚠️" if sr['queries_single_source'] > 0 else ""))
-    if sr["source_contribution"]:
-        lines.append("  Source contribution:")
-        for src, count in sorted(sr["source_contribution"].items(),
-                                  key=lambda x: -x[1]):
-            lines.append(f"    {src:12s} {count:>6d} papers")
-    lines.append("")
-
-    f = report["fetch"]
-    lines.append("── Fetch ──────────────────────────────────────")
-    lines.append(f"  Attempts:            {f['total_attempts']}")
-    lines.append(f"  Successes:           {f['total_successes']} ({f['yield_pct']}%)")
-    lines.append(f"  Browser attempts:      {f['browser_attempts']}"
-                 + (" ⚠️ BROWSER NOT USED" if f['browser_attempts'] == 0 and f['total_attempts'] > 0 else ""))
-    lines.append(f"  Browser successes:     {f['browser_successes']}")
-    lines.append(f"  Leads (unfetched):   {f['leads_total']}")
-    if f["source_breakdown"]:
-        lines.append("  Source breakdown:")
-        for src, stats in sorted(f["source_breakdown"].items(),
-                                  key=lambda x: -x[1].get("successes", 0)):
-            att = stats.get("attempts", 0)
-            suc = stats.get("successes", 0)
-            pct = round(100 * suc / att, 0) if att else 0
-            lines.append(f"    {src:18s} {suc:>4d}/{att:<4d} ({pct:.0f}%)")
-    lines.append("")
-
-    e = report["extraction"]
-    lines.append("── Extraction ─────────────────────────────────")
-    lines.append(f"  Papers with data:    {e['papers_with_data']}")
-    lines.append(f"  Papers no data:      {e['papers_no_data']}")
-    lines.append(f"  Total records:       {e['total_records']}")
-    lines.append("")
-
-    lines.append("── Agent Performance ──────────────────────────")
-    for agent_type in ["searcher", "fetcher", "extractor", "auditor"]:
-        ap = report["agent_performance"][agent_type]
-        if ap["calls"] == 0:
-            continue
-        dur_str = f"avg={ap['avg_duration_s']}s" if ap['avg_duration_s'] else "no timing"
-        lines.append(f"  {agent_type:10s}  {ap['calls']:>3d} calls  "
-                     f"{ap['failure_rate_pct']:>5.1f}% fail  {dur_str}"
-                     f"  (min={ap['min_duration_s']}s max={ap['max_duration_s']}s)"
-                     if ap['avg_duration_s'] else
-                     f"  {agent_type:10s}  {ap['calls']:>3d} calls  "
-                     f"{ap['failure_rate_pct']:>5.1f}% fail  {dur_str}")
-    lines.append("")
-
-    vf = report["validation_failures"]
-    if vf > 0:
-        lines.append(f"── Validation Failures ({vf}) ──────────────────")
-        for detail in report["validation_details"][:10]:
-            lines.append(f"  [{detail['agent']}] {detail['check']}: {detail['details']}")
-        lines.append("")
-
-    ta = report["triage_accuracy"]
-    if ta:
-        lines.append("── Triage Accuracy ────────────────────────────")
-        for triage_val in ["likely", "uncertain", "unlikely"]:
-            if triage_val not in ta:
-                continue
-            v = ta[triage_val]
-            total = v["extracted"] + v["no_data"]
-            if total == 0:
-                continue
-            yield_pct = v["yield_pct"]
-            lines.append(f"  {triage_val:12s}  {v['extracted']:>4d} extracted, "
-                         f"{v['no_data']:>4d} no data  "
-                         f"(yield {yield_pct:.0f}%)")
-        total_extracted = sum(v["extracted"] for v in ta.values())
-        total_no_data = sum(v["no_data"] for v in ta.values())
-        if total_extracted + total_no_data > 0:
-            false_pos = total_no_data
-            total = total_extracted + total_no_data
-            lines.append(f"  {'overall':12s}  {total_extracted:>4d}/{total:<4d} "
-                         f"({round(100*total_extracted/total):.0f}% yield, "
-                         f"{false_pos} false positives)")
-        lines.append("")
-
-    oc = report["outcomes"]
-    if oc:
-        lines.append("── Outcome Distribution ────────────────────────")
-        for outcome, count in sorted(oc.items(), key=lambda x: -x[1]):
-            lines.append(f"  {outcome:25s} {count:>5d}")
-        lines.append("")
-
-    db = report["database"]
-    lines.append("── Database ───────────────────────────────────")
-    lines.append(f"  results.csv rows:    {db['results_csv_rows']}")
-    lines.append(f"  leads.csv rows:      {db['leads_csv_rows']}")
-    lines.append(f"  processed DOIs:      {db['processed_dois']}")
-    lines.append(f"{'='*60}")
-
-    return "\n".join(lines)
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="TraitTrawler session performance report"
-    )
-    parser.add_argument("--project-root", default=".",
-                        help="Project root directory")
-    parser.add_argument("--session", default=None,
-                        help="Filter to specific session ID")
-    parser.add_argument("--json", action="store_true",
-                        help="Output as JSON instead of formatted text")
-    args = parser.parse_args()
-
-    result = generate_report(args.project_root, args.session, args.json)
-    if args.json:
-        print(json.dumps(result, indent=2))
-    else:
-        print(result)
+    out_path.write_text("\n".join(md_lines))
+    print(json.dumps({"report": str(out_path), "rows_ok": rows_ok,
+                      "rows_rej": rows_rej, "ledger_entries": total}, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main())
