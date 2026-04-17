@@ -23,7 +23,14 @@ taxa: {taxa!r}
 seed_dois: {seed_dois}
 
 # Batch processing
-batch_size: 5
+# batch_size = how many papers the Manager extracts in parallel per batch.
+#   100-500 papers:    8 (current default)
+#   500-2500 papers:   10-12
+#   2500-10000 papers: 12-15
+# Each extractor spawns 1-2 nested subagents (verifier, advisor) so
+# peak concurrency is ~2-3x batch_size. See references/architecture.md
+# for the rate-limit tradeoffs.
+batch_size: 8
 review_queue_max: 50
 
 # Model selection (override per-subagent if needed)
@@ -39,6 +46,10 @@ search_sources: [pubmed, biorxiv, openalex, crossref]
 
 # Throttling
 http_rate_limit_per_host_per_second: 1
+
+# Deterministic-Python parallelism (IO-bound tasks)
+gbif_workers: 8          # bootstrap.py GBIF species-match lookups
+title_peek_workers: 8    # pair_pdfs.py first-page title extraction
 """
 
 SESSION_TEMPLATE = {

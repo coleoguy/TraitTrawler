@@ -32,6 +32,7 @@ import re
 import sqlite3
 import sys
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -216,7 +217,10 @@ def main() -> int:
     ap.add_argument("--column-map", type=Path, default=None,
                     help="JSON file mapping {user_col: canonical_col} to apply to CSV headers")
     ap.add_argument("--no-title-peek", action="store_true",
-                    help="Skip the slow first-page title-extraction pass")
+                    help="Skip the first-page title-extraction pass")
+    ap.add_argument("--title-peek-workers", type=int, default=8,
+                    help="Parallel threads for title-peek PDF reads (default 8). "
+                         "Title peek is IO-bound so threading helps even in CPython.")
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--delimiter", default=None)
     ap.add_argument("--encoding", default="utf-8")
@@ -241,6 +245,25 @@ def main() -> int:
         delimiter = sniff["delimiter"]
 
     title_cache: dict[Path, str] | None = None if args.no_title_peek else {}
+
+    # Pre-warm the title cache in parallel BEFORE the row-pairing loop.
+    # This is the slow step for a large corpus: pdfplumber first-page
+    # extraction at ~300ms/PDF becomes ~5 min serial for 1,000 PDFs
+    # but ~45s at 8 threads. Title-peek reads are pure IO plus a bit
+    # of text parsing, so threading (not multiprocessing) is the right
+    # primitive — no GIL concern.
+    if title_cache is not None and pdfs:
+        print(f"warming title cache for {len(pdfs)} PDFs "
+              f"(workers={args.title_peek_workers})…", file=sys.stderr)
+        with ThreadPoolExecutor(max_workers=args.title_peek_workers) as ex:
+            futures = {ex.submit(_first_page_text, p["path"]): p["path"]
+                       for p in pdfs}
+            for fut in as_completed(futures):
+                path = futures[fut]
+                try:
+                    title_cache[path] = fut.result()
+                except Exception:
+                    title_cache[path] = ""
 
     # Pair every row
     results: list[dict] = []

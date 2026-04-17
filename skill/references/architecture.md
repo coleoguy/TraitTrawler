@@ -193,6 +193,103 @@ semantic_verifier uses this pattern: it's a Sonnet call that
 escalates to an `advisor` subagent on Opus when uncertain, rather
 than making every verification step run on Opus.
 
+## Parallelism and scale
+
+Where the pipeline runs things in parallel, and how to tune it for
+large corpora (thousands of PDFs).
+
+### LLM-level parallelism
+
+The Manager processes papers in **batches** of `batch_size` (config.yaml,
+default 5). At the start of each batch, the Manager issues ALL
+`extractor` Task calls for that batch in a single assistant message,
+and they execute in parallel.
+
+Each `extractor` subagent internally chains through deterministic
+scripts AND spawns additional subagents:
+- Each extractor spawns one `semantic_verifier` via Task.
+- The semantic_verifier spawns an `advisor` on ~5–10% of claims.
+- The extractor spawns the `adjudicator` only when hook failures occur
+  (~5% of rows).
+
+So for a batch of 10 papers, peak concurrent model contexts:
+
+```
+10 (extractors)
+  + 10 (semantic_verifiers, one per extractor, running concurrently)
+  + ~1-2 (advisors, for uncertain claims)
+  + ~0-2 (adjudicators, for disputed rows)
+= ~22-24 concurrent contexts at peak
+```
+
+Each context runs on a different model (Opus 4.7 for extraction +
+adjudication, Sonnet 4.6 for verification + structuring, Haiku 4.5 for
+triage), so they do NOT compete for the same rate-limit bucket.
+
+### Tuning `batch_size`
+
+| Corpus size | Suggested batch_size | Why |
+|---|---|---|
+| <100 papers | 5 (default) | Fast enough; keeps main context small. |
+| 100–500 | 8 | Good balance of speed and rate-limit headroom. |
+| 500–2,500 | 10–12 | Overnight run feasible at this scale. |
+| 2,500–10,000 | 12–15 | Approaching Anthropic rate-limit ceilings; monitor. |
+| >10,000 | 15 + Batch API | For cold bulk passes, route through Batch API for 50% off. |
+
+Edit `config.yaml`:
+```yaml
+batch_size: 10
+```
+
+### Deterministic Python parallelism
+
+IO-bound tasks inside the Python scripts are parallelized via
+`ThreadPoolExecutor`:
+
+| Script | Parallel operation | Default workers | Flag |
+|---|---|---|---|
+| `pair_pdfs.py` | pdfplumber first-page reads for title-peek | 8 | `--title-peek-workers` |
+| `bootstrap.py` | GBIF species-match HTTP calls | 8 | `--gbif-workers` |
+| `pdf_ingest.py` | SHA256 hashing | 1 (serial) | — (CPU-bound, fast) |
+| `verify_quote.py` | PDF text extraction | 1 per paper | — (already parallel at subagent level) |
+| `hooks.py` | Hook evaluation per row | 1 per paper | — (already parallel at subagent level) |
+
+Both `pair_pdfs` and `bootstrap` use threads (not processes) because
+the bottlenecks are IO, not CPU — the GIL is not the limiter. For a
+2,500-PDF corpus with 2,500 unique species:
+
+- `pair_pdfs.py --title-peek-workers 8`: ~45s instead of ~5min serial
+- `bootstrap.py --gbif-workers 8`: ~45s instead of ~8min serial
+
+Don't push `--gbif-workers` above 16 — GBIF's API is public and we
+shouldn't hammer it. Their docs don't publish a hard rate limit but
+running ~8 concurrent connections is polite.
+
+### Back-pressure and failure modes
+
+- **Anthropic rate limits.** If the extractor returns 429s, the
+  Manager should pause for 30s and resume with `batch_size - 2`. This
+  is a resilience pattern documented in SKILL.md's golden rules; not
+  yet automated — watch for it on the first large run.
+- **GBIF flakes.** The `taxonomy_resolver` HTTP call has a 10s timeout.
+  Failed lookups mark the row as `taxonomy_status: "unresolved"` (soft
+  fail, row still writes but `hook_gbif_resolved` flags it). No
+  retries — one shot per unique species per bootstrap.
+- **pdfplumber errors on corrupt PDFs.** The thread pool catches
+  exceptions per PDF and marks its title as empty. Title-peek fails
+  gracefully back to filename-only strategies.
+
+### What does NOT parallelize (intentionally)
+
+- **Adjudication.** Disputes are rare (~5% of rows); running Opus
+  xhigh concurrently burns tokens faster than it saves wall time.
+  Serialize adjudications within a batch.
+- **Across batches.** The Manager processes one batch at a time so
+  its narration and pause-points stay comprehensible. The speed win
+  is within a batch, not across them.
+- **Trait_learner update mode.** Runs once per 10 batches, consumes
+  the ledger sequentially, writes a new profile. Fast enough serial.
+
 ## Prompt caching strategy
 
 Each extractor Task call is structured as:

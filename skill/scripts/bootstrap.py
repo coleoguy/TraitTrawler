@@ -39,6 +39,7 @@ import random
 import re
 import sqlite3
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -413,6 +414,10 @@ def main() -> int:
     ap.add_argument("--delimiter", default=None,
                     help="CSV delimiter; auto-detected if omitted.")
     ap.add_argument("--encoding", default="utf-8")
+    ap.add_argument("--gbif-workers", type=int, default=8,
+                    help="Parallel threads for GBIF species-match lookups (default 8). "
+                         "GBIF is IO-bound HTTP, so threading gives ~8x speedup on the "
+                         "first pass. All responses are cached so re-runs are free.")
     args = ap.parse_args()
 
     root = args.root.resolve()
@@ -496,6 +501,41 @@ def main() -> int:
             delimiter = sniff["delimiter"]
         except Exception:
             pass
+
+    # Pre-warm GBIF cache in parallel on unique species names.
+    # For 4,000 rows with ~2,500 distinct species, this turns an 8-min
+    # serial pass into a ~1-min parallel pass. Skipped if --skip-gbif.
+    if not args.skip_gbif:
+        unique_species: set[str] = set()
+        with args.csv.open("r", encoding=args.encoding, errors="replace",
+                            newline="") as f:
+            peek_reader = csv.DictReader(f, delimiter=delimiter)
+            for raw in peek_reader:
+                if column_map:
+                    for k, v in list(raw.items()):
+                        if k in column_map:
+                            raw.setdefault(column_map[k], v)
+                name = (raw.get("canonical_species") or raw.get("species")
+                        or raw.get("species_name") or "").strip()
+                if name:
+                    unique_species.add(name)
+        if unique_species:
+            print(f"warming GBIF cache for {len(unique_species)} unique species "
+                  f"(workers={args.gbif_workers})…", file=sys.stderr)
+            def _resolve_one(name: str) -> tuple[str, dict]:
+                return name, resolve_species(name, {})
+            with ThreadPoolExecutor(max_workers=args.gbif_workers) as ex:
+                futures = {ex.submit(_resolve_one, n): n for n in unique_species}
+                for fut in as_completed(futures):
+                    try:
+                        name, result = fut.result()
+                        gbif_cache[name] = result
+                    except Exception as e:
+                        n = futures[fut]
+                        print(f"  WARN: GBIF lookup failed for {n}: {e}",
+                              file=sys.stderr)
+                        gbif_cache[n] = {"status": "unresolved",
+                                          "canonical_name": n}
 
     with args.csv.open("r", encoding=args.encoding, errors="replace",
                         newline="") as f, \

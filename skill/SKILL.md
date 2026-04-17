@@ -349,23 +349,58 @@ Actions:
 
 ## Subagent dispatch patterns
 
-**Parallel batch dispatch.** The single highest-leverage move is issuing
-multiple Task calls in one assistant message. Example: to process a batch
-of 5 papers, issue 5 `Task` tool calls with `subagent_type: extractor` in
-one message. They run in parallel and your context only sees the
-summaries. Do this for triage and extraction; do not do it for
-adjudication (disputes are rare enough to serialize).
+**Parallel batch dispatch — the single most important performance move.**
+At the start of every batch, issue ALL Task calls for that batch in a
+SINGLE assistant message. Do not loop one at a time. Example for a
+batch of 10 papers:
+
+- Message 1 (you emit): ten `Task` tool calls with
+  `subagent_type: extractor`, one per paper, in the same message.
+- They execute in parallel and your next turn sees all ten summaries.
+
+Each extractor subagent internally spawns `semantic_verifier` (and
+`advisor` when uncertain, and `adjudicator` when disputed). Those
+nested spawns also run in parallel across papers. At peak, a 10-paper
+batch produces ~20–40 concurrent model contexts. That IS the
+throughput story.
+
+**Tuning `batch_size`.** Defined in `config.yaml`, default 5. For a
+massive corpus (>500 papers) bump it to 8–15. Guard rails:
+- Higher batch_size → more concurrent API calls → more risk of hitting
+  Anthropic rate limits. Back off if the extractor starts returning
+  rate-limit errors.
+- Higher batch_size → more pre-batch context consumed per turn (each
+  Task call carries a small system prompt). Your Manager context
+  stays fine up to ~20.
+- Adjudication cost is not linear in batch_size because disputes are
+  ~5% of rows regardless. Bumping batch_size mostly scales the
+  cheap-path parallelism.
+
+**Do NOT parallelize adjudication.** Disputes are rare enough to
+serialize cleanly; running adjudicator calls in parallel burns Opus
+tokens you probably do not need to burn. Let disputes accumulate
+within a batch, then one adjudicator call per paper at end of chain.
 
 **Subagent result minimization.** Every subagent is instructed (in its
 own `.md` spec) to return only a short structured summary to the
-Manager: counts, interesting observations, and a pointer to a state file
-for details. The Manager should never need to ingest the raw extraction
-output; it lives in `state/ledger.jsonl`.
+Manager: counts, interesting observations, and a pointer to a state
+file for details. The Manager should never need to ingest the raw
+extraction output; it lives in `state/ledger.jsonl`.
 
 **Stay alive.** The Manager's job is to coordinate batches until the
 corpus is done. Do not exit the turn after one batch unless you are
 pausing for user input. After a batch returns, announce results and
 immediately dispatch the next batch.
+
+**Deterministic-script parallelism.** The Python scripts that run
+inside the Manager's Bash tool (and inside each extractor subagent)
+parallelize IO-bound work across threads where it matters:
+- `pair_pdfs.py`: title-peek first-page reads across `--title-peek-workers`
+  threads (default 8). 1000 PDFs: ~45s instead of ~5min.
+- `bootstrap.py`: GBIF species-match lookups across `--gbif-workers`
+  threads (default 8). 2500 unique species: ~45s instead of ~8min.
+- `verify_quote.py`, `hooks.py`, `ledger.py`: already parallel at the
+  subagent-per-paper level — no extra threading needed.
 
 ---
 
