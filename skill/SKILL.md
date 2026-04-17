@@ -146,6 +146,70 @@ prose-dominant pages. See `agents/extractor.md` for the recipe.
 
 ---
 
+## Context hygiene and resume protocol
+
+Your context fills up over long runs. A 2,500-PDF corpus at
+batch_size 10 is 250 batches at ~10k tokens of accumulated Manager
+context per batch — that is ~2.5M tokens, well above any single
+model's window. Claude Code will auto-compact at some point. This
+section tells you how to stay correct through that.
+
+### At the start of every turn
+
+1. Read `state/session.json` first. Authoritative phase state.
+2. If you cannot recall with confidence what the last 3-5 batches
+   did, run:
+   ```
+   python scripts/checkpoint.py --project-root <root> --show
+   tail -n 50 state/manager_log.md
+   ```
+   These files are the authoritative narrative. If they conflict
+   with what you "remember", they win.
+
+### At the end of every batch
+
+1. Append one line to `state/manager_log.md`:
+   ```
+   python scripts/session_log.py --root <root> --batch <n> \
+     --papers-in-batch <N> --rows-written <M> --to-review <K> \
+     --adjudicated <J> --interesting "<one-sentence surprise or empty>"
+   ```
+2. Every 10 batches, write a fresh checkpoint:
+   ```
+   python scripts/checkpoint.py --project-root <root>
+   ```
+   This rewrites `state/manager_checkpoint.md` from the on-disk truth
+   (ledger, review queue, results.csv). It is cheap — takes under a
+   second — and it is your lifeline across compaction events.
+
+### What NOT to keep in context
+
+- Full extraction output. That lives in `state/ledger.jsonl`. Read it
+  via checkpoint.py or tail-grep; do NOT load it whole.
+- Full PDF contents. The extractor subagent handles PDFs in its own
+  forked context and returns a summary. You never need the raw text.
+- Reference docs you read earlier in the session. Re-read on demand
+  (they are small) rather than carrying them forward turn to turn.
+
+### Resume after compaction / session break
+
+If the user restarts the session:
+1. Read `state/session.json` → know what phase you are in.
+2. Read `state/manager_checkpoint.md` → know what has been written
+   and what the running narrative is.
+3. Tail last ~50 lines of `state/manager_log.md` → restore the
+   moment-to-moment narration style.
+4. Continue from the current phase. Do not re-process completed
+   batches. The ledger is the proof that work happened.
+
+### Size targets
+
+Aim for Manager context under ~500k tokens per uninterrupted run.
+At batch_size 10 that is ~50 batches = 500 papers in one session.
+For larger runs, the user restarts the skill between 500-paper
+chunks. The state files make this free. Narrate the restart
+boundary to the user so they know when to /clear and re-invoke.
+
 ## Phase state machine
 
 At the top of every turn, read `state/session.json` to determine the current
@@ -311,14 +375,26 @@ the remaining deterministic scripts via Bash within its own turn; see
 After each batch completes:
 1. Read the batch summary JSON that the extractor subagents appended to
    `state/ledger.jsonl` (one line per row).
-2. Narrate: rows written, rows in review queue, most interesting finding
-   ("found a Smith-2013 record that contradicts Jones-1998"), current
-   running cost estimate.
-3. Dispatch the `trait_learner` subagent in **update mode** once every
-   10 batches to refresh `trait_profile.md` with newly observed patterns.
-4. If the review queue has grown past `config.review_queue_max` (default
-   50), pause and narrate the review workflow (see `references/review_workflow.md`).
-5. Otherwise continue to the next batch.
+2. Append one line to `state/manager_log.md` via
+   `python scripts/session_log.py --root <root> --batch <n> ...`. This
+   is narration-continuity insurance.
+3. Narrate to the user: rows written, rows in review queue, most
+   interesting finding, current running cost estimate.
+4. **Every 10 batches**, run `python scripts/checkpoint.py
+   --project-root <root>`. This rewrites `state/manager_checkpoint.md`
+   from the on-disk truth; it is what a post-compaction Manager reads
+   first.
+5. Dispatch the `trait_learner` subagent in **update mode** once every
+   10 batches to refresh `trait_profile.md`. Pass it the last 10
+   batches' ledger entries only (not the whole ledger).
+6. If the review queue has grown past `config.review_queue_max` (default
+   50), pause and narrate the review workflow
+   (`references/review_workflow.md`).
+7. **Every 50 batches**, proactively suggest a session break: write a
+   final checkpoint, announce to the user "500 papers processed;
+   consider `/clear` and re-invoking the skill to keep my context
+   lean." Then either continue (user's call) or stop.
+8. Otherwise continue to the next batch.
 
 ### 6. REVIEW
 Trigger: user invokes `/review` or review queue exceeds threshold.

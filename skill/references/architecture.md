@@ -288,7 +288,65 @@ running ~8 concurrent connections is polite.
   its narration and pause-points stay comprehensible. The speed win
   is within a batch, not across them.
 - **Trait_learner update mode.** Runs once per 10 batches, consumes
-  the ledger sequentially, writes a new profile. Fast enough serial.
+  the tail of the ledger (last ~2000 entries only), writes a new
+  profile. Fast enough serial.
+
+## Context budget across a long run
+
+Each component's context budget per invocation, and the cumulative
+Manager growth over a multi-batch run.
+
+### Per-subagent context (each is a forked context — does NOT bleed into Manager)
+
+| Subagent | Typical input tokens | Why |
+|---|---|---|
+| triage | ~2–5k | abstract + first 2 pages via pdf_peek |
+| extractor (text-only pages) | ~10–30k | agent spec + trait_profile + schema + exemplars + 2–5 pages of PDF text |
+| extractor (image + text pages) | ~25–55k | adds ~4.8k tokens per rendered 2576px page image |
+| semantic_verifier | ~5–10k | quote + context + row, per claim |
+| structurer | ~5–8k | verified claims + schema |
+| advisor (when called) | ~3–6k | one claim's worth of context |
+| adjudicator | ~5–10k | disputed row + quote + hook failures |
+| trait_learner (bootstrap) | ~50–80k | 5–10 seed PDFs read in sequence |
+| trait_learner (update) | ~10–20k | tail of ledger (last ~2000 entries) |
+
+None of these is close to Opus 4.7's 200k base context limit. Image-
+heavy extraction on a 10-page paper would still land under 100k.
+
+### Manager context (your main Claude Code session — THE risk)
+
+Per batch, the Manager accumulates:
+- ~1k tokens of narration output
+- Task invocations: ~500 tokens × batch_size
+- Summaries returned: ~300 tokens × batch_size (spec-capped at 250 words)
+- Occasional reference-doc read (one-off)
+
+→ **~5–10k tokens per batch** accumulated in Manager context.
+
+| Papers | Batches (at batch_size=10) | Manager context used | Action |
+|---|---|---|---|
+| 100 | 10 | ~100k tokens | fine |
+| 500 | 50 | ~500k tokens | fine on Sonnet 4.6 (1M) |
+| 1,000 | 100 | ~1M tokens | near limit; checkpoint often |
+| 2,500 | 250 | ~2.5M tokens | **requires session breaks** |
+
+### The checkpoint protocol
+
+Everything important lives on disk:
+- `state/session.json` — authoritative phase state
+- `state/ledger.jsonl` — every row written, including provenance
+- `state/manager_checkpoint.md` — compact session summary (rewritten every 10 batches by `scripts/checkpoint.py`)
+- `state/manager_log.md` — per-batch one-liner log (appended by `scripts/session_log.py`)
+- `state/review_queue.jsonl`, `results.csv`, `legacy_rejected.csv` — outputs
+
+If the Manager's in-context memory is lost to compaction or session
+restart, it re-hydrates by reading session.json + manager_checkpoint.md
++ tail of manager_log.md. No batch is re-processed; the ledger is the
+source of truth for what has been written.
+
+The Manager proactively suggests a session break every 50 batches
+(~500 papers). Heath can `/clear` and re-invoke the skill, and work
+resumes seamlessly.
 
 ## Prompt caching strategy
 

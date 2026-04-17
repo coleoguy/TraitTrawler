@@ -133,13 +133,21 @@ Each line: `{"when": iso_utc, "kind": "notation|confusion|range|...", "observati
 ## Update mode
 
 1. Parse the existing `trait_profile.md`.
-2. Read recent batch outputs from `state/ledger.jsonl`. Focus on:
+2. Read ONLY the most recent ledger entries — NOT the whole ledger.
+   For a project with 10,000+ rows the full ledger is many MB;
+   loading it would blow your context. Instead:
+   ```
+   # last ~2,000 ledger entries (sufficient for ~10 batches of signal)
+   tail -n 2000 state/ledger.jsonl
+   ```
+   Parse those and focus on:
    - Adjudicator amendments (what pattern was the extractor missing?)
    - Hook failures with `confirmed` resolution (those hooks are
      correctly calibrated)
    - Hook failures with `rejected` resolution (the hook is over-strict;
      propose a refined version)
    - Reviewer comments in `state/review_queue.jsonl`
+     (tail the last ~200 lines)
 3. Write only the changed sections. Preserve the human-authored block
    above the `--- AUTO ---` divider verbatim.
 4. Propose new hooks as you see new patterns. Do NOT modify existing

@@ -535,6 +535,42 @@ def test_messy_migration(tmp_root: Path) -> None:
         assert c["source_api"] == "bootstrap_papers_needed"
 
 
+def test_checkpoint_and_session_log(tmp_root: Path) -> None:
+    """checkpoint.py + session_log.py: compaction-safe state recovery."""
+    test_setup_and_project_hooks(tmp_root)  # gives us a ledger + disputes
+    # Write a couple of session_log entries
+    run([sys.executable, str(SCRIPTS / "session_log.py"),
+         "--root", str(tmp_root),
+         "--batch", "1", "--papers-in-batch", "10",
+         "--rows-written", "8", "--to-review", "2", "--adjudicated", "0",
+         "--interesting", "Smith 2013 contradicts Jones 1998"])
+    run([sys.executable, str(SCRIPTS / "session_log.py"),
+         "--root", str(tmp_root),
+         "--batch", "2", "--papers-in-batch", "10",
+         "--rows-written", "12", "--to-review", "1", "--adjudicated", "0"])
+    log_text = (tmp_root / "state" / "manager_log.md").read_text()
+    assert "Manager Session Log" in log_text
+    assert "batch 1" in log_text and "batch 2" in log_text
+    assert "Smith 2013" in log_text
+
+    # Write a checkpoint
+    r = run([sys.executable, str(SCRIPTS / "checkpoint.py"),
+             "--project-root", str(tmp_root)])
+    summary = json.loads(r.stdout)
+    assert summary["ledger_count"] >= 1
+    ckpt_path = tmp_root / "state" / "manager_checkpoint.md"
+    assert ckpt_path.exists()
+    ckpt_text = ckpt_path.read_text()
+    assert "Manager Checkpoint" in ckpt_text
+    assert "Current phase" in ckpt_text
+    assert "Output counts" in ckpt_text
+    assert "Resume instructions" in ckpt_text
+    # `checkpoint --show` reads it back
+    r2 = run([sys.executable, str(SCRIPTS / "checkpoint.py"),
+              "--project-root", str(tmp_root), "--show"])
+    assert "Manager Checkpoint" in r2.stdout
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         test_setup_and_project_hooks(Path(d) / "proj_hooks")
@@ -554,6 +590,9 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         test_messy_migration(Path(d) / "proj_messy")
         print("OK: messy migration (preflight + fuzzy pairing + aux files + dry-run)")
+    with tempfile.TemporaryDirectory() as d:
+        test_checkpoint_and_session_log(Path(d) / "proj_ckpt")
+        print("OK: checkpoint + session log (compaction-safe state recovery)")
     print("\nAll smoke tests passed.")
     return 0
 
