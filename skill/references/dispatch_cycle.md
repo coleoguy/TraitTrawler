@@ -93,28 +93,63 @@ Read your full instructions from the extractor.md file in the skill agents direc
 PROJECT ROOT: {cwd}\nHANDOFF FILE: {handoff_file}")
 ```
 
-### Auditor (foreground, mandatory verification)
-Runs on ALL records from finds/ files. No sampling, no skip.
+### Auditor (foreground, blind re-extraction)
+Runs on ALL finds/ files. For each finds file, build a manifest of
+`(species, source_page)` pairs WITHOUT the trait values — the Auditor
+must not see what the Extractor found. The Auditor independently
+re-extracts from the cited pages. Results go to `audit_results/`.
+
+Build the manifest per finds file:
+```bash
+python3 scripts/build_audit_manifest.py --project-root . \
+    --finds-file finds/FILENAME.json
+```
+
+Then spawn the Auditor (one per finds file, or batched):
 ```
 Agent(model=sonnet, prompt="You are a TraitTrawler Auditor agent.
 Read your full instructions from the auditor.md file in the skill agents directory.
-PROJECT ROOT: {cwd}\nFILES TO VERIFY: {finds_file_list}")
+PROJECT ROOT: {cwd}\nMANIFEST FILE: audit_manifests/FILENAME_manifest.json")
 ```
 
-### verify_and_write Pipeline (foreground, blocking)
-Five-step pipeline run after Extractors produce finds/ files:
+### Opus Adjudicator (foreground, disputes only)
+When reconcile.py produces files in `adjudication/`, disputed fields
+need a tiebreak. Spawn one Opus agent per disputes file:
 
-1. **Auditor** (foreground): spawn Auditor on all finds/ files
-2. **Scrub**: `python3 scripts/scrub.py --project-root . --dir finds/`
-3. **Re-extraction routing**: If scrub output contains `normalization_failures`,
+```
+Agent(model=opus, prompt="You are a TraitTrawler Adjudicator agent.
+Read your full instructions from the adjudicator.md file in the skill agents directory.
+PROJECT ROOT: {cwd}\nDISPUTES FILE: adjudication/FILENAME.json")
+```
+
+The Adjudicator reads only the cited source page(s) and the disputed
+fields (both candidate values), picks the correct value with reasoning,
+and writes `adjudication_results/FILENAME.json`. reconcile.py merges
+these back into the finds/ files on the next pass.
+
+### verify_and_write Pipeline (foreground, blocking)
+Seven-step pipeline run after Extractors produce finds/ files:
+
+1. **Build audit manifests**: `python3 scripts/build_audit_manifest.py --project-root . --dir finds/`
+2. **Auditor** (foreground): spawn Auditor agents, one per manifest.
+   Each writes to `audit_results/`.
+3. **Reconcile**: `python3 scripts/reconcile.py --project-root . --session-id $SESSION_ID`
+   - Mechanically diffs Extractor vs Auditor per record per trait field
+   - Writes agreement-based confidence into finds/ files
+   - Creates `adjudication/*.json` for disputed fields
+   - Appends agreement observations to `state/calibration_data.jsonl`
+4. **Adjudicate** (if `adjudication/` has files): spawn Opus Adjudicator
+   agents. Merge results back into finds/ files via
+   `python3 scripts/merge_adjudication.py --project-root .`
+5. **Scrub**: `python3 scripts/scrub.py --project-root . --dir finds/`
+6. **Re-extraction routing**: If scrub output contains `normalization_failures`,
    those records have field values that couldn't be auto-fixed. For each
    affected file: create a new handoff in `ready_for_extraction/` with the
    original `pdf_path` and an `extraction_instructions` field listing the
    specific field, bad value, and valid formats. Remove the affected file
-   from `finds/` so it doesn't write bad data. The re-extraction goes
-   through the normal Extractor pipeline with the formatting guidance.
-4. **Write**: `python3 scripts/write_finds.py --project-root . --session-id $SESSION_ID`
-5. **Process**: `python3 scripts/process_agent_output.py --action writer_results --project-root .`
+   from `finds/` so it doesn't write bad data.
+7. **Write**: `python3 scripts/write_finds.py --project-root . --session-id $SESSION_ID`
+   then `python3 scripts/process_agent_output.py --action writer_results --project-root .`
 
 When to run: after every 2-3 Extractor returns, when an Extractor
 returns with none in-flight, or before session end.

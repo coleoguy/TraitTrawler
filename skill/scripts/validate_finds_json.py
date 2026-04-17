@@ -150,6 +150,27 @@ def validate_file(path, config_path=None):
             errors.append(f"{prefix}: 'species' looks like prose "
                           f"({len(species)} chars)")
 
+        # Soft-check: source_context should contain at least one trait value
+        src_ctx = str(rec.get("source_context", "")).strip().lower()
+        if src_ctx and len(src_ctx) > 10:
+            # Check if any non-metadata field value appears in source_context
+            found_grounding = False
+            for key, val in rec.items():
+                if key in REQUIRED_RECORD_KEYS | SOFT_REQUIRED_RECORD_KEYS:
+                    continue
+                if key in ("species", "source_context",
+                           "extraction_reasoning", "notes",
+                           "flag_for_review", "source_type"):
+                    continue
+                sval = str(val or "").strip()
+                if sval and len(sval) >= 1 and sval.lower() in src_ctx:
+                    found_grounding = True
+                    break
+            if not found_grounding:
+                print(f"WARNING: {prefix}: no trait values found in "
+                      f"source_context (possible hallucination)",
+                      file=sys.stderr)
+
     return len(errors) == 0, errors
 
 

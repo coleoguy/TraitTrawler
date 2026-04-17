@@ -62,6 +62,16 @@ return immediately. Do not read the PDF.
 
 Validate: `pdf_path` non-empty, file exists, > 1000 bytes.
 
+**OCR quality check** (after pdf_path validated):
+```bash
+python3 scripts/ocr_quality_check.py --pdf "{pdf_path}"
+```
+- If `"unusable"`: write `extractor_results/{doi_safe}_nodata.json` with
+  `"outcome": "unusable_ocr"`, move handoff to `state/dealt/`, return.
+- If `"degraded"`: switch to vision-based extraction (Read tool on PDF
+  instead of pdfplumber), reduce base confidence by 0.10, add
+  `"ocr_quality": "degraded"` to the finds JSON.
+
 If `pdf_path` missing but `doi`/`title` present, look up the path in
 `results.csv` by matching `doi` or `paper_title` columns.
 
@@ -89,6 +99,9 @@ From handoff metadata or by scanning the PDF:
 
 Table-heavy documents require two-pass extraction (Step 3).
 
+Record your document classification from this step — you will include it
+in the output as `document_type`.
+
 ### Step 3: Read and extract
 
 **Read the PDF**: pdfplumber for normal PDFs, vision for scanned.
@@ -109,12 +122,25 @@ not re-statements or citations) -> appendices/supplementary
 - `extraction_reasoning`: one sentence if ambiguous, blank if clear
 - Empty string for missing fields (not null, not "N/A")
 
-**Confidence scoring**:
+**Confidence scoring** (preliminary — will be overridden by reconciliation):
 - 0.90-1.00: explicit values, methods describe procedure
 - 0.80-0.89: values present, no methods description
 - 0.80-0.85: catalogue or comparative table, clearly stated
 - 0.60-0.65: uncertain per original author
 - <= 0.65: inferred or ambiguous
+
+Note: your confidence score is preliminary. After you return, an Auditor
+agent will independently re-extract the same records from the cited source
+pages without seeing your values. The final `extraction_confidence` is
+derived from agreement between your extraction and the Auditor's:
+- Full field agreement → confidence boosted above your self-assessment
+- Any disagreement → confidence lowered, disputed fields routed to Opus
+- Records the Auditor can't verify → confidence capped at 0.60
+- Records the Auditor finds that you missed → added to the dataset
+
+Do not inflate your own score expecting it to be ratified. The cleanest
+path to a high final confidence is an accurate extraction that an
+independent reader will arrive at the same way.
 
 **Compilation / comparative tables** (check `compilation_tables` config):
 - `"extract_attributed"` (default): `source_type: "compilation"`, cited
@@ -128,6 +154,24 @@ reference column present, Methods does not describe generating this data.
 - n vs 2n: distinguish haploid from diploid. Read Methods for which.
 - Extract only explicitly stated data. Never infer values.
 - Abstract-only papers: return no data.
+
+### Step 3b: Source verification (mandatory)
+
+For each extracted record, verify that every non-empty trait field value
+can be located in the source text on the cited page:
+
+1. Re-read `source_page` from the PDF
+2. For each trait field with a non-empty value:
+   - Confirm the value (or its clear equivalent) appears in the text
+   - If the value cannot be found on the page, either:
+     (a) correct `source_page` to where the value actually appears, or
+     (b) set the field to empty string and add a note to `extraction_reasoning`
+3. For any record where you corrected or cleared a value, reduce
+   `extraction_confidence` by 0.10
+
+This step catches values you may have inferred or hallucinated.
+Do not skip it. The Auditor will independently verify, and disagreements
+on unfounded values waste an Opus adjudication call.
 
 ### Step 4: Self-validate
 
@@ -153,6 +197,8 @@ Do not leave invalid JSON in `finds/`.
   "pdf_source": "unpaywall",
   "extraction_timestamp": "ISO_TIMESTAMP",
   "extraction_mode": "single_pass",
+  "document_type": "table|prose|catalogue|scanned",
+  "extraction_model": "claude-sonnet-4-6",
   "source_query": "from handoff",
   "records": [{
     "species": "Genus epithet",

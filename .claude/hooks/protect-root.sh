@@ -56,7 +56,9 @@ TOP_DIR=$(echo "$REL_PATH" | cut -d'/' -f1)
 case "$TOP_DIR" in
   finds|dealer_results|writer_results|ready_for_extraction|\
   search_results|fetch_failures|lead_files|learning|\
-  state|pdfs|provided_pdfs|scripts|.claude)
+  state|pdfs|provided_pdfs|scripts|.claude|\
+  skill|perfection_finds|audit_manifests|audit_results|\
+  adjudication|adjudication_results)
     exit 0
     ;;
   *)

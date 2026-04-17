@@ -25,21 +25,35 @@ correction, making confidence scores actionable for downstream analysis.
 ## 19b. Calibration data source
 
 Calibration requires paired (predicted_confidence, actual_correctness)
-observations. These come from:
+observations. In v5, these are generated automatically by the inline
+audit pipeline — every paper contributes observations, not just seed
+papers. Sources:
 
-1. **Benchmark papers** (§20): gold-standard records from calibration
-   seed papers where the user verified every extraction
-2. **Audit outcomes** (§15): records that were re-extracted and either
-   confirmed or corrected
-3. **User corrections**: mid-session corrections (§14f) that changed
-   trait field values
+1. **Auditor agreement** (primary): every time the blind Auditor and
+   the Extractor agree on a trait field value, that's one `correct: true`
+   observation tagged against the Extractor's predicted confidence.
+   `reconcile.py` writes these directly to `state/calibration_data.jsonl`.
+2. **Auditor disagreement** (primary): every time they disagree, that's
+   one `correct: false` observation (because at least one was wrong).
+3. **Adjudicator resolutions**: when Opus resolves a dispute, the
+   resolution tells us which agent was right. This provides a
+   higher-quality observation for both.
+4. **User corrections**: mid-session corrections (§14f) that changed
+   trait field values.
+5. **Benchmark papers** (§20, optional): gold-standard seed-paper
+   records the user verified manually.
 
 All calibration data is stored in `state/calibration_data.jsonl`:
 
 ```json
-{"doi": "10.1234/example", "species": "Cicindela campestris", "field": "chromosome_number_2n", "predicted_confidence": 0.88, "correct": true, "source": "benchmark", "session_id": "2026-03-24T14:30:00Z"}
-{"doi": "10.1234/example", "species": "Cicindela campestris", "field": "sex_chr_system", "predicted_confidence": 0.88, "correct": false, "source": "audit_correction", "session_id": "2026-03-25T10:00:00Z"}
+{"doi": "10.1234/example", "species": "Cicindela campestris", "field": "chromosome_number_2n", "predicted_confidence": 0.88, "correct": true, "source": "auditor_agreement", "session_id": "2026-03-24T14:30:00Z"}
+{"doi": "10.1234/example", "species": "Cicindela campestris", "field": "sex_chr_system", "predicted_confidence": 0.88, "correct": false, "source": "auditor_disagreement", "session_id": "2026-03-25T10:00:00Z"}
 ```
+
+Because every paper audited adds N trait-field observations (typically
+3-6 per record), calibration data accumulates fast — typically 100+
+observations per 20-paper session. The model becomes usable within a
+few sessions and never requires manual verification to improve.
 
 ## 19c. Calibration method: isotonic regression
 

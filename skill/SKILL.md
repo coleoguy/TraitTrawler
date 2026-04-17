@@ -49,11 +49,17 @@ dispatch.py recommendations without deliberation.
 | **Searcher** | Search APIs, triage papers |
 | **Fetcher** | Acquire PDFs (API or browser), write handoff files |
 | **Extractor** | Extract structured records from papers |
-| **Auditor** | Verify extraction quality before CSV write |
+| **Auditor** | Blind re-extraction from cited source pages |
+| **Adjudicator** (opus) | Resolve Extractor/Auditor disputes |
 
-**Data flow**: search --> fetch --> extract --> audit --> scrub --> write --> QC
+**Data flow**: search → fetch → extract → audit (blind) → reconcile →
+adjudicate (disputes only) → scrub → write → QC
+
+Confidence is derived from agreement between Extractor and Auditor, not
+self-assessed. Disputed fields are escalated to Opus for adjudication.
 
 **Folder-based IPC**: `search_results/`, `ready_for_extraction/`, `finds/`,
+`audit_manifests/`, `audit_results/`, `adjudication/`, `adjudication_results/`,
 `lead_files/`, `fetch_failures/`, `learning/`
 
 **Skill directory**: `${CLAUDE_SKILL_DIR}`
@@ -115,7 +121,7 @@ python3 scripts/dispatch.py recommend --compact --project-root .
 | `spawn_api_fetcher` | API Fetcher agent (background) |
 | `spawn_browser_fetcher` | Browser Fetcher agent (background) |
 | `spawn_extractors` | N Extractor agents (background), one per `handoff_file` |
-| `verify_and_write` | Auditor → `scrub.py` → re-extraction routing (if normalization failures) → `write_finds.py` → `inline_qc.py` |
+| `verify_and_write` | build_audit_manifest → Auditor (blind) → `reconcile.py` → Adjudicator (opus, disputes only) → merge_adjudication → `scrub.py` → re-extraction routing → `write_finds.py` → `inline_qc.py` |
 | `info` | Print the reason string |
 
 Print one line: `dispatch: 2 extractors + verify+write | q=30 rdy=5 finds=2`
@@ -133,7 +139,7 @@ python3 scripts/dispatch.py cleanup-stale --project-root .
 - **API Fetcher**: max 1 (background)
 - **Browser Fetcher**: max 1 (background)
 - **Extractor**: up to `max_concurrent_extractors` (background)
-- **verify_and_write**: foreground (blocking) -- Auditor first, then scrub.py, write_finds.py, inline_qc.py
+- **verify_and_write**: foreground (blocking) -- build manifests, spawn Auditor(s), reconcile.py, spawn Adjudicator(s) if disputes, merge_adjudication.py, scrub.py, write_finds.py, inline_qc.py
 
 API + Browser Fetchers can run concurrently with each other.
 
@@ -192,9 +198,116 @@ When session target reached or user stops:
 | `status` | `dispatch.py status` -- print pipeline state |
 | `review` | Show next item from `human_review_queue.csv` |
 | `explore [question]` | Query data with python one-liners (never read results.csv) |
+| `perfection pass` / `re-verify` | Re-verify suspect records (see §4b) |
+| `re-verify [criteria]` | Re-verify with specific criteria (e.g., `re-verify low confidence`) |
+| `re-verify doi 10.1234/...` | Re-verify all records for a specific DOI |
 | `help` | Print command list |
 
 Do NOT pause to solicit commands. Keep the loop running.
+
+---
+
+## 4b. Perfection Pass (Re-Verify Existing Records)
+
+When user says "perfection pass", "re-verify", "clean up the data",
+or "get results to publication quality":
+
+### Phase 1: Select
+
+```bash
+PERF_SESSION="perfection_$(date -u +%Y%m%dT%H%M%S)"
+python3 scripts/perfection_select.py --project-root . \
+    --session-id "$PERF_SESSION" \
+    --criteria low_confidence,unverified,unaudited \
+    --confidence-threshold 0.70
+```
+
+Print: `perfection: {N} records selected across {M} DOIs ({K} skipped, no PDF)`
+
+If N == 0, tell the user no records match the criteria.
+If N > 100, ask: "Found {N} records. Process all, or set --max-records?"
+
+Map user criteria phrases: "low confidence" → `low_confidence`,
+"unverified" → `unverified,unaudited`, "flagged" → `flagged`,
+"conflicts" → `conflicts`, "old sessions" → `stale` with `--session-before`.
+
+### Phase 2: Verify (reuses existing verify_and_write pipeline)
+
+For each file in `perfection_finds/`:
+
+```bash
+# 2a. Build audit manifest (strips trait values for blind re-extraction)
+python3 scripts/build_audit_manifest.py --project-root . \
+    --finds-file perfection_finds/FILE.json
+```
+
+Spawn Auditor agent (**foreground**) for each manifest:
+
+```
+Agent(model=sonnet, prompt="You are a TraitTrawler Auditor agent.
+Read your full instructions from ${CLAUDE_SKILL_DIR}/agents/auditor.md.
+PDF: {pdf_path}
+MANIFEST: audit_manifests/{manifest_file}
+PROJECT ROOT: {cwd}")
+```
+
+After Auditor returns:
+
+```bash
+# 2c. Reconcile (diffs original vs blind re-extraction)
+python3 scripts/reconcile.py --project-root . \
+    --finds-file perfection_finds/FILE.json \
+    --session-id "$PERF_SESSION"
+```
+
+If reconcile reports disputes (check `adjudication/*.json`):
+
+Spawn Adjudicator agent (**foreground**, Opus):
+
+```
+Agent(model=opus, prompt="You are a TraitTrawler Adjudicator agent.
+Read your full instructions from ${CLAUDE_SKILL_DIR}/agents/adjudicator.md.
+DISPUTES FILE: adjudication/FILE.json
+PROJECT ROOT: {cwd}")
+```
+
+```bash
+# 2e. Merge adjudication results
+python3 scripts/merge_adjudication.py --project-root . \
+    --finds-dir perfection_finds
+
+# 2f. Scrub
+python3 scripts/scrub.py --project-root . --dir perfection_finds/
+```
+
+### Phase 3: Merge
+
+```bash
+python3 scripts/perfection_merge.py --project-root . \
+    --session-id "$PERF_SESSION"
+```
+
+### Phase 4: Report
+
+Print:
+```
+Perfection Pass Complete
+  Records examined  : 45
+  Confirmed         : 28 (62%)
+  Corrected         : 8 (18%)
+  Human review      : 3 (7%)
+  Skipped (no PDF)  : 6 (13%)
+  Confidence before : 0.62 avg
+  Confidence after  : 0.78 avg
+```
+
+### Resumability
+
+If interrupted, read `state/perfection_manifest.json`:
+- `status: "selected"` → start Phase 2 from the beginning
+- `status: "verifying"` → check which perfection_finds/ files still need
+  audit_manifests, resume from there
+- `status: "merged"` → pass is complete, nothing to do
 
 ---
 
@@ -228,11 +341,17 @@ When searches are exhausted but queue/extraction work remains, keep running.
 | `scripts/session_manager.py` | Session start/end (`start` / `end`) |
 | `scripts/dispatch.py` | Dispatch state machine (`checkpoint` / `recommend` / `status` / `cleanup-stale` / `retriage`) |
 | `scripts/process_agent_output.py` | Process agent output folders into state updates |
+| `scripts/build_audit_manifest.py` | Strip trait values from finds/ files for blind audit |
+| `scripts/reconcile.py` | Diff Extractor vs Auditor, compute agreement-based confidence |
+| `scripts/merge_adjudication.py` | Merge Adjudicator resolutions into finds/ files |
 | `scripts/write_finds.py` | Validate, taxonomy-resolve, calibrate, write to CSV |
 | `scripts/csv_writer.py` | Schema-enforced CSV writer (library) |
 | `scripts/calibration.py` | Isotonic regression confidence calibration |
 | `scripts/benchmark.py` | Per-field precision/recall/F1 |
 | `scripts/pdf_utils.py` | PDF naming/organization (`check`, `bootstrap`) |
+| `scripts/ocr_quality_check.py` | PDF text quality assessment (good/degraded/unusable) |
+| `scripts/perfection_select.py` | Select suspect CSV records for re-verification |
+| `scripts/perfection_merge.py` | Merge perfection pass corrections back into CSV |
 | `scripts/route_provided_pdfs.py` | Route user-supplied PDFs into pipeline |
 | `scripts/statistical_qc.py` | Chao1, outlier detection, QC plots |
 | `scripts/taxonomy_resolver.py` | Batch GBIF taxonomy lookups |

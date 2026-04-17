@@ -299,8 +299,12 @@ def apply_taxonomy(record, resolution):
     return resolved
 
 
-def apply_calibration(record, calibration_model):
-    """Apply isotonic calibration to extraction_confidence."""
+def apply_calibration(record, calibration_model, document_type=None):
+    """Apply isotonic calibration to extraction_confidence.
+
+    Checks per-source-type model first (if document_type known),
+    falls back to global model.
+    """
     if not calibration_model:
         return
     if calibration_model.get("status") != "calibrated":
@@ -314,7 +318,13 @@ def apply_calibration(record, calibration_model):
     except (ValueError, TypeError):
         return
 
+    # Try per-source-type model first
     global_model = calibration_model.get("global_model", {})
+    if document_type and document_type != "unknown":
+        type_model = (calibration_model.get("per_source_type", {})
+                      .get(document_type, {}).get("model"))
+        if type_model:
+            global_model = type_model
     method = global_model.get("method", "")
 
     if method == "isotonic_regression":
@@ -377,6 +387,16 @@ def process_finds(project_root, session_id):
     # Load config
     config = load_config(project_root)
     do_taxonomy = config.get("taxonomy_resolution", True)
+
+    # Load pipeline state for reproducibility metadata
+    ps_path = os.path.join(project_root, "state", "pipeline_state.json")
+    ps_data = {}
+    if os.path.exists(ps_path):
+        try:
+            with open(ps_path, "r", encoding="utf-8") as f:
+                ps_data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
 
     # Load calibration model if available
     cal_path = os.path.join(project_root, "state", "calibration_model.json")
@@ -470,22 +490,34 @@ def process_finds(project_root, session_id):
                     if sp and sp in tax_lookup:
                         total_taxonomy += apply_taxonomy(rec, tax_lookup[sp])
 
-        # Step 4: Confidence calibration
+        # Step 4: Confidence calibration (source-type-aware)
+        doc_type = data.get("document_type", "unknown")
         if calibration_model:
             for rec in records:
-                apply_calibration(rec, calibration_model)
+                apply_calibration(rec, calibration_model,
+                                  document_type=doc_type)
 
         # Step 5: Strip internal fields
         for rec in records:
             for field in INTERNAL_FIELDS:
                 rec.pop(field, None)
 
-        # Step 6: Add session metadata
+        # Step 6: Add session metadata + reproducibility fields
         processed_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         for rec in records:
             if session_id:
                 rec["session_id"] = session_id
             rec["processed_date"] = processed_date
+            # Reproducibility metadata from pipeline_state.json
+            if ps_data:
+                rec.setdefault("skill_version", ps_data.get(
+                    "skill_version", ""))
+                rec.setdefault("guide_md_hash", ps_data.get(
+                    "guide_md_hash", ""))
+            # Document-level metadata from finds JSON
+            rec.setdefault("document_type", doc_type)
+            rec.setdefault("extraction_model", data.get(
+                "extraction_model", ""))
             # Carry forward paper-level fields
             if not rec.get("doi"):
                 rec["doi"] = data.get("doi", "")

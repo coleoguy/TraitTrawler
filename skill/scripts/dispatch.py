@@ -529,6 +529,19 @@ def recommend(project_root, searcher_exhausted=None,
     target_reached = (session_target is not None
                       and papers_processed >= int(session_target))
 
+    # Log the dispatch decision to run_log.jsonl
+    append_jsonl(_log_path(project_root), {
+        "event": "dispatch_recommendation",
+        "timestamp": now_iso(),
+        "actions": [a["action"] for a in actions],
+        "session_complete": all_exhausted or target_reached,
+        "papers_processed": papers_processed,
+        "queue": status["queue"],
+        "ready": status["ready"],
+        "finds": status["finds"],
+        "extractors_active": status["extractors_active"],
+    })
+
     return {
         "actions": actions,
         "session_complete": all_exhausted or target_reached,

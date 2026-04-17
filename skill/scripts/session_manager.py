@@ -904,7 +904,20 @@ def cmd_start(args):
         "session_counts": {},
     })
 
-    # 13. Log session_start to run_log.jsonl
+    # 13. Store reproducibility metadata in pipeline_state.json
+    guide_path = os.path.join(root, "guide.md")
+    full_guide_hash = ""
+    if os.path.exists(guide_path):
+        with open(guide_path, "rb") as fh:
+            full_guide_hash = hashlib.md5(fh.read()).hexdigest()[:12]
+    ps_path = os.path.join(root, "state", "pipeline_state.json")
+    ps = safe_read_json(ps_path, default={})
+    ps["skill_version"] = SKILL_VERSION
+    ps["guide_md_hash"] = full_guide_hash
+    ps["session_id"] = args.session_id
+    safe_write_json(ps_path, ps)
+
+    # 14. Log session_start to run_log.jsonl
     append_jsonl(os.path.join(root, "state", "run_log.jsonl"), {
         "event": "session_start",
         "session_id": args.session_id,
@@ -915,6 +928,8 @@ def cmd_start(args):
         "queue_depth": queue_info.get("total", 0),
         "guide_md5": guide_md5,
         "config_md5": config_md5,
+        "skill_version": SKILL_VERSION,
+        "guide_md_hash": full_guide_hash,
     })
 
     print(json.dumps(result, indent=2))

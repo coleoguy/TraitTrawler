@@ -28,6 +28,7 @@ def load_calibration_data(project_root):
     predictions = []
     actuals = []
     fields = []
+    document_types = []
     with open(path) as f:
         for line in f:
             line = line.strip()
@@ -38,8 +39,9 @@ def load_calibration_data(project_root):
                 predictions.append(float(entry["predicted_confidence"]))
                 actuals.append(1.0 if entry.get("correct", False) else 0.0)
                 fields.append(entry.get("field", "unknown"))
+                document_types.append(entry.get("document_type", "unknown"))
 
-    return predictions, actuals, fields
+    return predictions, actuals, fields, document_types
 
 
 def compute_ece(predictions, actuals, n_bins=10):
@@ -125,6 +127,28 @@ def fit_per_field(predictions, actuals, fields, min_observations=30):
     return per_field
 
 
+def fit_per_source_type(predictions, actuals, document_types,
+                        min_observations=30):
+    """Fit calibration models per document type (table/prose/catalogue/scanned)."""
+    unique_types = set(document_types)
+    per_type = {}
+    for dtype in unique_types:
+        if dtype == "unknown":
+            continue
+        mask = [i for i, dt in enumerate(document_types) if dt == dtype]
+        if len(mask) >= min_observations:
+            type_preds = [predictions[i] for i in mask]
+            type_acts = [actuals[i] for i in mask]
+            ece, _, _, _ = compute_ece(type_preds, type_acts)
+            model = fit_isotonic_model(type_preds, type_acts)
+            per_type[dtype] = {
+                "n_observations": len(mask),
+                "ece": round(ece, 4),
+                "model": model,
+            }
+    return per_type
+
+
 def generate_reliability_plot(bin_centers, bin_accuracies, ece, output_path):
     """Generate reliability diagram as PNG."""
     try:
@@ -167,7 +191,8 @@ def main():
     args = parser.parse_args()
 
     project_root = args.project_root
-    predictions, actuals, fields = load_calibration_data(project_root)
+    predictions, actuals, fields, document_types = load_calibration_data(
+        project_root)
 
     if len(predictions) < 10:
         print(f"Insufficient calibration data ({len(predictions)} observations, need >= 10).")
@@ -202,6 +227,9 @@ def main():
     # Fit per-field models
     per_field = fit_per_field(predictions, actuals, fields)
 
+    # Fit per-source-type models
+    per_source_type = fit_per_source_type(predictions, actuals, document_types)
+
     # Save calibration model
     calibration = {
         "n_observations": len(predictions),
@@ -211,6 +239,7 @@ def main():
         "brier_score": round(brier, 4),
         "global_model": global_model,
         "per_field": per_field,
+        "per_source_type": per_source_type,
         "date": str(np.datetime64("today")),
     }
 

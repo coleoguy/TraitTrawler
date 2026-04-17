@@ -6,6 +6,34 @@ Load this file when the user triggers: "run QC", "audit the database",
 
 ---
 
+## Inline Audit (Every Session)
+
+Every paper goes through inline audit as part of the normal pipeline.
+This is NOT the audit mode described below — it's mandatory quality
+control that runs automatically:
+
+1. **Extractor** reads the PDF and produces records with preliminary
+   confidence scores (self-assessed heuristic).
+2. **Auditor** receives a manifest of `(species, source_page)` pairs
+   but NOT the trait values. It independently re-extracts from the
+   cited pages.
+3. **`reconcile.py`** mechanically diffs Extractor vs Auditor per
+   record per trait field, assigning confidence based on agreement:
+   - Full field agreement → confidence boosted above self-assessment
+   - 1 disagreement with ≥3 agreements → `partial_agreement`, disputed
+     field routed to Adjudicator
+   - Multiple disagreements → `disputed`, all conflicting fields routed
+   - Auditor could not locate record → capped at 0.60, flagged
+   - Auditor found record Extractor missed → added with `auditor_added`
+4. **Adjudicator** (Opus) resolves disputes by reading the cited page
+   and picking the correct value with reasoning.
+
+The audit mode described below (on-demand) is a separate, retrospective
+pass over existing records — used to re-check old data against newer
+guide.md, catch statistical outliers, and fix systematic errors.
+
+---
+
 ## Audit Queue Construction
 
 Build the audit queue with three priority tiers:
