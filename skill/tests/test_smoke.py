@@ -336,6 +336,205 @@ def test_bootstrap_ingests_curated_csv(tmp_root: Path) -> None:
         assert r3.returncode == 0, f"derived hook {p.name} failed sandbox: {r3.stderr}"
 
 
+def test_messy_migration(tmp_root: Path) -> None:
+    """End-to-end messy migration: a source folder with multiple CSVs,
+    auxiliary files, weird column names, and PDFs whose filenames don't
+    exactly match the CSV's pdf_filename column.
+
+    Exercises: migration_preflight.py (classification + fuzzy column
+    mapping), pair_pdfs.py (fuzzy pairing across 4 strategies),
+    bootstrap.py (--dry-run + --column-map + --suspect-csv +
+    --papers-needed), migration_report.md generation.
+    """
+    # 1. Set up project
+    run([sys.executable, str(SCRIPTS / "setup_project.py"),
+         "--root", str(tmp_root),
+         "--trait", "arbitrary trait for testing",
+         "--taxa", "any"])
+
+    # 2. Build a messy source folder
+    source = tmp_root.parent / "messy_source"
+    source.mkdir(exist_ok=True)
+    pdfs_dir = source / "pdfs"
+    pdfs_dir.mkdir(exist_ok=True)
+
+    # 2a. Main dataset with weird column names (not pre-aliased)
+    main_csv = source / "myproj_dataset_2024.csv"
+    main_csv.write_text(
+        "Sp_Name,DOI,Ref,MyValue,Notes,pdf_file\n"
+        '"Alpha beta",10.1/paper-a,Smith 2020,42,"field notes",smith2020.pdf\n'
+        '"Gamma delta",10.1/paper-b,Jones 2019,18,,jones_et_al_2019.pdf\n'
+        '"Epsilon zeta",,Brown 2021,33,"compilation entry",\n'
+        '"Eta theta",10.1/paper-d,Lee 2018,27,,lee-2018-a.pdf\n'
+    )
+
+    # 2b. "Suspect records" auxiliary
+    suspect_csv = source / "suspect records.csv"
+    suspect_csv.write_text(
+        "Sp_Name,MyValue,reason\n"
+        '"Iota kappa",99,"2n seems high for this genus"\n'
+        '"Lambda mu",0,"zero is implausible"\n'
+    )
+
+    # 2c. "Papers needed" auxiliary (newline-delimited DOIs)
+    papers_needed = source / "papers_needed.txt"
+    papers_needed.write_text(
+        "# List of papers to fetch\n"
+        "10.1/needed-a\n"
+        "10.1/needed-b\n"
+        "A paper titled without a DOI\n"
+    )
+
+    # 2d. PDFs with various naming conventions. Each file gets unique
+    # content so SHA256 hashes differ — otherwise content-dedup would
+    # collapse them and we could not detect orphans.
+    for name in [
+        "smith2020.pdf",              # EXACT_STEM match
+        "jones_et_al_2019.pdf",       # EXACT_STEM
+        "10.1-paper-d_lee-2018.pdf",  # DOI_IN_NAME
+        "random_orphan.pdf",          # Orphan
+        "another_orphan.pdf",         # Orphan
+    ]:
+        (pdfs_dir / name).write_bytes(
+            b"%PDF-1.4\n%fake for test " + name.encode() + b"\n%%EOF\n"
+        )
+
+    # 3. Run migration_preflight.py WITHOUT user aliases
+    r = run([sys.executable, str(SCRIPTS / "migration_preflight.py"),
+             "--root", str(tmp_root),
+             "--source", str(source)])
+    summary = json.loads(r.stdout)
+    assert summary["pdf_count"] == 5, summary
+    # Core aliases should map Sp_Name -> canonical_species, DOI -> doi, etc.
+    plan_json = json.loads(
+        (tmp_root / "state" / "bootstrap" / "migration_plan.json").read_text()
+    )
+    main_file = plan_json["main_dataset"]
+    mapping = main_file["proposed_mapping"]
+    assert mapping.get("Sp_Name") == "canonical_species", mapping
+    assert mapping.get("DOI") == "doi", mapping
+    assert mapping.get("pdf_file") == "pdf_filename", mapping
+    # Ref could map to original_citation (fuzzy) OR pass through
+    # Trait-specific columns like MyValue should NOT auto-map (core
+    # skill is trait-agnostic; MyValue has to come via user aliases
+    # or dialogue)
+    assert "MyValue" in main_file.get("unmapped_headers", []), \
+        "MyValue should be unmapped in the core skill"
+    # Classification: auxiliary files
+    roles = plan_json["roles"]
+    assert any("suspect records.csv" in p for p in roles.get("review_queue", [])), roles
+    assert any("papers_needed.txt" in p for p in roles.get("papers_needed", [])), roles
+    assert any("myproj_dataset_2024.csv" in p for p in roles.get("main_dataset", [])), roles
+
+    # 4. Run migration_preflight.py WITH user-supplied aliases
+    user_aliases = tmp_root / "column_aliases.json"
+    user_aliases.write_text(json.dumps({
+        "my_trait_value": ["MyValue", "value_num"],
+    }))
+    r2 = run([sys.executable, str(SCRIPTS / "migration_preflight.py"),
+              "--root", str(tmp_root),
+              "--source", str(source),
+              "--user-aliases", str(user_aliases)])
+    plan2 = json.loads(
+        (tmp_root / "state" / "bootstrap" / "migration_plan.json").read_text()
+    )
+    main2 = plan2["main_dataset"]
+    assert main2["proposed_mapping"].get("MyValue") == "my_trait_value", \
+        f"user alias should map MyValue: {main2['proposed_mapping']}"
+    assert "MyValue" not in main2.get("unmapped_headers", [])
+
+    # 5. Build column_map.json (what the subagent would write after dialogue)
+    col_map = tmp_root / "state" / "bootstrap" / "column_map.json"
+    col_map.write_text(json.dumps({
+        "Sp_Name": "canonical_species",
+        "DOI": "doi",
+        "Ref": "original_citation",
+        "MyValue": "my_trait_value",
+        "pdf_file": "pdf_filename",
+    }))
+
+    # 6. Run pair_pdfs.py
+    r3 = run([sys.executable, str(SCRIPTS / "pair_pdfs.py"),
+              "--root", str(tmp_root),
+              "--csv", str(main_csv),
+              "--pdfs", str(pdfs_dir),
+              "--column-map", str(col_map),
+              "--no-title-peek"])
+    pair_summary = json.loads(r3.stdout)
+    assert pair_summary["rows"] == 4, pair_summary
+    # smith2020.pdf and jones_et_al_2019.pdf match by EXACT_STEM;
+    # 10.1-paper-d_lee-2018.pdf matches by DOI_IN_NAME
+    strat = pair_summary["strategy_counts"]
+    assert strat.get("EXACT_STEM", 0) >= 2, strat
+    assert pair_summary["paired_pdfs_unique"] >= 2, pair_summary
+    # Orphans: random_orphan.pdf, another_orphan.pdf
+    assert pair_summary["orphan_pdf_count"] >= 2, pair_summary
+
+    # 7. bootstrap.py --dry-run
+    r4 = run([sys.executable, str(SCRIPTS / "bootstrap.py"),
+              "--root", str(tmp_root),
+              "--csv", str(main_csv),
+              "--pdfs", str(pdfs_dir),
+              "--pairing-report", str(tmp_root / "state" / "bootstrap" / "pairing_report.json"),
+              "--column-map", str(col_map),
+              "--suspect-csv", str(suspect_csv),
+              "--papers-needed", str(papers_needed),
+              "--dry-run",
+              "--skip-gbif"])
+    boot_sum = json.loads(r4.stdout)
+    assert boot_sum["dry_run"] is True, boot_sum
+    assert boot_sum["imported"] == 4, boot_sum
+    assert boot_sum["paired_to_pdf"] >= 2, boot_sum
+    assert boot_sum["orphan_pdfs"] >= 2, boot_sum
+    assert boot_sum["suspect_records_added"] == 2, boot_sum
+    assert boot_sum["papers_needed_added"] == 3, boot_sum
+
+    # Migration report exists
+    report = (tmp_root / "state" / "bootstrap" / "migration_report.md").read_text()
+    assert "Migration Report" in report
+    assert "DRY RUN" in report
+    assert "EXACT_STEM" in report
+
+    # 8. Ledger should be EMPTY after dry-run (key correctness check)
+    ledger_size = (tmp_root / "state" / "ledger.jsonl").stat().st_size
+    assert ledger_size == 0, "dry-run must not write ledger entries"
+
+    # 9. Real commit
+    r5 = run([sys.executable, str(SCRIPTS / "bootstrap.py"),
+              "--root", str(tmp_root),
+              "--csv", str(main_csv),
+              "--pdfs", str(pdfs_dir),
+              "--pairing-report", str(tmp_root / "state" / "bootstrap" / "pairing_report.json"),
+              "--column-map", str(col_map),
+              "--suspect-csv", str(suspect_csv),
+              "--papers-needed", str(papers_needed),
+              "--skip-gbif"])
+    boot_sum2 = json.loads(r5.stdout)
+    assert boot_sum2["dry_run"] is False, boot_sum2
+    # Ledger should now have 4 entries
+    ledger_lines = (tmp_root / "state" / "ledger.jsonl").read_text().splitlines()
+    assert len(ledger_lines) == 4, f"expected 4 ledger lines, got {len(ledger_lines)}"
+    for l in ledger_lines:
+        entry = json.loads(l)
+        assert entry["source_type"] == "human_curated_bootstrap"
+        assert entry["dwc_identificationVerificationStatus"] == "ValidatedByHuman"
+
+    # Review queue should have 2 suspect items with pending state
+    rq_lines = (tmp_root / "state" / "review_queue.jsonl").read_text().splitlines()
+    assert len(rq_lines) == 2
+    for l in rq_lines:
+        item = json.loads(l)
+        assert item["resolution_state"] == "pending"
+        assert item["source"] == "bootstrap_suspect_csv"
+
+    # candidates.jsonl should have 3 papers-needed entries
+    cand_lines = (tmp_root / "candidates.jsonl").read_text().splitlines()
+    cands = [json.loads(l) for l in cand_lines if l.strip()]
+    assert len(cands) == 3
+    for c in cands:
+        assert c["source_api"] == "bootstrap_papers_needed"
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         test_setup_and_project_hooks(Path(d) / "proj_hooks")
@@ -352,6 +551,9 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         test_bootstrap_ingests_curated_csv(Path(d) / "proj_boot")
         print("OK: bootstrap ingests curated CSV + derives hooks")
+    with tempfile.TemporaryDirectory() as d:
+        test_messy_migration(Path(d) / "proj_messy")
+        print("OK: messy migration (preflight + fuzzy pairing + aux files + dry-run)")
     print("\nAll smoke tests passed.")
     return 0
 

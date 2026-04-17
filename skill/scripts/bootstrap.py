@@ -36,6 +36,7 @@ import csv
 import hashlib
 import json
 import random
+import re
 import sqlite3
 import sys
 from collections import Counter, defaultdict
@@ -156,6 +157,233 @@ def index_pdf_dir(pdf_dir: Path | None) -> dict[str, str]:
 
 
 # ------------------------------------------------------------------
+# Auxiliary-file routing: suspect records + papers needed
+# ------------------------------------------------------------------
+
+
+def _route_suspect_csv(path: Path, root: Path, column_map: dict[str, str],
+                       delimiter: str, encoding: str, dry_run: bool) -> int:
+    """Load a 'suspect records' CSV into state/review_queue.jsonl.
+
+    Each row becomes a pending review-queue item with resolution_state
+    pending so phase 6 can work through them later.
+    """
+    queue_path = root / "state" / "review_queue.jsonl"
+    import uuid as _uuid
+    n = 0
+    mode = "a" if queue_path.exists() else "w"
+    if dry_run:
+        # Count rows without writing
+        with path.open("r", encoding=encoding, errors="replace", newline="") as f:
+            reader = csv.DictReader(f, delimiter=delimiter)
+            return sum(1 for _ in reader)
+    with path.open("r", encoding=encoding, errors="replace", newline="") as f, \
+         queue_path.open(mode) as q:
+        reader = csv.DictReader(f, delimiter=delimiter)
+        for raw in reader:
+            if column_map:
+                for k, v in list(raw.items()):
+                    if k in column_map:
+                        raw[column_map[k]] = v
+            item = {
+                "review_id": f"rv_boot_{_uuid.uuid4().hex[:10]}",
+                "created_utc": iso(),
+                "source": "bootstrap_suspect_csv",
+                "source_path": str(path),
+                "row": raw,
+                "failure_reasons": [raw.get("reason") or "flagged by curator"],
+                "verbatim_quote": raw.get("verbatim_quote") or raw.get("quote"),
+                "page": raw.get("page"),
+                "sha256": raw.get("sha256"),
+                "resolution_state": "pending",
+                "resolution": None,
+                "resolved_by": None,
+                "resolved_utc": None,
+            }
+            q.write(json.dumps(item) + "\n")
+            n += 1
+    return n
+
+
+def _route_papers_needed(path: Path, root: Path, dry_run: bool) -> int:
+    """Parse a 'papers needed' list (CSV, .bib, .ris, or newline-delimited)
+    and append entries to candidates.jsonl.
+    """
+    candidates_path = root / "candidates.jsonl"
+    import uuid as _uuid
+    ext = path.suffix.lower()
+    records: list[dict] = []
+
+    if ext in (".csv", ".tsv", ".tab"):
+        # Treat as CSV; look for doi / title / year / author columns
+        try:
+            from migration_preflight import sniff_csv as _sniff_csv  # type: ignore
+            sniff = _sniff_csv(path)
+            delimiter = sniff["delimiter"]
+            encoding = sniff["encoding"]
+        except Exception:
+            delimiter = ","
+            encoding = "utf-8"
+        with path.open("r", encoding=encoding, errors="replace", newline="") as f:
+            reader = csv.DictReader(f, delimiter=delimiter)
+            for raw in reader:
+                records.append({
+                    "doi": (raw.get("doi") or raw.get("DOI") or "").strip() or None,
+                    "title": (raw.get("title") or raw.get("paper_title") or "").strip() or None,
+                    "first_author": (raw.get("first_author") or raw.get("author") or "").strip() or None,
+                    "year": raw.get("year") or None,
+                })
+    elif ext in (".bib", ".ris"):
+        # Extract DOI and title lines crudely
+        text = path.read_text(errors="replace")
+        rec: dict[str, str] = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("%"):
+                if rec:
+                    records.append(dict(rec))
+                    rec = {}
+                continue
+            # BibTeX-ish
+            m = re.match(r"^(\w+)\s*=\s*\{?([^}]*)\}?,?$", line)
+            if m:
+                key = m.group(1).lower()
+                val = m.group(2).strip("{},\"")
+                if key in ("doi", "title", "author", "year"):
+                    rec[key] = val
+            # RIS
+            m2 = re.match(r"^([A-Z]{2})\s*-\s*(.+)$", line)
+            if m2:
+                k2, v2 = m2.group(1), m2.group(2)
+                if k2 == "DO":
+                    rec["doi"] = v2
+                elif k2 in ("TI", "T1"):
+                    rec["title"] = v2
+                elif k2 == "AU":
+                    rec.setdefault("first_author", v2)
+                elif k2 == "PY":
+                    rec["year"] = v2
+        if rec:
+            records.append(dict(rec))
+    else:
+        # Newline-delimited — one DOI or title per line
+        for line in path.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if re.match(r"^10\.\d{4,}/", line):
+                records.append({"doi": line, "title": None})
+            else:
+                records.append({"doi": None, "title": line})
+
+    if dry_run:
+        return len(records)
+
+    n = 0
+    with candidates_path.open("a") as f:
+        for rec in records:
+            cand = {
+                "candidate_id": f"cand_boot_{_uuid.uuid4().hex[:10]}",
+                "source_api": "bootstrap_papers_needed",
+                "doi": rec.get("doi"),
+                "title": rec.get("title"),
+                "first_author": rec.get("first_author"),
+                "year": rec.get("year"),
+                "triage_priority": 0.8,
+                "phase": "bootstrap",
+                "fetch_hint": "doi" if rec.get("doi") else "title",
+                "imported_utc": iso(),
+            }
+            f.write(json.dumps(cand) + "\n")
+            n += 1
+    return n
+
+
+# ------------------------------------------------------------------
+# Migration report
+# ------------------------------------------------------------------
+
+
+def _render_migration_report(*, root: Path, csv_path: Path,
+                              imported: list[dict], stats: Counter,
+                              taxonomy_counter: Counter,
+                              pairing_strategy_counter: Counter,
+                              orphan_shas: list[str],
+                              suspect_imported: int,
+                              papers_needed_added: int,
+                              dry_run: bool) -> str:
+    paired = sum(1 for r in imported if r.get("sha256"))
+    unpaired = len(imported) - paired
+    lines = [
+        f"# Migration Report {'(DRY RUN)' if dry_run else ''}",
+        "",
+        f"- Source CSV: `{csv_path}`",
+        f"- Project root: `{root}`",
+        f"- Mode: {'dry-run (no ledger writes)' if dry_run else 'committed'}",
+        "",
+        "## Rows",
+        f"- Imported: **{len(imported)}**",
+        f"- Rejected (no species): {stats.get('rejected_no_species', 0)}",
+        f"- Rejected (unresolved GBIF in --strict): {stats.get('rejected_unresolved_species', 0)}",
+        f"- Conflicts (duplicate composite key in input): {stats.get('conflicts', 0)}",
+        "",
+        "## Taxonomy",
+    ]
+    for status, n in taxonomy_counter.most_common():
+        lines.append(f"- {status}: {n}")
+
+    lines += [
+        "",
+        "## PDF Pairing",
+        f"- Rows paired to a PDF: **{paired}**",
+        f"- Rows without a PDF: **{unpaired}**",
+        f"- Orphan PDFs (on disk but not paired to any row): **{len(orphan_shas)}**",
+        "",
+        "### Pairing strategies used",
+    ]
+    for strat, n in pairing_strategy_counter.most_common():
+        lines.append(f"- {strat}: {n}")
+
+    lines += [
+        "",
+        "## Auxiliary files",
+        f"- Suspect-records rows loaded into review queue: **{suspect_imported}**",
+        f"- Papers-needed entries added to candidates.jsonl: **{papers_needed_added}**",
+        "",
+        "## What you should do next",
+    ]
+    if unpaired > 0:
+        lines.append(
+            f"- {unpaired} rows have no PDF linked. They are still in the "
+            f"ledger as ValidatedByHuman ground truth, but extractor cannot "
+            f"verify grounding. Decide: supply PDFs via `papers_needed` to "
+            f"fetch them, or accept the rows as compilation-style records."
+        )
+    if orphan_shas:
+        lines.append(
+            f"- {len(orphan_shas)} PDFs exist on disk but did not pair to "
+            f"any row. Review `state/bootstrap/pairing_report.json`'s "
+            f"`orphan_pdfs_sample` list; these may be papers you fetched "
+            f"but did not yet curate, or papers that should have matched "
+            f"but did not (typos, aliases)."
+        )
+    if taxonomy_counter.get("fuzzy_matched", 0) > 0:
+        lines.append(
+            f"- {taxonomy_counter['fuzzy_matched']} species names were "
+            f"fuzzy-matched by GBIF. Spot-check `state/bootstrap/imported.jsonl` "
+            f"for any you disagree with and edit the canonical_species field."
+        )
+    if stats.get("conflicts", 0) > 0:
+        lines.append(
+            f"- {stats['conflicts']} rows had duplicate (doi, species, trait, value) "
+            f"composite keys. Review `state/bootstrap/conflicts.jsonl` and "
+            f"merge or delete as appropriate."
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------
 
@@ -170,6 +398,21 @@ def main() -> int:
     ap.add_argument("--strict", action="store_true")
     ap.add_argument("--skip-gbif", action="store_true",
                     help="Skip GBIF lookups (faster for testing).")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="Produce reports but do not write ledger entries, "
+                         "exemplars, or manifest rows.")
+    ap.add_argument("--column-map", type=Path, default=None,
+                    help="JSON file {user_col: canonical_col} to apply to CSV headers.")
+    ap.add_argument("--pairing-report", type=Path, default=None,
+                    help="Path to a pair_pdfs.py report to trust for PDF linkage.")
+    ap.add_argument("--suspect-csv", type=Path, default=None,
+                    help="Auxiliary 'suspect records' CSV to route to review_queue.jsonl.")
+    ap.add_argument("--papers-needed", type=Path, default=None,
+                    help="List of needed papers (CSV or newline-delimited DOIs/titles) "
+                         "to add to candidates.jsonl.")
+    ap.add_argument("--delimiter", default=None,
+                    help="CSV delimiter; auto-detected if omitted.")
+    ap.add_argument("--encoding", default="utf-8")
     args = ap.parse_args()
 
     root = args.root.resolve()
@@ -180,6 +423,7 @@ def main() -> int:
     imported_path = bootstrap_dir / "imported.jsonl"
     exemplars_path = bootstrap_dir / "exemplars.jsonl"
     manifest_json = bootstrap_dir / "manifest.json"
+    migration_report_path = bootstrap_dir / "migration_report.md"
 
     # Load schema if provided (else we infer column presence)
     schema_cols: set[str] = set()
@@ -190,9 +434,21 @@ def main() -> int:
     # Hash the input CSV for reproducibility
     csv_sha = sha256_file(args.csv)
 
-    # Index any paired PDFs
+    # Load column mapping if provided
+    column_map: dict[str, str] = {}
+    if args.column_map and args.column_map.exists():
+        column_map = json.loads(args.column_map.read_text())
+
+    # Load pairing report if provided (preferred over crude stem matching)
+    pairing_lookup: dict[int, dict] = {}
+    if args.pairing_report and args.pairing_report.exists():
+        p_report = json.loads(args.pairing_report.read_text())
+        for r in p_report.get("per_row", []):
+            pairing_lookup[r["row_index"]] = r
+
+    # Index any paired PDFs (used only as fallback if no pairing_report)
     pdf_idx = index_pdf_dir(args.pdfs)
-    if pdf_idx:
+    if pdf_idx and not args.dry_run:
         # Register each unique PDF in manifest.sqlite
         db = root / "state" / "manifest.sqlite"
         con = sqlite3.connect(db)
@@ -229,14 +485,35 @@ def main() -> int:
     seen_uids: dict[str, dict] = {}
     stats = Counter()
     taxonomy_counter = Counter()
+    pairing_strategy_counter: Counter = Counter()
 
-    with args.csv.open() as f, \
+    # Detect delimiter if the user didn't specify
+    delimiter = args.delimiter or ","
+    if not args.delimiter:
+        try:
+            from migration_preflight import sniff_csv as _sniff_csv  # type: ignore
+            sniff = _sniff_csv(args.csv)
+            delimiter = sniff["delimiter"]
+        except Exception:
+            pass
+
+    with args.csv.open("r", encoding=args.encoding, errors="replace",
+                        newline="") as f, \
          rejects_path.open("w", newline="") as rj, \
          conflicts_path.open("w") as cj:
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(f, delimiter=delimiter)
         rej_writer: csv.DictWriter | None = None
 
-        for raw in reader:
+        for row_idx, raw in enumerate(reader):
+            # Apply user-supplied column mapping so downstream code reads
+            # canonical names. Keep originals around too.
+            if column_map:
+                aliased = {}
+                for k, v in raw.items():
+                    if k in column_map:
+                        aliased[column_map[k]] = v
+                    aliased[k] = v  # preserve original
+                raw = aliased
             stats["total_rows"] += 1
 
             # Require at minimum: species + some trait value
@@ -271,19 +548,39 @@ def main() -> int:
             # Attempt PDF pairing
             sha = None
             doi = (raw.get("doi") or "").strip()
-            pdf_filename = (raw.get("pdf_filename") or "").strip()
-            pdf_path = (raw.get("pdf_path") or "").strip()
-            if pdf_filename:
-                stem = Path(pdf_filename).stem.lower()
-                sha = pdf_idx.get(stem)
-            if not sha and pdf_path:
-                stem = Path(pdf_path).stem.lower()
-                sha = pdf_idx.get(stem)
-            if not sha and doi:
-                # DOIs often have characters unsafe for filenames; try
-                # a normalized stem match
-                doi_safe = doi.replace("/", "_").lower()
-                sha = pdf_idx.get(doi_safe)
+            pairing_strategy = "UNPAIRED"
+            pairing_confidence = 0.0
+
+            if pairing_lookup:
+                # Prefer the fuzzy-pairing report if given
+                pp = pairing_lookup.get(row_idx)
+                if pp and pp.get("sha256"):
+                    sha = pp["sha256"]
+                    pairing_strategy = pp.get("strategy", "UNKNOWN")
+                    pairing_confidence = pp.get("confidence", 0.0)
+            if not sha:
+                # Fallback: crude stem-based matching
+                pdf_filename = (raw.get("pdf_filename") or "").strip()
+                pdf_path = (raw.get("pdf_path") or "").strip()
+                if pdf_filename:
+                    stem = Path(pdf_filename).stem.lower()
+                    sha = pdf_idx.get(stem)
+                    if sha:
+                        pairing_strategy = "EXACT_STEM"
+                        pairing_confidence = 1.0
+                if not sha and pdf_path:
+                    stem = Path(pdf_path).stem.lower()
+                    sha = pdf_idx.get(stem)
+                    if sha:
+                        pairing_strategy = "EXACT_STEM"
+                        pairing_confidence = 1.0
+                if not sha and doi:
+                    doi_safe = doi.replace("/", "_").lower()
+                    sha = pdf_idx.get(doi_safe)
+                    if sha:
+                        pairing_strategy = "DOI_NORMALIZED"
+                        pairing_confidence = 0.92
+            pairing_strategy_counter[pairing_strategy] += 1
 
             # Build the imported row with standard provenance fields
             row = dict(raw)
@@ -305,6 +602,8 @@ def main() -> int:
             if sha:
                 row["sha256"] = sha
                 row["grounding_verified"] = True  # human curator did it
+                row["pairing_strategy"] = pairing_strategy
+                row["pairing_confidence"] = pairing_confidence
             row["trait_key"] = (raw.get("trait_key") or raw.get("trait")
                                 or raw.get("trait_name") or "")
             row["trait_value"] = (raw.get("trait_value") or raw.get("value")
@@ -326,33 +625,36 @@ def main() -> int:
             imported.append(row)
             stats["imported"] += 1
 
-    # Write imported records
+    # Write imported records (always — used by derive_hooks.py, even in dry-run)
     with imported_path.open("w") as f:
         for r in imported:
             f.write(json.dumps(r) + "\n")
 
-    # Append ledger entries for each imported row
+    # Append ledger entries for each imported row (SKIPPED in dry-run)
     ledger_path = root / "state" / "ledger.jsonl"
-    with ledger_path.open("a") as f:
-        for r in imported:
-            f.write(json.dumps({
-                "ledger_id": f"ldg_boot_{r['row_uid']}",
-                "row_uid": r["row_uid"],
-                "source_type": "human_curated_bootstrap",
-                "sha256": r.get("sha256"),
-                "doi": r.get("doi"),
-                "canonical_species": r.get("canonical_species"),
-                "trait_key": r.get("trait_key"),
-                "trait_value": r.get("trait_value"),
-                "dwc_identificationVerificationStatus": "ValidatedByHuman",
-                "dwc_recordedBy": r.get("dwc_recordedBy"),
-                "pav_curatedBy": r.get("pav_curatedBy"),
-                "timestamp_utc": iso(),
-                "provenance": {
-                    "bootstrap_csv_sha256": csv_sha,
-                    "bootstrap_csv_path": str(args.csv),
-                },
-            }) + "\n")
+    if not args.dry_run:
+        with ledger_path.open("a") as f:
+            for r in imported:
+                f.write(json.dumps({
+                    "ledger_id": f"ldg_boot_{r['row_uid']}",
+                    "row_uid": r["row_uid"],
+                    "source_type": "human_curated_bootstrap",
+                    "sha256": r.get("sha256"),
+                    "doi": r.get("doi"),
+                    "canonical_species": r.get("canonical_species"),
+                    "trait_key": r.get("trait_key"),
+                    "trait_value": r.get("trait_value"),
+                    "dwc_identificationVerificationStatus": "ValidatedByHuman",
+                    "dwc_recordedBy": r.get("dwc_recordedBy"),
+                    "pav_curatedBy": r.get("pav_curatedBy"),
+                    "pairing_strategy": r.get("pairing_strategy"),
+                    "pairing_confidence": r.get("pairing_confidence"),
+                    "timestamp_utc": iso(),
+                    "provenance": {
+                        "bootstrap_csv_sha256": csv_sha,
+                        "bootstrap_csv_path": str(args.csv),
+                    },
+                }) + "\n")
 
     # Exemplars
     exemplars = select_exemplars(imported, k=args.exemplars_k)
@@ -368,6 +670,28 @@ def main() -> int:
                 "is_compilation": r.get("is_compilation"),
             }) + "\n")
 
+    # Auxiliary files — suspect records → review queue
+    suspect_imported = 0
+    if args.suspect_csv and args.suspect_csv.exists():
+        suspect_imported = _route_suspect_csv(args.suspect_csv, root,
+                                               column_map, delimiter,
+                                               args.encoding, args.dry_run)
+
+    # Auxiliary — papers needed → candidates.jsonl
+    papers_needed_added = 0
+    if args.papers_needed and args.papers_needed.exists():
+        papers_needed_added = _route_papers_needed(args.papers_needed, root,
+                                                    args.dry_run)
+
+    # Orphan PDFs: PDFs that exist on disk but nothing in imported linked them.
+    paired_shas = {r["sha256"] for r in imported if r.get("sha256")}
+    orphan_shas: list[str] = []
+    if pdf_idx:
+        for key, val in pdf_idx.items():
+            if len(key) == 64 and all(c in "0123456789abcdef" for c in key):
+                if key not in paired_shas:
+                    orphan_shas.append(key)
+
     # Manifest
     manifest_json.write_text(json.dumps({
         "csv_sha256": csv_sha,
@@ -376,17 +700,44 @@ def main() -> int:
         "rows_imported": len(imported),
         "exemplars_k": len(exemplars),
         "taxonomy_status_counts": dict(taxonomy_counter),
+        "pairing_strategies": dict(pairing_strategy_counter),
+        "orphan_pdf_count": len(orphan_shas),
+        "suspect_imported": suspect_imported,
+        "papers_needed_added": papers_needed_added,
         "stats": dict(stats),
+        "dry_run": args.dry_run,
         "bootstrap_utc": iso(),
     }, indent=2))
 
+    # Migration report
+    migration_report_path.write_text(_render_migration_report(
+        root=root,
+        csv_path=args.csv,
+        imported=imported,
+        stats=stats,
+        taxonomy_counter=taxonomy_counter,
+        pairing_strategy_counter=pairing_strategy_counter,
+        orphan_shas=orphan_shas,
+        suspect_imported=suspect_imported,
+        papers_needed_added=papers_needed_added,
+        dry_run=args.dry_run,
+    ))
+
     # Summary to stdout (the Manager reads this)
     print(json.dumps({
+        "dry_run": args.dry_run,
         "imported": len(imported),
+        "paired_to_pdf": sum(1 for r in imported if r.get("sha256")),
+        "unpaired_rows": sum(1 for r in imported if not r.get("sha256")),
+        "orphan_pdfs": len(orphan_shas),
         "exemplars": len(exemplars),
         "rejected": stats["rejected_no_species"] + stats["rejected_unresolved_species"],
         "conflicts": stats["conflicts"],
         "taxonomy_status": dict(taxonomy_counter),
+        "pairing_strategies": dict(pairing_strategy_counter),
+        "suspect_records_added": suspect_imported,
+        "papers_needed_added": papers_needed_added,
+        "migration_report": str(migration_report_path),
         "bootstrap_dir": str(bootstrap_dir),
     }, indent=2))
     return 0
