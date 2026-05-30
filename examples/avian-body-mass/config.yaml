@@ -1,0 +1,49 @@
+# TraitTrawler v6 project config — Avian body mass
+#
+# This is the only file the v6 skill reads to start a project. Everything
+# else (the output schema, triage rules, query synonyms, validation hooks)
+# is LEARNED from seed papers into state/trait_profile.md + state/hooks/.
+# guide.md in this folder is reference material showing the kind of domain
+# knowledge a body-mass project accumulates — in v6 that knowledge is
+# learned, not hand-authored.
+#
+# This example is intentionally simpler than the Coleoptera one: body mass
+# is a single numeric trait with few notation conventions, so the learned
+# profile stays short.
+#
+# To run: open this folder in Claude Cowork with TraitTrawler installed and
+# say "let's collect some data". To seed the learning phase faster, drop 5-10
+# known body-mass DOIs into seed_dois below.
+skill_version: 6.2.3
+trait: 'body mass (grams)'
+taxa: 'Aves (birds)'
+seed_dois: []
+
+# Batch processing
+# batch_size = how many papers the Manager extracts in parallel per batch.
+#   100-500 papers:    8 (current default)
+#   500-2500 papers:   10-12
+#   2500-10000 papers: 12-15
+# Each extractor spawns 1-2 nested subagents (verifier, advisor) so
+# peak concurrency is ~2-3x batch_size. See references/architecture.md
+# for the rate-limit tradeoffs.
+batch_size: 8
+review_queue_max: 50
+
+# Model selection (override per-subagent if needed)
+models:
+  triage: haiku
+  extractor: opus
+  semantic_verifier: sonnet
+  structurer: sonnet
+  adjudicator: opus
+
+# Search sources (order = priority)
+search_sources: [pubmed, biorxiv, openalex, crossref]
+
+# Throttling
+http_rate_limit_per_host_per_second: 1
+
+# Deterministic-Python parallelism (IO-bound tasks)
+gbif_workers: 8          # bootstrap.py GBIF species-match lookups
+title_peek_workers: 8    # pair_pdfs.py first-page title extraction

@@ -78,44 +78,46 @@ jobs:
       - name: Install pyyaml
         run: pip install pyyaml
 
-      - name: Validate example YAML configs
+      # v6 examples ship a single lean config.yaml (the only file the skill
+      # reads to start a project). The schema, triage rules, query synonyms,
+      # and validation hooks are LEARNED at runtime, not hand-authored — so
+      # CI only checks that config.yaml parses and carries the keys
+      # setup_project.py emits.
+      - name: Validate example config.yaml files
         run: |
           python -c "
           import yaml, sys
           configs = [
-              'examples/coleoptera-karyotypes/collector_config.yaml',
-              'examples/avian-body-mass/collector_config.yaml',
+              'examples/coleoptera-karyotypes/config.yaml',
+              'examples/avian-body-mass/config.yaml',
           ]
+          required = ('skill_version', 'trait', 'taxa', 'seed_dois')
           for path in configs:
               try:
                   with open(path) as f:
-                      yaml.safe_load(f)
-                  print(f'  OK: {path}')
+                      cfg = yaml.safe_load(f)
               except Exception as e:
                   print(f'  FAIL: {path}: {e}')
                   sys.exit(1)
-          print('All YAML configs valid.')
-          "
-
-      - name: Validate example config.py files
-        run: |
-          python -c "
-          import sys
-          configs = [
-              'examples/coleoptera-karyotypes/config.py',
-              'examples/avian-body-mass/config.py',
-          ]
-          for path in configs:
-              try:
-                  ns = {}
-                  with open(path) as f:
-                      exec(f.read(), ns)
-                  terms = ns.get('SEARCH_TERMS') or ns.get('INITIAL_SEARCH_TERMS') or []
-                  print(f'  OK: {path} ({len(terms)} search terms)')
-              except Exception as e:
-                  print(f'  FAIL: {path}: {e}')
+              if not isinstance(cfg, dict):
+                  print(f'  FAIL: {path}: top level is not a mapping')
                   sys.exit(1)
-          print('All config.py files valid.')
+              missing = [k for k in required if k not in cfg]
+              if missing:
+                  print(f'  FAIL: {path}: missing keys: {missing}')
+                  sys.exit(1)
+              if not isinstance(cfg['trait'], str) or not cfg['trait'].strip():
+                  print(f'  FAIL: {path}: trait must be a non-empty string')
+                  sys.exit(1)
+              if not isinstance(cfg['taxa'], str) or not cfg['taxa'].strip():
+                  print(f'  FAIL: {path}: taxa must be a non-empty string')
+                  sys.exit(1)
+              if not isinstance(cfg['seed_dois'], list):
+                  print(f'  FAIL: {path}: seed_dois must be a list')
+                  sys.exit(1)
+              trait = cfg['trait']; taxa = cfg['taxa']; ndoi = len(cfg['seed_dois'])
+              print(f'  OK: {path} (trait={trait!r}, taxa={taxa!r}, {ndoi} seed DOIs)')
+          print('All example config.yaml files valid.')
           "
 
       # v6 SKILL.md frontmatter carries only name / description / allowed-tools

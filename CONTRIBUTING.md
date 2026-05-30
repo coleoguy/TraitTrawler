@@ -10,7 +10,7 @@ If TraitTrawler extracted incorrect data for a species you know about, [open an 
 
 ### Share a new taxon configuration
 
-If you've adapted TraitTrawler for a different organism or trait, we'd love to include it as an example configuration. Submit a pull request adding a directory under `examples/` with your three config files (`collector_config.yaml`, `config.py`, `guide.md`) and a brief README describing the system.
+If you've adapted TraitTrawler for a different organism or trait, we'd love to include it as an example configuration. Submit a pull request adding a directory under `examples/` with a lean `config.yaml` (trait, taxa, seed DOIs, and runtime defaults — see the existing examples) and a brief README describing the system. You can optionally include a `guide.md` of domain notes, but note that in v6 the skill learns the output schema, triage rules, and validation hooks from seed papers rather than reading hand-authored config.
 
 ### Improve the agent
 

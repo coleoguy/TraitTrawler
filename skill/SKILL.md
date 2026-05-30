@@ -17,7 +17,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Task, TodoWrite, AskUserQues
 
 <!-- Skill metadata (not in frontmatter — Claude Code only recognizes
      name / description / allowed-tools in skill frontmatter):
-       version: 6.2.3
+       version: 6.2.4
        role:    manager -->
 
 

@@ -356,7 +356,7 @@ Capture in `heterochromatin_pattern` from C-banding results. Examples:
 
 ## Search Strategy
 
-**Additional high-value search terms** (supplement config.py):
+**Additional high-value search terms** (beyond the queries the skill generates automatically):
 - Specific genus names known for cytogenetics: *Xyleborus*, *Otiorhynchus*,
   *Diabrotica*, *Chrysomela*, *Tribolium*, *Callosobruchus*, *Dytiscus*,
   *Hydrophilus*, *Popillia*, *Melolontha*, *Coccinella*
@@ -398,7 +398,7 @@ Stop searching when ANY of the following is true:
 - 15 consecutive search rounds return no new papers (raised from 5 — many
   legitimate query blocks are narrow and return nothing, especially genus-level
   or author-level searches in undersampled groups)
-- All search terms in `config.py` have been processed at least once
+- The searcher reports it has exhausted the query space it generates for this trait + taxa
 
 ---
 

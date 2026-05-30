@@ -1,24 +1,43 @@
 # Example: Avian Body Mass
 
-This directory demonstrates how to adapt TraitTrawler for a different taxon and trait — in this case, body mass data for birds.
+A second worked TraitTrawler **v6** project, showing how the same skill adapts to
+a different taxon and trait — here, body mass (in grams) for birds.
+
+## How a v6 project is configured
+
+`config.yaml` is the whole configuration: a **trait**, a **taxon**, optional
+**seed DOIs**, and runtime/model defaults. From a handful of seed papers the
+skill *learns* the output schema, triage rules, query synonyms, and validation
+hooks — you don't hand-author them. `guide.md` here is reference material
+showing the kind of domain knowledge (units, measurement preferences, pitfalls)
+the skill should discover on its own.
 
 ## Files
 
-| File | Purpose |
-|:-----|:--------|
-| `collector_config.yaml` | Project settings: taxa, trait definition, output fields, proxy URL |
-| `config.py` | Search queries (80 order × keyword combos + 11 general/journal) |
-| `guide.md` | Domain knowledge for the extraction agent: units, preferences, pitfalls |
+| File | Role | Purpose |
+|------|------|---------|
+| `config.yaml` | **configuration** | Trait, taxa, seed DOIs, runtime/model defaults — the v6 entry point |
+| `guide.md` | reference | Units, which measurement to prefer, summary-statistic rules, common pitfalls |
 
-## To use
+## To run
 
-1. Copy these three files to a fresh folder
-2. Edit `collector_config.yaml`: set your `project_root`, `proxy_url`, and `institution`
-3. Open the folder in Cowork with the TraitTrawler skill installed
-4. Say "let's collect some data"
+1. Copy this folder somewhere (e.g. `~/avian-body-mass/`).
+2. Open it in Claude Cowork with the TraitTrawler skill installed.
+3. Say **"let's collect some data."** A short setup wizard confirms the trait
+   and taxon for the project (recorded in `config.yaml` for reference),
+   optionally takes seed DOIs, then initializes the project and begins learning
+   from seed papers. The trait/taxa values to confirm:
+   - **trait:** `body mass (grams)`
+   - **taxa:** `Aves (birds)`
+4. The skill proposes an output schema and validation hooks for your approval,
+   then starts searching, fetching, and extracting in batches.
 
 ## Design note
 
-This example is intentionally minimal compared to the Coleoptera karyotype configuration. Body mass is a simpler trait with fewer notation conventions and edge cases, so fewer domain rules are needed. Compare `guide.md` here (~30 lines) with the Coleoptera guide (~400 lines) to see how guide complexity scales with trait complexity. For traits with complex notation, multiple measurement types, or domain-specific validation rules, follow the Coleoptera example as a template.
+This example is intentionally simpler than the Coleoptera one. Body mass is a
+single numeric trait with few notation conventions, so the learned
+`state/trait_profile.md` stays short. For traits with complex notation, multiple
+measurement types, or domain-specific validation rules, the Coleoptera example
+is the better template to study.
 
-See the main [README](../../README.md) for full instructions.
+See the main [README](../../README.md) for the full pipeline.

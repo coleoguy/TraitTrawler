@@ -4,6 +4,16 @@ All notable changes to TraitTrawler will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [6.2.4] — 2026-05-30
+
+### Changed
+- **Examples modernized to the v6 config model.** Both bundled examples (`coleoptera-karyotypes`, `avian-body-mass`) now ship a single lean `config.yaml` — the only file the v6 skill reads to start a project (trait, taxa, seed DOIs, runtime/model defaults). The output schema, triage rules, query synonyms, and validation hooks are LEARNED from seed papers into `state/trait_profile.md` and `state/hooks/`, not hand-authored.
+- **CI `validate-configs`** now parses each example `config.yaml` and checks the keys `setup_project.py` emits (`skill_version`, `trait`, `taxa`, `seed_dois`) instead of exec-ing the removed `config.py`.
+- Both example READMEs rewritten for the v6 open-and-run workflow.
+
+### Removed
+- v5-era `collector_config.yaml` and `config.py` from both examples — hand-authored output fields and 1,600+ static search queries the v6 skill never read. The karyotype `guide.md`, `extraction_examples.md`, `csv_schema.md`, and `db_scanner.py` are kept as reference illustrations of the domain knowledge the skill now learns on its own.
+
 ## [6.2.3] — 2026-05-30
 
 ### Fixed
