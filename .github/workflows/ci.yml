@@ -16,20 +16,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install ruff
         run: pip install ruff
 
-      - name: Lint with ruff
+      - name: Lint with ruff (non-blocking style)
         run: |
-          ruff check skill/scripts/ tests/ \
+          ruff check skill/scripts/ skill/tests/ \
             --select E,F,W \
             --ignore E501 \
             --exit-zero
 
-      - name: Check for syntax errors
+      - name: Check for syntax errors (blocking)
         run: |
-          ruff check skill/scripts/ tests/ \
+          ruff check skill/scripts/ skill/tests/ \
             --select E9,F63,F7,F82
 
   test:
@@ -44,24 +46,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
 
+      # v6 tests need pdfplumber (PDF text extraction) + fpdf2 (synthetic
+      # PDFs for the grounding test). Nothing else.
       - name: Install dependencies
-        run: |
-          pip install pyyaml
-          pip install pdfplumber || true
-          pip install scipy matplotlib || true
+        run: pip install pdfplumber fpdf2
 
-      - name: Run unit tests
-        run: python tests/test_verify_and_export.py
+      - name: Compile all scripts
+        run: python -m py_compile skill/scripts/*.py
 
-      - name: Validate csv_writer imports
-        run: python -c "import sys; sys.path.insert(0, 'skill/scripts'); from csv_writer import SchemaEnforcedWriter; print('csv_writer OK')"
+      - name: Run smoke tests
+        run: python skill/tests/test_smoke.py
 
-      - name: Validate api_utils imports
-        run: python -c "import sys; sys.path.insert(0, 'skill/scripts'); from api_utils import resilient_fetch, RateLimiter; print('api_utils OK')"
-
-      - name: Validate state_utils imports
-        run: python -c "import sys; sys.path.insert(0, 'skill/scripts'); from state_utils import safe_read_json, safe_write_json; print('state_utils OK')"
+      - name: Run real-PDF grounding tests
+        run: python skill/tests/test_real_pdf_grounding.py
 
   validate-configs:
     name: Validate Configs
@@ -72,6 +72,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install pyyaml
         run: pip install pyyaml
@@ -83,7 +85,6 @@ jobs:
           configs = [
               'examples/coleoptera-karyotypes/collector_config.yaml',
               'examples/avian-body-mass/collector_config.yaml',
-              'skill/references/config_template.yaml',
           ]
           for path in configs:
               try:
@@ -117,10 +118,12 @@ jobs:
           print('All config.py files valid.')
           "
 
+      # v6 SKILL.md frontmatter carries only name / description / allowed-tools
+      # (Claude Code ignores other keys); the version lives in an HTML comment.
       - name: Validate SKILL.md frontmatter
         run: |
           python -c "
-          import yaml, sys
+          import re, sys, yaml
           with open('skill/SKILL.md') as f:
               content = f.read()
           if not content.startswith('---'):
@@ -128,12 +131,13 @@ jobs:
               sys.exit(1)
           end = content.index('---', 3)
           frontmatter = yaml.safe_load(content[3:end])
-          required = ['name', 'model', 'description', 'allowed-tools', 'metadata']
-          for key in required:
+          for key in ('name', 'description', 'allowed-tools'):
               if key not in frontmatter:
                   print(f'FAIL: SKILL.md missing frontmatter key: {key}')
                   sys.exit(1)
-          print(f'SKILL.md frontmatter valid (v{frontmatter[\"metadata\"][\"version\"]})')
+          m = re.search(r'version:\s*([0-9][^\s]*)', content)
+          version = m.group(1) if m else 'unknown'
+          print(f'SKILL.md frontmatter valid (v{version})')
           "
 
   validate-sample-csv:
@@ -145,34 +149,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
-      - name: Install dependencies
-        run: pip install pyyaml
-
-      - name: Validate sample_results.csv against karyotype schema
+      # Dependency-free structural check (the v5 csv_writer validator was
+      # removed in the v6 rewrite; row-level grounding is covered by the
+      # skill/tests/ suite).
+      - name: Validate sample_results.csv is well-formed
         run: |
           python -c "
-          import sys
-          sys.path.insert(0, 'skill/scripts')
-          from csv_writer import SchemaEnforcedWriter, validate_record, load_output_fields
-          import csv
-
-          fields = load_output_fields('examples/coleoptera-karyotypes')
-          from csv_writer import load_validation_rules
-          rules = load_validation_rules('examples/coleoptera-karyotypes')
-
-          with open('examples/sample_results.csv') as f:
-              reader = csv.DictReader(f)
-              errors = 0
-              for i, row in enumerate(reader):
-                  errs = validate_record(dict(row), fields, rules)
-                  drop_errs = [e for e in errs if e.action == 'drop']
-                  if drop_errs:
-                      for e in drop_errs:
-                          print(f'  Row {i+2}: {e}')
-                      errors += 1
-          if errors:
-              print(f'{errors} record(s) would be rejected')
+          import csv, sys
+          path = 'examples/sample_results.csv'
+          with open(path, newline='') as f:
+              rows = list(csv.reader(f))
+          if len(rows) < 2:
+              print(f'FAIL: {path} has no data rows')
               sys.exit(1)
-          print('sample_results.csv passes schema validation')
+          header = rows[0]
+          ncols = len(header)
+          for i, row in enumerate(rows[1:], start=2):
+              if len(row) != ncols:
+                  print(f'FAIL: row {i} has {len(row)} cols, expected {ncols}')
+                  sys.exit(1)
+          for required in ('species', 'doi'):
+              if required not in header:
+                  print(f'FAIL: {path} missing required column: {required}')
+                  sys.exit(1)
+          print(f'{path} well-formed: {len(rows) - 1} rows x {ncols} cols')
           "

@@ -1,10 +1,12 @@
 # TraitTrawler Python dependencies
-# These are used by the utility scripts (dashboard_generator.py, verify_session.py, export_dwc.py).
-# The skill itself runs inside Claude Cowork and installs these automatically at session start.
-# Install manually only if running scripts standalone:
+# The skill runs inside Claude Cowork, which installs these at session start.
+# Install manually only if running the skill/scripts/ utilities standalone:
 #   pip install -r requirements.txt
 
-pyyaml>=5.0
+# Runtime: PDF text/table extraction. Used by pdf_ingest, verify_quote,
+# triage_prefilter, pdf_peek, pdf_render, and pair_pdfs.
 pdfplumber>=0.7.0
-scipy>=1.9.0
-matplotlib>=3.5.0
+
+# Tests only: synthetic PDF generation for the grounding test
+# (skill/tests/test_real_pdf_grounding.py). Not needed at runtime.
+fpdf2>=2.7.0

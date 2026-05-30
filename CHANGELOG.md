@@ -4,6 +4,61 @@ All notable changes to TraitTrawler will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [6.2.3] — 2026-05-30
+
+### Fixed
+- **CI had been failing on every push since v6.1.2.** The v6 rewrite removed the v4/v5 utility scripts (`csv_writer.py`, `api_utils.py`, `state_utils.py`, `verify_session.py`, `export_dwc.py`, `dashboard_generator.py`) and `skill/references/config_template.yaml`, but `.github/workflows/ci.yml` and the root `tests/` directory still referenced them. Rewrote CI to run the v6 suite in `skill/tests/`, validate the v6 SKILL.md frontmatter (name/description/allowed-tools; version read from the metadata comment), and check the sample CSV without the deleted modules.
+- **Stale v4 tests removed.** Deleted `tests/test_v4_pipeline_flow.py` and `tests/test_verify_and_export.py`, which exercised the deleted v4 folder pipeline. The current suite lives in `skill/tests/` (`test_smoke.py`, `test_real_pdf_grounding.py`).
+- **requirements.txt** no longer lists unused `scipy`/`matplotlib`/`pyyaml` or references deleted scripts. Now: `pdfplumber` (runtime) and `fpdf2` (test only).
+
+### Changed
+- **Faster CI:** per-job installs trimmed to what each job actually needs (tests install only `pdfplumber` + `fpdf2`) and pip caching enabled across jobs.
+
+## [6.2.2] — 2026-04-17
+
+### Fixed
+- Removed invalid `model: default` from SKILL.md frontmatter (Claude Code only recognizes `name`/`description`/`allowed-tools`).
+
+## [6.2.1] — 2026-04-17
+
+### Fixed
+- All subagents set to `model: inherit` to resolve "model not available" errors.
+
+## [6.2.0] — 2026-04-17
+
+### Added
+- Chain-of-Verification (CoVe) semantic verifier.
+- Code-execution triage pre-filter.
+- Adaptive self-consistency in extraction.
+
+## [6.1.5] — 2026-04-16
+
+### Added
+- v5 directory cleanup (`v5_migrate.py`) and linkage repair (`repair_linkage.py`, SHA256 backfill).
+
+### Changed
+- Leaner SKILL.md.
+
+## [6.1.4] — 2026-04-16
+
+### Added
+- Compaction-safe Manager with checkpoint (`checkpoint.py`) and session log (`session_log.py`) for state recovery after context compaction.
+
+## [6.1.3] — 2026-04-16
+
+### Changed
+- Parallelized IO-bound Python; documented batch scaling.
+
+## [6.1.2] — 2026-04-16
+
+### Added
+- Migration preflight (`migration_preflight.py`), fuzzy PDF pairing (`pair_pdfs.py`), and dialogue-first bootstrap.
+
+## [6.1.0] — 2026-04-16
+
+### Changed
+- **Major rewrite (Opus 4.7).** Trait-and-clade-agnostic architecture: project-local validation hooks (sandboxed), bootstrap from curated data, and an advisor agent. Grounding — a SHA256-hashed PDF plus page number plus deterministically verified verbatim quote — became a protocol invariant for every row. Replaces the v4/v5 folder-based pipeline and its scripts (`csv_writer.py`, `api_utils.py`, `state_utils.py`, `verify_session.py`, `export_dwc.py`, `dashboard_generator.py`).
+
 ## [5.1.0] — 2026-04-04
 
 ### Fixed
