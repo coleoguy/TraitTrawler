@@ -11,9 +11,9 @@ jobs:
     name: Lint Python
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -41,9 +41,9 @@ jobs:
       matrix:
         python-version: ["3.9", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -67,9 +67,9 @@ jobs:
     name: Validate Configs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -110,7 +110,7 @@ jobs:
                   ns = {}
                   with open(path) as f:
                       exec(f.read(), ns)
-                  terms = ns.get('SEARCH_TERMS', [])
+                  terms = ns.get('SEARCH_TERMS') or ns.get('INITIAL_SEARCH_TERMS') or []
                   print(f'  OK: {path} ({len(terms)} search terms)')
               except Exception as e:
                   print(f'  FAIL: {path}: {e}')
@@ -144,11 +144,11 @@ jobs:
     name: Validate Sample CSV
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # No pip caching here: this job installs nothing, so setup-python's
       # post-job cache-save step would find no ~/.cache/pip and fail the job.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 

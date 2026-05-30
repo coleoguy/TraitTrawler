@@ -13,6 +13,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - **Faster CI:** per-job installs trimmed to what each job actually needs (tests install only `pdfplumber` + `fpdf2`) and pip caching enabled for the jobs that install dependencies.
+- **CI on Node 24:** bumped `actions/checkout@v6` and `actions/setup-python@v6` to clear the Node 20 deprecation warnings.
+- **Honest config validation:** `validate-configs` now counts `SEARCH_TERMS` or `INITIAL_SEARCH_TERMS`, so the Coleoptera example reports its true query count instead of 0. (The bundled examples still use the v5-style `config.py`/`collector_config.yaml`; the v6 skill reads `config.yaml` — modernizing the examples is a separate follow-up.)
 
 ## [6.2.2] — 2026-04-17
 
