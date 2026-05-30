@@ -12,7 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **requirements.txt** no longer lists unused `scipy`/`matplotlib`/`pyyaml` or references deleted scripts. Now: `pdfplumber` (runtime) and `fpdf2` (test only).
 
 ### Changed
-- **Faster CI:** per-job installs trimmed to what each job actually needs (tests install only `pdfplumber` + `fpdf2`) and pip caching enabled across jobs.
+- **Faster CI:** per-job installs trimmed to what each job actually needs (tests install only `pdfplumber` + `fpdf2`) and pip caching enabled for the jobs that install dependencies.
 
 ## [6.2.2] — 2026-04-17
 
